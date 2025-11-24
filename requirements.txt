@@ -1,10 +1,7 @@
 python-telegram-bot==20.7
-requests==2.31.0
-pybit==5.7.0
-pandas==2.1.4
-numpy==1.26.2
-mplfinance==0.12.10b0
-matplotlib==3.8.2
-ta==0.11.0
-scipy==1.11.4
-Pillow==10.1.0
+requests
+pybit
+pandas
+numpy
+matplotlib
+mplfinance
