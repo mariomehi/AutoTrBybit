@@ -386,7 +386,7 @@ application.add_handler(CommandHandler("start", cmd_start))
 application.add_handler(CommandHandler("analizza", cmd_analizza))
 
 
-print("Bot avviato...")
+print("Bot avviato correttamente...")
 await application.run_polling()
 
 
