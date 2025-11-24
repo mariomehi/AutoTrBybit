@@ -374,27 +374,22 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ----------------------------- MAIN -----------------------------
 
-import asyncio
+def main():
+    logging.basicConfig(level=logging.INFO)
+    if TELEGRAM_TOKEN.startswith('PUT_YOUR'):
+        logging.error('Set TELEGRAM_TOKEN environment variable before running')
+        return
+
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler('start', cmd_start))
+    application.add_handler(CommandHandler('analizza', cmd_analizza))
+    application.add_handler(CommandHandler('stop', cmd_stop))
+    application.add_handler(CommandHandler('list', cmd_list))
+
+    # Start the bot
+    logging.info('Starting bot...')
+    application.run_polling()
 
 
-async def main():
-application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-
-# Handlers
-application.add_handler(CommandHandler("start", cmd_start))
-application.add_handler(CommandHandler("analizza", cmd_analizza))
-
-
-print("Bot avviato correttamente...")
-await application.run_polling()
-
-
-if __name__ == "__main__":
-import asyncio
-try:
-asyncio.get_event_loop().run_until_complete(main())
-except RuntimeError:
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-loop.run_until_complete(main())
+if __name__ == '__main__':
+    main()
