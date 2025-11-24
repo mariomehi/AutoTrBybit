@@ -1,0 +1,2 @@
+# AutoTrBybit
+Automated trading bybit
