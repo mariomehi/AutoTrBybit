@@ -1,1 +1,1 @@
-worker: python bybit_telegram_bot.py
+web: python bybit_telegram_bot_fixed.py
