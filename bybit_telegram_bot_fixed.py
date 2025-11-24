@@ -62,7 +62,7 @@ VOLUME_FILTER = True
 ATR_MULT_SL = 1.5
 ATR_MULT_TP = 2.0
 RISK_USD = 10.0
-ENABLED_TFS = ['5m','15m','30m','1h','4h']
+ENABLED_TFS = ['3m','5m','15m','30m','1h','4h']
 
 # Klines map
 BYBIT_INTERVAL_MAP = {
