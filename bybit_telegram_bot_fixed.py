@@ -44,6 +44,7 @@ import mplfinance as mpf
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import telegram.error
 
 # Import pybit
 try:
@@ -62,7 +63,7 @@ VOLUME_FILTER = True
 ATR_MULT_SL = 1.5
 ATR_MULT_TP = 2.0
 RISK_USD = 10.0
-ENABLED_TFS = ['3m','5m','15m','30m','1h','4h']
+ENABLED_TFS = ['5m','15m','30m','1h','4h']
 
 # Klines map
 BYBIT_INTERVAL_MAP = {
@@ -468,8 +469,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /start"""
+    bot_username = (await context.bot.get_me()).username
     welcome_text = (
-        "🤖 <b>Bot Pattern Detection Attivo!</b>\n\n"
+        f"🤖 <b>Bot Pattern Detection Attivo!</b>\n"
+        f"👤 Username: @{bot_username}\n\n"
         "📊 Comandi disponibili:\n"
         "/analizza SYMBOL TIMEFRAME - Inizia analisi\n"
         "/stop SYMBOL - Ferma analisi\n"
@@ -641,7 +644,7 @@ def main():
     except ImportError as e:
         logging.error(f'❌ JobQueue mancante: {e}')
         return
-    
+     
     # Verifica variabili d'ambiente
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == '':
         logging.error('❌ TELEGRAM_TOKEN non configurato!')
@@ -675,7 +678,17 @@ def main():
     logging.info(f'⏱️ Timeframes supportati: {ENABLED_TFS}')
     logging.info(f'💰 Rischio per trade: ${RISK_USD}')
     
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True  # Ignora aggiornamenti pendenti
+        )
+    except telegram.error.Conflict as e:
+        logging.error('❌ ERRORE: Un\'altra istanza del bot è già in esecuzione!')
+        logging.error('Soluzione: Ferma tutte le altre istanze del bot')
+        logging.error(f'Dettaglio errore: {e}')
+    except Exception as e:
+        logging.exception(f'❌ Errore critico: {e}')
 
 
 if __name__ == '__main__':
