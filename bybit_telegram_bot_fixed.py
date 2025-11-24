@@ -63,7 +63,7 @@ VOLUME_FILTER = True
 ATR_MULT_SL = 1.5
 ATR_MULT_TP = 2.0
 RISK_USD = 10.0
-ENABLED_TFS = ['5m','15m','30m','1h','4h']
+ENABLED_TFS = ['3m','5m','15m','30m','1h','4h']
 
 # Klines map
 BYBIT_INTERVAL_MAP = {
@@ -352,6 +352,7 @@ def generate_chart(df: pd.DataFrame, symbol: str, timeframe: str) -> io.BytesIO:
 async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     """
     Job che viene eseguito ad ogni chiusura candela
+    INVIA SEMPRE IL GRAFICO, anche senza pattern
     """
     job_ctx = context.job.data
     chat_id = job_ctx['chat_id']
@@ -363,69 +364,93 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         df = bybit_get_klines(symbol, timeframe, limit=200)
         if df.empty:
             logging.warning(f'Nessun dato per {symbol} {timeframe}')
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f'⚠️ Nessun dato disponibile per {symbol} {timeframe}'
+            )
             return
 
-        # Filtro volume
+        last_close = df['close'].iloc[-1]
+        last_time = df.index[-1]
+        
+        # Controlla pattern
+        found, side, pattern = check_patterns(df)
+        
+        # Calcola ATR per eventuali SL/TP
+        atr_series = atr(df, period=14)
+        last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else np.nan
+        
+        # Prepara messaggio base
+        timestamp_str = last_time.strftime('%Y-%m-%d %H:%M UTC')
+        caption = (
+            f"📊 <b>{symbol}</b> ({timeframe})\n"
+            f"🕐 {timestamp_str}\n"
+            f"💵 Prezzo: ${last_close:.4f}\n"
+        )
+        
+        # Se c'è volume, mostralo
         if VOLUME_FILTER:
             vol = df['volume']
             if len(vol) >= 21:
                 avg_vol = vol.iloc[-21:-1].mean()
-                if vol.iloc[-1] <= avg_vol:
-                    logging.debug(f'{symbol} {timeframe}: volume insufficiente')
-                    return
-
-        # Controlla pattern
-        found, side, pattern = check_patterns(df)
-        if not found:
-            return
-
-        logging.info(f'🎯 SEGNALE TROVATO: {pattern} - {side} su {symbol} {timeframe}')
-
-        # Calcola ATR per SL/TP
-        atr_series = atr(df, period=14)
-        last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else np.nan
-        last_close = df['close'].iloc[-1]
-
-        # Calcola SL e TP
-        if not math.isnan(last_atr) and last_atr > 0:
-            if side == 'Buy':
-                sl_price = last_close - last_atr * ATR_MULT_SL
-                tp_price = last_close + last_atr * ATR_MULT_TP
+                current_vol = vol.iloc[-1]
+                vol_ratio = (current_vol / avg_vol) if avg_vol > 0 else 0
+                caption += f"📈 Volume: {vol_ratio:.2f}x media\n"
+        
+        # Se pattern trovato, aggiungi dettagli
+        if found:
+            logging.info(f'🎯 SEGNALE: {pattern} - {side} su {symbol} {timeframe}')
+            
+            # Calcola SL e TP
+            if not math.isnan(last_atr) and last_atr > 0:
+                if side == 'Buy':
+                    sl_price = last_close - last_atr * ATR_MULT_SL
+                    tp_price = last_close + last_atr * ATR_MULT_TP
+                else:
+                    sl_price = last_close + last_atr * ATR_MULT_SL
+                    tp_price = last_close - last_atr * ATR_MULT_TP
             else:
-                sl_price = last_close + last_atr * ATR_MULT_SL
-                tp_price = last_close - last_atr * ATR_MULT_TP
-        else:
-            # Fallback: usa low/high della candela
-            if side == 'Buy':
-                sl_price = df['low'].iloc[-1]
-                tp_price = last_close * 1.02
-            else:
-                sl_price = df['high'].iloc[-1]
-                tp_price = last_close * 0.98
-
-        # Calcola position size
-        qty = calculate_position_size(last_close, sl_price, RISK_USD)
-        if qty <= 0:
-            await context.bot.send_message(
-                chat_id=chat_id, 
-                text=f'⚠️ Qty calcolata = 0 per {symbol}. Verifica i parametri.'
-            )
-            return
-
-        # Genera e invia grafico
-        try:
-            chart_buffer = generate_chart(df, symbol, timeframe)
+                # Fallback: usa low/high della candela
+                if side == 'Buy':
+                    sl_price = df['low'].iloc[-1]
+                    tp_price = last_close * 1.02
+                else:
+                    sl_price = df['high'].iloc[-1]
+                    tp_price = last_close * 0.98
+            
+            # Calcola position size
+            qty = calculate_position_size(last_close, sl_price, RISK_USD)
             
             caption = (
-                f"📊 <b>{pattern}</b>\n"
-                f"💹 {side} Signal\n"
+                f"🔥 <b>SEGNALE TROVATO!</b>\n\n"
+                f"📊 Pattern: <b>{pattern}</b>\n"
+                f"💹 Direzione: <b>{side}</b>\n"
                 f"🪙 {symbol} ({timeframe})\n"
-                f"💵 Prezzo: ${last_close:.4f}\n"
+                f"🕐 {timestamp_str}\n\n"
+                f"💵 Prezzo Entry: ${last_close:.4f}\n"
                 f"🛑 Stop Loss: ${sl_price:.4f}\n"
                 f"🎯 Take Profit: ${tp_price:.4f}\n"
-                f"📦 Qty: {qty:.4f}\n"
-                f"💰 Rischio: ${RISK_USD}"
+                f"📦 Qty suggerita: {qty:.4f}\n"
+                f"💰 Rischio: ${RISK_USD}\n"
+                f"📏 R:R = {abs(tp_price-last_close)/abs(sl_price-last_close):.2f}:1"
             )
+            
+            # Piazza ordine se autotrade è abilitato
+            if job_ctx.get('autotrade') and qty > 0:
+                order_res = await place_bybit_order(symbol, side, qty, sl_price, tp_price)
+                if 'error' in order_res:
+                    caption += f"\n\n❌ Errore ordine: {order_res['error']}"
+                else:
+                    caption += f"\n\n✅ Ordine piazzato su Bybit Testnet"
+        else:
+            # Nessun pattern trovato
+            caption += f"\n⏳ Nessun pattern rilevato"
+            if not math.isnan(last_atr):
+                caption += f"\n📏 ATR(14): ${last_atr:.4f}"
+        
+        # SEMPRE genera e invia il grafico
+        try:
+            chart_buffer = generate_chart(df, symbol, timeframe)
             
             await context.bot.send_photo(
                 chat_id=chat_id, 
@@ -434,28 +459,16 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
             
+            logging.info(f"📸 Grafico inviato per {symbol} {timeframe} - Pattern: {'✅ '+pattern if found else '❌ Nessuno'}")
+            
         except Exception as e:
-            logging.error(f'Errore invio grafico: {e}')
-            # Invia almeno il testo
+            logging.error(f'Errore generazione/invio grafico: {e}')
+            # Se il grafico fallisce, invia almeno il testo
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"⚠️ Segnale trovato ma errore nel grafico\n{caption}",
+                text=f"⚠️ Errore nel grafico\n\n{caption}",
                 parse_mode='HTML'
             )
-
-        # Piazza ordine se autotrade è abilitato
-        if job_ctx.get('autotrade'):
-            order_res = await place_bybit_order(symbol, side, qty, sl_price, tp_price)
-            if 'error' in order_res:
-                await context.bot.send_message(
-                    chat_id=chat_id, 
-                    text=f"❌ Errore ordine: {order_res['error']}"
-                )
-            else:
-                await context.bot.send_message(
-                    chat_id=chat_id, 
-                    text=f"✅ Ordine piazzato: {order_res}"
-                )
 
     except Exception as e:
         logging.exception(f'Errore in analyze_job per {symbol} {timeframe}')
@@ -636,7 +649,7 @@ def main():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
-     # Test JobQueue
+        # Test JobQueue
     try:
         from telegram.ext import JobQueue
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -644,7 +657,7 @@ def main():
     except ImportError as e:
         logging.error(f'❌ JobQueue mancante: {e}')
         return
-     
+    
     # Verifica variabili d'ambiente
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == '':
         logging.error('❌ TELEGRAM_TOKEN non configurato!')
