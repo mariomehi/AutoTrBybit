@@ -632,6 +632,15 @@ def main():
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+
+     # Test JobQueue
+    try:
+        from telegram.ext import JobQueue
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        logging.info('✅ JobQueue disponibile')
+    except ImportError as e:
+        logging.error(f'❌ JobQueue mancante: {e}')
+        return
     
     # Verifica variabili d'ambiente
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == '':
@@ -642,8 +651,18 @@ def main():
     if not BYBIT_API_KEY or not BYBIT_API_SECRET:
         logging.warning('⚠️ Bybit API keys non configurate. Trading disabilitato.')
     
-    # Crea applicazione
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    # Crea applicazione con JobQueue
+    try:
+        from telegram.ext import JobQueue
+        application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+        if application.job_queue is None:
+            logging.error('❌ JobQueue non disponibile!')
+            logging.error('Installa: pip install "python-telegram-bot[job-queue]"')
+            return
+    except ImportError:
+        logging.error('❌ JobQueue non disponibile!')
+        logging.error('Installa: pip install "python-telegram-bot[job-queue]"')
+        return
     
     # Aggiungi handlers
     application.add_handler(CommandHandler('start', cmd_start))
