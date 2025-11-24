@@ -291,7 +291,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logging.exception('analyze_job error')
-        await context.bot.send_message(chat_id=chat_id, text=f'Errore nell'analisi di {symbol} {timeframe}: {e}')
+        await context.bot.send_message(chat_id=chat_id, text=f"Errore nell'analisi di {symbol} {timeframe}: {e}")
 
 # ----------------------------- TELEGRAM COMMANDS -----------------------------
 
