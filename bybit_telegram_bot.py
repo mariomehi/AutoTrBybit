@@ -375,17 +375,26 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ----------------------------- MAIN -----------------------------
 
 import asyncio
-from telegram.ext import ApplicationBuilder
+
 
 async def main():
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # HANDLER COMANDI
-    application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(CommandHandler("analizza", cmd_analizza))
 
-    print("Bot avviato...")
-    await application.run_polling()
+# Handlers
+application.add_handler(CommandHandler("start", cmd_start))
+application.add_handler(CommandHandler("analizza", cmd_analizza))
+
+
+print("Bot avviato...")
+await application.run_polling()
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+import asyncio
+try:
+asyncio.get_event_loop().run_until_complete(main())
+except RuntimeError:
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+loop.run_until_complete(main())
