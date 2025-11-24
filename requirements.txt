@@ -1,4 +1,5 @@
-python-telegram-bot==21.9
+# Versione con JobQueue incluso
+python-telegram-bot[job-queue]==21.9
 requests
 pybit
 pandas
