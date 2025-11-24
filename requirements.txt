@@ -1,0 +1,9 @@
+python-telegram-bot==20.7
+requests
+pybit==2.4.0
+pandas
+numpy
+mplfinance
+ta
+scipy
+matplotlib
