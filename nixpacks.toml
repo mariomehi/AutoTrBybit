@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ['python311', 'gcc', 'freetype', 'libpng', 'pkg-config']
+
+[phases.install]
+cmds = [
+    'pip install --upgrade pip setuptools wheel',
+    'pip install --no-cache-dir -r requirements.txt'
+]
+
+[start]
+cmd = 'python bybit_telegram_bot_fixed.py'
