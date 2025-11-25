@@ -58,12 +58,17 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '')
 BYBIT_API_KEY = os.environ.get('BYBIT_API_KEY', '')
 BYBIT_API_SECRET = os.environ.get('BYBIT_API_SECRET', '')
 
+# Scegli l'ambiente di trading
+# 'demo' = Demo Trading (fondi virtuali)
+# 'live' = Trading Reale (ATTENZIONE: soldi veri!)
+TRADING_MODE = os.environ.get('TRADING_MODE', 'demo')
+
 # Strategy parameters
 VOLUME_FILTER = True
 ATR_MULT_SL = 1.5
 ATR_MULT_TP = 2.0
 RISK_USD = 10.0
-ENABLED_TFS = ['3m','5m','15m','30m','1h','4h']
+ENABLED_TFS = ['5m','15m','30m','1h','4h']
 
 # Klines map
 BYBIT_INTERVAL_MAP = {
@@ -82,20 +87,33 @@ ACTIVE_ANALYSES = {}
 ACTIVE_ANALYSES_LOCK = threading.Lock()
 
 # Bybit endpoints
-BYBIT_TESTNET_REST = 'https://api-testnet.bybit.com'
-BYBIT_PUBLIC_REST = 'https://api.bybit.com'
+BYBIT_ENDPOINTS = {
+    'demo': 'https://api-demo.bybit.com',  # Demo trading
+    'live': 'https://api.bybit.com'        # Trading reale
+}
+BYBIT_PUBLIC_REST = 'https://api.bybit.com'  # Dati di mercato sempre da mainnet
+
 
 def create_bybit_session():
-    """Crea sessione Bybit per trading"""
+    """Crea sessione Bybit per trading (Demo o Live)"""
     if BybitHTTP is None:
         raise RuntimeError('pybit non disponibile. Installa: pip install pybit>=5.0')
     if not BYBIT_API_KEY or not BYBIT_API_SECRET:
         raise RuntimeError('BYBIT_API_KEY e BYBIT_API_SECRET devono essere configurate')
+    
+    # Determina l'endpoint in base alla modalità
+    base_url = BYBIT_ENDPOINTS.get(TRADING_MODE, BYBIT_ENDPOINTS['demo'])
+    
+    logging.info(f'🔌 Connessione Bybit - Modalità: {TRADING_MODE.upper()}')
+    logging.info(f'📡 Endpoint: {base_url}')
+    
     session = BybitHTTP(
-        api_key=BYBIT_API_KEY, 
-        api_secret=BYBIT_API_SECRET, 
-        testnet=True  # Usa testnet
+        api_key=BYBIT_API_KEY,
+        api_secret=BYBIT_API_SECRET,
+        testnet=False,  # Non usiamo testnet
+        demo=True if TRADING_MODE == 'demo' else False  # Usa demo se configurato
     )
+    
     return session
 
 # ----------------------------- UTILITIES -----------------------------
@@ -479,8 +497,14 @@ def calculate_position_size(entry_price: float, sl_price: float, risk_usd: float
 
 async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float):
     """
-    Piazza ordine market su Bybit Testnet
-    NOTA: Questa è una versione semplificata. Per produzione, gestisci meglio SL/TP.
+    Piazza ordine market su Bybit (Demo o Live)
+    
+    Parametri:
+    - symbol: es. 'BTCUSDT'
+    - side: 'Buy' o 'Sell'
+    - qty: quantità in contratti
+    - sl_price: prezzo stop loss
+    - tp_price: prezzo take profit
     """
     if BybitHTTP is None:
         return {'error': 'pybit non disponibile'}
@@ -488,25 +512,50 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     try:
         session = create_bybit_session()
         
-        # Arrotonda qty in base al symbol (esempio generico)
+        # Verifica il balance prima di tradare
+        try:
+            wallet = session.get_wallet_balance(accountType="UNIFIED")
+            logging.info(f'💰 Wallet Balance: {wallet}')
+        except Exception as e:
+            logging.warning(f'Non riesco a verificare il balance: {e}')
+        
+        # Arrotonda qty in base alle specifiche del symbol
+        # Per USDT perpetuals, di solito 3 decimali
         qty = round(qty, 3)
         
-        # Piazza ordine market
+        # Arrotonda prezzi (di solito 2 decimali per BTC/ETH, può variare)
+        sl_price = round(sl_price, 2)
+        tp_price = round(tp_price, 2)
+        
+        logging.info(f'📤 Piazzando ordine {side} per {symbol}')
+        logging.info(f'   Qty: {qty} | SL: {sl_price} | TP: {tp_price}')
+        
+        # Piazza ordine market con SL e TP
         order = session.place_order(
-            category='linear',
+            category='linear',  # USDT Perpetual
             symbol=symbol,
             side=side,
             orderType='Market',
             qty=str(qty),
-            stopLoss=str(round(sl_price, 2)),
-            takeProfit=str(round(tp_price, 2))
+            stopLoss=str(sl_price),
+            takeProfit=str(tp_price),
+            positionIdx=0  # One-way mode
         )
         
+        logging.info(f'✅ Ordine eseguito: {order}')
         return order
         
     except Exception as e:
-        logging.exception('Errore nel piazzare ordine')
-        return {'error': str(e)}
+        error_msg = str(e)
+        logging.exception('❌ Errore nel piazzare ordine')
+        
+        # Errori comuni
+        if 'insufficient' in error_msg.lower():
+            return {'error': 'Balance insufficiente'}
+        elif 'invalid' in error_msg.lower():
+            return {'error': f'Parametri non validi: {error_msg}'}
+        else:
+            return {'error': error_msg}
 
 
 # ----------------------------- CHART GENERATION -----------------------------
@@ -677,17 +726,77 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /start"""
     bot_username = (await context.bot.get_me()).username
+    
+    # Emoji per la modalità
+    mode_emoji = "🎮" if TRADING_MODE == 'demo' else "💰"
+    mode_text = "DEMO (fondi virtuali)" if TRADING_MODE == 'demo' else "LIVE (SOLDI REALI!)"
+    
     welcome_text = (
         f"🤖 <b>Bot Pattern Detection Attivo!</b>\n"
-        f"👤 Username: @{bot_username}\n\n"
+        f"👤 Username: @{bot_username}\n"
+        f"{mode_emoji} <b>Modalità: {mode_text}</b>\n\n"
         "📊 Comandi disponibili:\n"
         "/analizza SYMBOL TIMEFRAME - Inizia analisi\n"
         "/stop SYMBOL - Ferma analisi\n"
-        "/list - Mostra analisi attive\n\n"
+        "/list - Mostra analisi attive\n"
+        "/test SYMBOL TIMEFRAME - Test pattern\n"
+        "/balance - Mostra saldo (se API configurate)\n\n"
         "📝 Esempio: /analizza BTCUSDT 15m\n"
-        f"⏱️ Timeframes supportati: {', '.join(ENABLED_TFS)}"
+        f"⏱️ Timeframes: {', '.join(ENABLED_TFS)}\n"
+        f"💰 Rischio per trade: ${RISK_USD}"
     )
     await update.message.reply_text(welcome_text, parse_mode='HTML')
+
+
+async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /balance
+    Mostra il saldo del wallet Bybit
+    """
+    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+        await update.message.reply_text(
+            '⚠️ API Bybit non configurate.\n'
+            'Configura BYBIT_API_KEY e BYBIT_API_SECRET nelle variabili d\'ambiente.'
+        )
+        return
+    
+    await update.message.reply_text('🔍 Recupero saldo...')
+    
+    try:
+        session = create_bybit_session()
+        
+        # Ottieni wallet balance
+        wallet = session.get_wallet_balance(accountType="UNIFIED")
+        
+        # Estrai info
+        if wallet.get('retCode') == 0:
+            coins = wallet.get('result', {}).get('list', [{}])[0].get('coin', [])
+            
+            msg = f"💰 <b>Saldo Wallet ({TRADING_MODE.upper()})</b>\n\n"
+            
+            for coin in coins:
+                coin_name = coin.get('coin', 'N/A')
+                equity = float(coin.get('equity', 0))
+                available = float(coin.get('availableToWithdraw', 0))
+                
+                if equity > 0.01:  # Mostra solo coin con balance > 0.01
+                    msg += f"<b>{coin_name}</b>\n"
+                    msg += f"  💵 Equity: {equity:.4f}\n"
+                    msg += f"  ✅ Disponibile: {available:.4f}\n\n"
+            
+            if len([c for c in coins if float(c.get('equity', 0)) > 0.01]) == 0:
+                msg += "⚠️ Nessun balance trovato\n"
+            
+            await update.message.reply_text(msg, parse_mode='HTML')
+        else:
+            error_msg = wallet.get('retMsg', 'Errore sconosciuto')
+            await update.message.reply_text(f"❌ Errore API: {error_msg}")
+            
+    except Exception as e:
+        logging.exception('Errore in cmd_balance')
+        await update.message.reply_text(
+            f"❌ Errore nel recuperare il saldo:\n{str(e)}"
+        )
 
 
 async def cmd_analizza(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -975,11 +1084,17 @@ def main():
     application.add_handler(CommandHandler('stop', cmd_stop))
     application.add_handler(CommandHandler('list', cmd_list))
     application.add_handler(CommandHandler('test', cmd_test))
+    application.add_handler(CommandHandler('balance', cmd_balance))
     
     # Avvia bot
+    mode_emoji = "🎮" if TRADING_MODE == 'demo' else "⚠️💰"
     logging.info('🚀 Bot avviato correttamente!')
+    logging.info(f'{mode_emoji} Modalità Trading: {TRADING_MODE.upper()}')
     logging.info(f'⏱️ Timeframes supportati: {ENABLED_TFS}')
     logging.info(f'💰 Rischio per trade: ${RISK_USD}')
+    
+    if TRADING_MODE == 'live':
+        logging.warning('⚠️⚠️⚠️ ATTENZIONE: MODALITÀ LIVE - TRADING REALE! ⚠️⚠️⚠️')
     
     try:
         application.run_polling(
