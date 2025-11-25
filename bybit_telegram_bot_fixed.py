@@ -68,7 +68,7 @@ VOLUME_FILTER = True
 ATR_MULT_SL = 1.5
 ATR_MULT_TP = 2.0
 RISK_USD = 10.0
-ENABLED_TFS = ['3m','5m','15m','30m','1h','4h']
+ENABLED_TFS = ['5m','15m','30m','1h','4h']
 
 # Klines map
 BYBIT_INTERVAL_MAP = {
@@ -85,6 +85,14 @@ INTERVAL_SECONDS = {
 # Active analyses storage
 ACTIVE_ANALYSES = {}
 ACTIVE_ANALYSES_LOCK = threading.Lock()
+
+# Paused notifications: chat_id -> set of "SYMBOL-TIMEFRAME" keys
+PAUSED_NOTIFICATIONS = {}
+PAUSED_LOCK = threading.Lock()
+
+# Active positions tracking: symbol -> order_info
+ACTIVE_POSITIONS = {}
+POSITIONS_LOCK = threading.Lock()
 
 # Bybit endpoints
 BYBIT_ENDPOINTS = {
@@ -430,6 +438,8 @@ def check_patterns(df: pd.DataFrame):
     """
     Controlla tutti i pattern
     Returns: (found: bool, side: str, pattern_name: str)
+    
+    NOTA: Per ora solo segnali BUY attivi, SELL commentati
     """
     if len(df) < 4:
         return (False, None, None)
@@ -438,45 +448,57 @@ def check_patterns(df: pd.DataFrame):
     prev = df.iloc[-2]
     prev2 = df.iloc[-3]
 
-    # Pattern a 2 candele (controllati per primi perché più comuni)
+    # ===== PATTERN BUY (ATTIVI) =====
+    
+    # Pattern a 2 candele
     if is_bullish_engulfing(prev, last):
         return (True, 'Buy', 'Bullish Engulfing')
-    if is_bearish_engulfing(prev, last):
-        return (True, 'Sell', 'Bearish Engulfing')
     
-    # Pattern singola candela
+    # Bearish Engulfing commentato (segnale SELL)
+    # if is_bearish_engulfing(prev, last):
+    #     return (True, 'Sell', 'Bearish Engulfing')
+    
+    # Pattern singola candela - BUY
     if is_hammer(last):
         return (True, 'Buy', 'Hammer')
-    if is_shooting_star(last):
-        return (True, 'Sell', 'Shooting Star')
     
-    # Pin bar (più frequente di hammer/shooting star)
+    # Shooting Star commentato (segnale SELL)
+    # if is_shooting_star(last):
+    #     return (True, 'Sell', 'Shooting Star')
+    
+    # Pin bar - solo BUY
     if is_pin_bar(last):
         lower_wick = min(last['open'], last['close']) - last['low']
         upper_wick = last['high'] - max(last['open'], last['close'])
-        side = 'Buy' if lower_wick > upper_wick else 'Sell'
-        return (True, side, 'Pin Bar')
+        
+        # Solo pin bar rialzisti (ombra inferiore lunga)
+        if lower_wick > upper_wick:
+            return (True, 'Buy', 'Pin Bar Bullish')
+        # Pin bar ribassisti commentati
+        # else:
+        #     return (True, 'Sell', 'Pin Bar Bearish')
     
-    # Doji (indecisione)
-    if is_doji(last):
-        # Il doji da solo non dà direzione, guardiamo il trend
-        # Se il trend è rialzista (prev è bullish), doji può essere ribassista
-        # Se il trend è ribassista (prev è bearish), doji può essere rialzista
-        if prev['close'] > prev['open']:
-            return (True, 'Sell', 'Doji (reversione)')
-        else:
-            return (True, 'Buy', 'Doji (reversione)')
+    # Doji - commentato perché può dare segnali SELL
+    # if is_doji(last):
+    #     if prev['close'] > prev['open']:
+    #         return (True, 'Sell', 'Doji (reversione)')
+    #     else:
+    #         return (True, 'Buy', 'Doji (reversione)')
     
-    # Pattern a 3 candele
+    # Pattern a 3 candele - solo BUY
     if is_morning_star(prev2, prev, last):
         return (True, 'Buy', 'Morning Star')
-    if is_evening_star(prev2, prev, last):
-        return (True, 'Sell', 'Evening Star')
+    
+    # Evening Star commentato (segnale SELL)
+    # if is_evening_star(prev2, prev, last):
+    #     return (True, 'Sell', 'Evening Star')
     
     if is_three_white_soldiers(prev2, prev, last):
         return (True, 'Buy', 'Three White Soldiers')
-    if is_three_black_crows(prev2, prev, last):
-        return (True, 'Sell', 'Three Black Crows')
+    
+    # Three Black Crows commentato (segnale SELL)
+    # if is_three_black_crows(prev2, prev, last):
+    #     return (True, 'Sell', 'Three Black Crows')
     
     return (False, None, None)
 
@@ -498,6 +520,7 @@ def calculate_position_size(entry_price: float, sl_price: float, risk_usd: float
 async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float):
     """
     Piazza ordine market su Bybit (Demo o Live)
+    Controlla prima se esiste già una posizione aperta per questo symbol
     
     Parametri:
     - symbol: es. 'BTCUSDT'
@@ -508,6 +531,17 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     """
     if BybitHTTP is None:
         return {'error': 'pybit non disponibile'}
+    
+    # Controlla se esiste già una posizione aperta per questo symbol
+    with POSITIONS_LOCK:
+        if symbol in ACTIVE_POSITIONS:
+            existing = ACTIVE_POSITIONS[symbol]
+            logging.info(f'⚠️ Posizione già aperta per {symbol}: {existing}')
+            return {
+                'error': 'position_exists',
+                'message': f'Posizione già aperta per {symbol}',
+                'existing_position': existing
+            }
     
     try:
         session = create_bybit_session()
@@ -543,6 +577,20 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         )
         
         logging.info(f'✅ Ordine eseguito: {order}')
+        
+        # Salva la posizione come attiva
+        if order.get('retCode') == 0:
+            with POSITIONS_LOCK:
+                ACTIVE_POSITIONS[symbol] = {
+                    'side': side,
+                    'qty': qty,
+                    'sl': sl_price,
+                    'tp': tp_price,
+                    'order_id': order.get('result', {}).get('orderId'),
+                    'timestamp': datetime.now(timezone.utc).isoformat()
+                }
+            logging.info(f'📝 Posizione salvata per {symbol}')
+        
         return order
         
     except Exception as e:
@@ -595,22 +643,28 @@ def generate_chart(df: pd.DataFrame, symbol: str, timeframe: str) -> io.BytesIO:
 async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     """
     Job che viene eseguito ad ogni chiusura candela
-    INVIA SEMPRE IL GRAFICO, anche senza pattern
+    Se in pausa, invia grafico SOLO quando trova un pattern
     """
     job_ctx = context.job.data
     chat_id = job_ctx['chat_id']
     symbol = job_ctx['symbol']
     timeframe = job_ctx['timeframe']
+    key = f'{symbol}-{timeframe}'
+
+    # Verifica se le notifiche sono in pausa per questo symbol/timeframe
+    with PAUSED_LOCK:
+        is_paused = chat_id in PAUSED_NOTIFICATIONS and key in PAUSED_NOTIFICATIONS[chat_id]
 
     try:
         # Ottieni dati
         df = bybit_get_klines(symbol, timeframe, limit=200)
         if df.empty:
             logging.warning(f'Nessun dato per {symbol} {timeframe}')
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f'⚠️ Nessun dato disponibile per {symbol} {timeframe}'
-            )
+            if not is_paused:  # Invia errore solo se non in pausa
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f'⚠️ Nessun dato disponibile per {symbol} {timeframe}'
+                )
             return
 
         last_close = df['close'].iloc[-1]
@@ -618,6 +672,11 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         
         # Controlla pattern
         found, side, pattern = check_patterns(df)
+        
+        # Se in pausa e NON c'è pattern, non inviare nulla
+        if is_paused and not found:
+            logging.debug(f'🔇 {symbol} {timeframe} in pausa - nessun pattern, skip notifica')
+            return
         
         # Calcola ATR per eventuali SL/TP
         atr_series = atr(df, period=14)
@@ -664,6 +723,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Calcola position size
             qty = calculate_position_size(last_close, sl_price, RISK_USD)
             
+            # Verifica se esiste già una posizione
+            position_exists = symbol in ACTIVE_POSITIONS
+            
             caption = (
                 f"🔥 <b>SEGNALE TROVATO!</b>\n\n"
                 f"📊 Pattern: <b>{pattern}</b>\n"
@@ -678,16 +740,25 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 f"📏 R:R = {abs(tp_price-last_close)/abs(sl_price-last_close):.2f}:1"
             )
             
-            # Piazza ordine se autotrade è abilitato
-            if job_ctx.get('autotrade') and qty > 0:
+            if position_exists:
+                caption += f"\n\n⚠️ <b>Posizione già aperta per {symbol}</b>"
+                caption += f"\nOrdine NON piazzato per evitare duplicati"
+            
+            # Piazza ordine se autotrade è abilitato E non esiste già posizione
+            if job_ctx.get('autotrade') and qty > 0 and not position_exists:
                 order_res = await place_bybit_order(symbol, side, qty, sl_price, tp_price)
+                
                 if 'error' in order_res:
-                    caption += f"\n\n❌ Errore ordine: {order_res['error']}"
+                    if order_res.get('error') == 'position_exists':
+                        caption += f"\n\n⚠️ Posizione già aperta, ordine saltato"
+                    else:
+                        caption += f"\n\n❌ Errore ordine: {order_res['error']}"
                 else:
-                    caption += f"\n\n✅ Ordine piazzato su Bybit Testnet"
+                    caption += f"\n\n✅ Ordine piazzato su Bybit {TRADING_MODE.upper()}"
         else:
             # Nessun pattern trovato
-            caption += f"\n⏳ Nessun pattern rilevato"
+            pause_emoji = "🔇" if is_paused else "⏳"
+            caption += f"\n{pause_emoji} Nessun pattern rilevato"
             if not math.isnan(last_atr):
                 caption += f"\n📏 ATR(14): ${last_atr:.4f}"
         
@@ -702,7 +773,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
             
-            logging.info(f"📸 Grafico inviato per {symbol} {timeframe} - Pattern: {'✅ '+pattern if found else '❌ Nessuno'}")
+            status = '✅ '+pattern if found else ('🔇 Pausa' if is_paused else '❌ Nessuno')
+            logging.info(f"📸 Grafico inviato per {symbol} {timeframe} - Pattern: {status}")
             
         except Exception as e:
             logging.error(f'Errore generazione/invio grafico: {e}')
@@ -715,10 +787,11 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logging.exception(f'Errore in analyze_job per {symbol} {timeframe}')
-        await context.bot.send_message(
-            chat_id=chat_id, 
-            text=f"❌ Errore nell'analisi di {symbol} {timeframe}: {str(e)}"
-        )
+        if not is_paused:  # Invia errori solo se non in pausa
+            await context.bot.send_message(
+                chat_id=chat_id, 
+                text=f"❌ Errore nell'analisi di {symbol} {timeframe}: {str(e)}"
+            )
 
 
 # ----------------------------- TELEGRAM COMMANDS -----------------------------
@@ -735,17 +808,188 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🤖 <b>Bot Pattern Detection Attivo!</b>\n"
         f"👤 Username: @{bot_username}\n"
         f"{mode_emoji} <b>Modalità: {mode_text}</b>\n\n"
-        "📊 Comandi disponibili:\n"
-        "/analizza SYMBOL TIMEFRAME - Inizia analisi\n"
+        "📊 <b>Comandi Analisi:</b>\n"
+        "/analizza SYMBOL TF - Inizia analisi\n"
         "/stop SYMBOL - Ferma analisi\n"
-        "/list - Mostra analisi attive\n"
-        "/test SYMBOL TIMEFRAME - Test pattern\n"
-        "/balance - Mostra saldo (se API configurate)\n\n"
+        "/list - Analisi attive\n"
+        "/pausa SYMBOL TF - Silenzia notifiche senza pattern\n"
+        "/riprendi SYMBOL TF - Riattiva notifiche\n\n"
+        "💼 <b>Comandi Trading:</b>\n"
+        "/balance - Mostra saldo\n"
+        "/posizioni - Posizioni aperte\n"
+        "/chiudi SYMBOL - Rimuovi posizione dal tracking\n\n"
+        "🔍 <b>Comandi Debug:</b>\n"
+        "/test SYMBOL TF - Test pattern\n\n"
         "📝 Esempio: /analizza BTCUSDT 15m\n"
         f"⏱️ Timeframes: {', '.join(ENABLED_TFS)}\n"
-        f"💰 Rischio per trade: ${RISK_USD}"
+        f"💰 Rischio: ${RISK_USD}\n\n"
+        "⚠️ <b>NOTA:</b> Solo segnali BUY attivi"
     )
     await update.message.reply_text(welcome_text, parse_mode='HTML')
+
+
+        await update.message.reply_text(msg, parse_mode='HTML')
+
+
+async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /pausa SYMBOL TIMEFRAME
+    Mette in pausa le notifiche senza pattern per un symbol/timeframe specifico
+    """
+    chat_id = update.effective_chat.id
+    args = context.args
+    
+    if len(args) < 2:
+        await update.message.reply_text(
+            '❌ Uso: /pausa SYMBOL TIMEFRAME\n'
+            'Esempio: /pausa BTCUSDT 15m\n\n'
+            'Mette in pausa le notifiche quando NON viene rilevato nessun pattern.\n'
+            'Riceverai comunque notifiche quando ci sono segnali di trading.'
+        )
+        return
+    
+    symbol = args[0].upper()
+    timeframe = args[1].lower()
+    key = f'{symbol}-{timeframe}'
+    
+    # Verifica che l'analisi sia attiva
+    with ACTIVE_ANALYSES_LOCK:
+        chat_map = ACTIVE_ANALYSES.get(chat_id, {})
+        if key not in chat_map:
+            await update.message.reply_text(
+                f'⚠️ Non c\'è un\'analisi attiva per {symbol} {timeframe}.\n'
+                f'Usa /analizza {symbol} {timeframe} per iniziare.'
+            )
+            return
+    
+    # Aggiungi alla lista pause
+    with PAUSED_LOCK:
+        if chat_id not in PAUSED_NOTIFICATIONS:
+            PAUSED_NOTIFICATIONS[chat_id] = set()
+        PAUSED_NOTIFICATIONS[chat_id].add(key)
+    
+    await update.message.reply_text(
+        f'🔇 <b>Notifiche in pausa per {symbol} {timeframe}</b>\n\n'
+        f'Non riceverai più notifiche quando NON ci sono pattern.\n'
+        f'Riceverai comunque i segnali di trading quando vengono rilevati.\n\n'
+        f'Usa /riprendi {symbol} {timeframe} per riattivare tutte le notifiche.',
+        parse_mode='HTML'
+    )
+
+
+async def cmd_riprendi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /riprendi SYMBOL TIMEFRAME
+    Riattiva tutte le notifiche per un symbol/timeframe
+    """
+    chat_id = update.effective_chat.id
+    args = context.args
+    
+    if len(args) < 2:
+        await update.message.reply_text(
+            '❌ Uso: /riprendi SYMBOL TIMEFRAME\n'
+            'Esempio: /riprendi BTCUSDT 15m\n\n'
+            'Riattiva tutte le notifiche (anche senza pattern).'
+        )
+        return
+    
+    symbol = args[0].upper()
+    timeframe = args[1].lower()
+    key = f'{symbol}-{timeframe}'
+    
+    # Rimuovi dalla lista pause
+    with PAUSED_LOCK:
+        if chat_id in PAUSED_NOTIFICATIONS and key in PAUSED_NOTIFICATIONS[chat_id]:
+            PAUSED_NOTIFICATIONS[chat_id].remove(key)
+            
+            # Pulisci se il set è vuoto
+            if not PAUSED_NOTIFICATIONS[chat_id]:
+                del PAUSED_NOTIFICATIONS[chat_id]
+            
+            await update.message.reply_text(
+                f'🔔 <b>Notifiche riattivate per {symbol} {timeframe}</b>\n\n'
+                f'Riceverai ora tutte le notifiche, anche quando non ci sono pattern.',
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                f'⚠️ Le notifiche per {symbol} {timeframe} non erano in pausa.'
+            )
+
+
+async def cmd_posizioni(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /posizioni
+    Mostra tutte le posizioni aperte tracciate dal bot
+    """
+    with POSITIONS_LOCK:
+        if not ACTIVE_POSITIONS:
+            await update.message.reply_text(
+                '📭 <b>Nessuna posizione aperta</b>\n\n'
+                'Il bot non ha posizioni attive in questo momento.',
+                parse_mode='HTML'
+            )
+            return
+        
+        msg = '📊 <b>Posizioni Aperte</b>\n\n'
+        
+        for symbol, pos in ACTIVE_POSITIONS.items():
+            side = pos.get('side', 'N/A')
+            qty = pos.get('qty', 0)
+            sl = pos.get('sl', 0)
+            tp = pos.get('tp', 0)
+            timestamp = pos.get('timestamp', 'N/A')
+            
+            side_emoji = "🟢" if side == 'Buy' else "🔴"
+            
+            msg += f"{side_emoji} <b>{symbol}</b> - {side}\n"
+            msg += f"  📦 Qty: {qty:.4f}\n"
+            msg += f"  🛑 SL: ${sl:.2f}\n"
+            msg += f"  🎯 TP: ${tp:.2f}\n"
+            msg += f"  🕐 {timestamp[:19]}\n\n"
+        
+        msg += f"💼 Totale posizioni: {len(ACTIVE_POSITIONS)}\n\n"
+        msg += "💡 Usa /chiudi SYMBOL per chiudere manualmente"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+
+
+async def cmd_chiudi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /chiudi SYMBOL
+    Rimuove una posizione dal tracking (utile se hai chiuso manualmente su Bybit)
+    """
+    args = context.args
+    
+    if len(args) < 1:
+        await update.message.reply_text(
+            '❌ Uso: /chiudi SYMBOL\n'
+            'Esempio: /chiudi BTCUSDT\n\n'
+            'Rimuove la posizione dal tracking del bot.\n'
+            '(Non chiude automaticamente la posizione su Bybit)'
+        )
+        return
+    
+    symbol = args[0].upper()
+    
+    with POSITIONS_LOCK:
+        if symbol in ACTIVE_POSITIONS:
+            pos_info = ACTIVE_POSITIONS[symbol]
+            del ACTIVE_POSITIONS[symbol]
+            
+            await update.message.reply_text(
+                f'✅ <b>Posizione {symbol} rimossa dal tracking</b>\n\n'
+                f'Dettagli posizione chiusa:\n'
+                f'Side: {pos_info.get("side")}\n'
+                f'Qty: {pos_info.get("qty"):.4f}\n\n'
+                f'⚠️ Ricorda: questa azione rimuove solo il tracking.\n'
+                f'Se la posizione è ancora aperta su Bybit, chiudila manualmente.',
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                f'⚠️ Nessuna posizione tracciata per {symbol}'
+            )
 
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1159,6 +1403,10 @@ def main():
     application.add_handler(CommandHandler('list', cmd_list))
     application.add_handler(CommandHandler('test', cmd_test))
     application.add_handler(CommandHandler('balance', cmd_balance))
+    application.add_handler(CommandHandler('pausa', cmd_pausa))
+    application.add_handler(CommandHandler('riprendi', cmd_riprendi))
+    application.add_handler(CommandHandler('posizioni', cmd_posizioni))
+    application.add_handler(CommandHandler('chiudi', cmd_chiudi))
     
     # Avvia bot
     mode_emoji = "🎮" if TRADING_MODE == 'demo' else "⚠️💰"
