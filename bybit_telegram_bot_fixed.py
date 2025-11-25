@@ -768,35 +768,109 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Ottieni wallet balance
         wallet = session.get_wallet_balance(accountType="UNIFIED")
         
+        logging.info(f'📊 Wallet response: {wallet}')
+        
         # Estrai info
         if wallet.get('retCode') == 0:
-            coins = wallet.get('result', {}).get('list', [{}])[0].get('coin', [])
+            result = wallet.get('result', {})
+            accounts = result.get('list', [])
+            
+            if not accounts:
+                await update.message.reply_text(
+                    '⚠️ Nessun account trovato.\n'
+                    'Verifica che le API keys siano corrette e abbiano i permessi giusti.'
+                )
+                return
             
             msg = f"💰 <b>Saldo Wallet ({TRADING_MODE.upper()})</b>\n\n"
             
-            for coin in coins:
-                coin_name = coin.get('coin', 'N/A')
-                equity = float(coin.get('equity', 0))
-                available = float(coin.get('availableToWithdraw', 0))
-                
-                if equity > 0.01:  # Mostra solo coin con balance > 0.01
-                    msg += f"<b>{coin_name}</b>\n"
-                    msg += f"  💵 Equity: {equity:.4f}\n"
-                    msg += f"  ✅ Disponibile: {available:.4f}\n\n"
+            total_equity = 0
+            found_coins = False
             
-            if len([c for c in coins if float(c.get('equity', 0)) > 0.01]) == 0:
-                msg += "⚠️ Nessun balance trovato\n"
+            for account in accounts:
+                coins = account.get('coin', [])
+                account_type = account.get('accountType', 'N/A')
+                
+                for coin in coins:
+                    coin_name = coin.get('coin', 'N/A')
+                    
+                    # Gestione sicura dei float (può essere stringa vuota o None)
+                    def safe_float(value, default=0.0):
+                        if value is None or value == '':
+                            return default
+                        try:
+                            return float(value)
+                        except (ValueError, TypeError):
+                            return default
+                    
+                    equity = safe_float(coin.get('equity', 0))
+                    available = safe_float(coin.get('availableToWithdraw', 0))
+                    wallet_balance = safe_float(coin.get('walletBalance', 0))
+                    unrealized_pnl = safe_float(coin.get('unrealisedPnl', 0))
+                    
+                    # Mostra solo coin con balance > 0.01
+                    if equity > 0.01 or wallet_balance > 0.01:
+                        found_coins = True
+                        msg += f"<b>{coin_name}</b> ({account_type})\n"
+                        msg += f"  💵 Equity: {equity:.4f}\n"
+                        msg += f"  💼 Wallet Balance: {wallet_balance:.4f}\n"
+                        msg += f"  ✅ Disponibile: {available:.4f}\n"
+                        
+                        if unrealized_pnl != 0:
+                            pnl_emoji = "📈" if unrealized_pnl > 0 else "📉"
+                            msg += f"  {pnl_emoji} PnL Non Realizzato: {unrealized_pnl:+.4f}\n"
+                        
+                        msg += "\n"
+                        total_equity += equity
+            
+            if not found_coins:
+                msg += "⚠️ Nessun balance trovato o tutti i balance sono zero.\n\n"
+                msg += "💡 <b>Suggerimenti:</b>\n"
+                msg += "• Se sei in Demo, vai su Bybit Demo e clicca 'Top Up'\n"
+                msg += "• Verifica che le API keys abbiano i permessi corretti\n"
+                msg += "• Assicurati di essere in 'Unified Trading Account'\n"
+            else:
+                msg += f"💰 <b>Totale Equity: {total_equity:.4f} USDT</b>\n"
             
             await update.message.reply_text(msg, parse_mode='HTML')
         else:
+            error_code = wallet.get('retCode', 'N/A')
             error_msg = wallet.get('retMsg', 'Errore sconosciuto')
-            await update.message.reply_text(f"❌ Errore API: {error_msg}")
+            
+            msg = f"❌ <b>Errore API Bybit</b>\n\n"
+            msg += f"Codice: {error_code}\n"
+            msg += f"Messaggio: {error_msg}\n\n"
+            
+            # Errori comuni
+            if error_code == 10003:
+                msg += "💡 API Key non valida o scaduta.\n"
+                msg += "Soluzione: Ricrea le API keys su Bybit."
+            elif error_code == 10004:
+                msg += "💡 Firma API non valida.\n"
+                msg += "Soluzione: Verifica BYBIT_API_SECRET."
+            elif error_code == 10005:
+                msg += "💡 Permessi insufficienti.\n"
+                msg += "Soluzione: Le API keys devono avere permessi 'Contract Trading'."
+            
+            await update.message.reply_text(msg, parse_mode='HTML')
             
     except Exception as e:
         logging.exception('Errore in cmd_balance')
-        await update.message.reply_text(
-            f"❌ Errore nel recuperare il saldo:\n{str(e)}"
-        )
+        
+        error_str = str(e)
+        msg = f"❌ <b>Errore nel recuperare il saldo</b>\n\n"
+        msg += f"Dettagli: {error_str}\n\n"
+        
+        # Suggerimenti basati sull'errore
+        if 'Invalid API' in error_str or 'authentication' in error_str.lower():
+            msg += "💡 Verifica le tue API keys:\n"
+            msg += "1. Sono create in modalità Demo (se TRADING_MODE=demo)?\n"
+            msg += "2. Hanno i permessi corretti (Unified Trading)?\n"
+            msg += "3. Non sono scadute?\n"
+        elif 'timeout' in error_str.lower():
+            msg += "💡 Problema di connessione. Riprova tra qualche secondo.\n"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
 
 
 async def cmd_analizza(update: Update, context: ContextTypes.DEFAULT_TYPE):
