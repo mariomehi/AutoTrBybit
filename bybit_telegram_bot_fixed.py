@@ -70,6 +70,15 @@ ATR_MULT_TP = 2.0
 RISK_USD = 10.0
 ENABLED_TFS = ['1m','3m','5m','15m','30m','1h','4h']
 
+# Symbol-specific risk overrides (opzionale)
+# Usa questo per impostare risk diversi per symbol specifici
+SYMBOL_RISK_OVERRIDE = {
+    # Esempio: per MONUSDT usa solo $5 invece di $10
+    # 'MONUSDT': 5.0,
+    # 'SHIBUSDT': 3.0,
+    # Per symbol normali, usa RISK_USD default
+}
+
 # Klines map
 BYBIT_INTERVAL_MAP = {
     '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30', 
@@ -509,11 +518,29 @@ def calculate_position_size(entry_price: float, sl_price: float, risk_usd: float
     """
     Calcola la quantità basata sul rischio in USD
     Formula: Qty = Risk USD / |Entry - SL|
+    
+    Con limiti di sicurezza per evitare qty troppo grandi
     """
     risk_per_unit = abs(entry_price - sl_price)
     if risk_per_unit == 0:
         return 0
+    
     qty = risk_usd / risk_per_unit
+    
+    # Limite massimo di sicurezza basato sul prezzo
+    # Per symbol a basso prezzo, limita qty massima
+    if entry_price < 1:
+        # Per coin sotto $1, max 10,000 contracts
+        max_qty = 10000
+    elif entry_price < 10:
+        # Per coin sotto $10, max 1,000 contracts
+        max_qty = 1000
+    else:
+        # Per coin normali, max 100 contracts
+        max_qty = 100
+    
+    qty = min(qty, max_qty)
+    
     return float(max(0, qty))
 
 
@@ -549,17 +576,58 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         # Verifica il balance prima di tradare
         try:
             wallet = session.get_wallet_balance(accountType="UNIFIED")
-            logging.info(f'💰 Wallet Balance: {wallet}')
+            logging.info(f'💰 Wallet Balance check completato')
         except Exception as e:
             logging.warning(f'Non riesco a verificare il balance: {e}')
         
-        # Arrotonda qty in base alle specifiche del symbol
-        # Per USDT perpetuals, di solito 3 decimali
-        qty = round(qty, 3)
+        # Ottieni info sul symbol per determinare qty corretta
+        try:
+            instrument_info = session.get_instruments_info(
+                category='linear',
+                symbol=symbol
+            )
+            
+            if instrument_info.get('retCode') == 0:
+                instruments = instrument_info.get('result', {}).get('list', [])
+                if instruments:
+                    lot_size_filter = instruments[0].get('lotSizeFilter', {})
+                    min_order_qty = float(lot_size_filter.get('minOrderQty', 0.001))
+                    max_order_qty = float(lot_size_filter.get('maxOrderQty', 1000000))
+                    qty_step = float(lot_size_filter.get('qtyStep', 0.001))
+                    
+                    logging.info(f'📊 {symbol} - Min: {min_order_qty}, Max: {max_order_qty}, Step: {qty_step}')
+                    
+                    # Arrotonda qty al qty_step più vicino
+                    qty = round(qty / qty_step) * qty_step
+                    
+                    # Limita qty tra min e max
+                    qty = max(min_order_qty, min(qty, max_order_qty))
+                    
+                    # Assicurati che qty rispetti il formato
+                    # Conta decimali in qty_step
+                    decimals = len(str(qty_step).split('.')[-1]) if '.' in str(qty_step) else 0
+                    qty = round(qty, decimals)
+                else:
+                    logging.warning(f'Nessuna info trovata per {symbol}, uso default')
+                    qty = round(qty, 3)
+            else:
+                logging.warning(f'Errore nel recuperare info {symbol}, uso default')
+                qty = round(qty, 3)
+                
+        except Exception as e:
+            logging.warning(f'Errore nel recuperare instrument info: {e}')
+            # Fallback: arrotondamento generico
+            qty = round(qty, 3)
         
-        # Arrotonda prezzi (di solito 2 decimali per BTC/ETH, può variare)
-        sl_price = round(sl_price, 2)
-        tp_price = round(tp_price, 2)
+        # Verifica qty minima sensata
+        if qty < 0.001:
+            return {'error': f'Qty troppo piccola ({qty}). Aumenta RISK_USD o riduci ATR.'}
+        
+        # Arrotonda prezzi (2 decimali per la maggior parte dei symbol)
+        # Per symbol con prezzi molto bassi (<1), usa 4 decimali
+        price_decimals = 4 if sl_price < 1 else 2
+        sl_price = round(sl_price, price_decimals)
+        tp_price = round(tp_price, price_decimals)
         
         logging.info(f'📤 Piazzando ordine {side} per {symbol}')
         logging.info(f'   Qty: {qty} | SL: {sl_price} | TP: {tp_price}')
@@ -597,13 +665,17 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         error_msg = str(e)
         logging.exception('❌ Errore nel piazzare ordine')
         
-        # Errori comuni
+        # Errori comuni con suggerimenti
         if 'insufficient' in error_msg.lower():
-            return {'error': 'Balance insufficiente'}
+            return {'error': 'Balance insufficiente. Verifica il tuo saldo con /balance'}
+        elif 'qty invalid' in error_msg.lower() or '10001' in error_msg:
+            return {'error': f'Quantità non valida per {symbol}. Il symbol potrebbe avere limiti specifici o qty troppo grande/piccola.'}
         elif 'invalid' in error_msg.lower():
             return {'error': f'Parametri non validi: {error_msg}'}
+        elif 'risk limit' in error_msg.lower():
+            return {'error': 'Limite di rischio raggiunto. Riduci la posizione o aumenta il risk limit su Bybit.'}
         else:
-            return {'error': error_msg}
+            return {'error': f'{error_msg}'}
 
 
 # ----------------------------- CHART GENERATION -----------------------------
@@ -723,6 +795,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Calcola position size
             qty = calculate_position_size(last_close, sl_price, RISK_USD)
             
+            # Usa risk override se disponibile per questo symbol
+            risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
+            if risk_for_symbol != RISK_USD:
+                qty = calculate_position_size(last_close, sl_price, risk_for_symbol)
+                logging.info(f'💰 Using risk override for {symbol}: ${risk_for_symbol}')
+            
             # Verifica se esiste già una posizione
             position_exists = symbol in ACTIVE_POSITIONS
             
@@ -826,6 +904,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ <b>NOTA:</b> Solo segnali BUY attivi"
     )
     await update.message.reply_text(welcome_text, parse_mode='HTML')
+
+
+        await update.message.reply_text(msg, parse_mode='HTML')
+
 
 async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
