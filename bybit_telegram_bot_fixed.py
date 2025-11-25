@@ -166,67 +166,246 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 # ----------------------------- PATTERN DETECTION -----------------------------
 
 def is_bullish_engulfing(prev, curr):
-    """Pattern: Bullish Engulfing"""
-    return (prev['close'] < prev['open'] and 
-            curr['close'] > curr['open'] and
-            curr['open'] <= prev['close'] and 
-            curr['close'] >= prev['open'])
+    """
+    Pattern: Bullish Engulfing
+    Candela rialzista che ingloba completamente il corpo della candela ribassista precedente
+    """
+    prev_body_top = max(prev['open'], prev['close'])
+    prev_body_bottom = min(prev['open'], prev['close'])
+    curr_body_top = max(curr['open'], curr['close'])
+    curr_body_bottom = min(curr['open'], curr['close'])
+    
+    # Prev deve essere ribassista, curr rialzista
+    is_prev_bearish = prev['close'] < prev['open']
+    is_curr_bullish = curr['close'] > curr['open']
+    
+    # Curr deve inglobare il corpo di prev
+    engulfs = (curr_body_bottom <= prev_body_bottom and 
+               curr_body_top >= prev_body_top)
+    
+    # Curr deve avere un corpo decente (almeno 50% del range di prev)
+    prev_body = abs(prev['open'] - prev['close'])
+    curr_body = abs(curr['open'] - curr['close'])
+    has_body = curr_body >= prev_body * 0.5
+    
+    return is_prev_bearish and is_curr_bullish and engulfs and has_body
 
 
 def is_bearish_engulfing(prev, curr):
-    """Pattern: Bearish Engulfing"""
-    return (prev['close'] > prev['open'] and 
-            curr['close'] < curr['open'] and
-            curr['open'] >= prev['close'] and 
-            curr['close'] <= prev['open'])
+    """
+    Pattern: Bearish Engulfing
+    Candela ribassista che ingloba completamente il corpo della candela rialzista precedente
+    """
+    prev_body_top = max(prev['open'], prev['close'])
+    prev_body_bottom = min(prev['open'], prev['close'])
+    curr_body_top = max(curr['open'], curr['close'])
+    curr_body_bottom = min(curr['open'], curr['close'])
+    
+    # Prev deve essere rialzista, curr ribassista
+    is_prev_bullish = prev['close'] > prev['open']
+    is_curr_bearish = curr['close'] < curr['open']
+    
+    # Curr deve inglobare il corpo di prev
+    engulfs = (curr_body_top >= prev_body_top and 
+               curr_body_bottom <= prev_body_bottom)
+    
+    # Curr deve avere un corpo decente
+    prev_body = abs(prev['open'] - prev['close'])
+    curr_body = abs(curr['open'] - curr['close'])
+    has_body = curr_body >= prev_body * 0.5
+    
+    return is_prev_bullish and is_curr_bearish and engulfs and has_body
 
 
 def is_hammer(candle):
-    """Pattern: Hammer (bullish reversal)"""
+    """
+    Pattern: Hammer (bullish reversal)
+    Corpo piccolo in alto, ombra inferiore lunga (almeno 2x il corpo)
+    """
     body = abs(candle['close'] - candle['open'])
+    total_range = candle['high'] - candle['low']
+    
+    # Evita divisione per zero
+    if total_range == 0 or body == 0:
+        return False
+    
     lower_wick = min(candle['open'], candle['close']) - candle['low']
     upper_wick = candle['high'] - max(candle['open'], candle['close'])
     
-    return (lower_wick > 2 * body and 
-            upper_wick < body and 
-            body > 0)
+    # Ombra inferiore deve essere almeno 2x il corpo
+    # Ombra superiore deve essere piccola (max 30% del corpo)
+    # Corpo deve essere nella parte superiore (top 1/3)
+    return (lower_wick >= 2 * body and 
+            upper_wick <= body * 0.5 and
+            body > 0 and
+            body / total_range <= 0.3)
 
 
 def is_shooting_star(candle):
-    """Pattern: Shooting Star (bearish reversal)"""
+    """
+    Pattern: Shooting Star (bearish reversal)
+    Corpo piccolo in basso, ombra superiore lunga (almeno 2x il corpo)
+    """
     body = abs(candle['close'] - candle['open'])
+    total_range = candle['high'] - candle['low']
+    
+    if total_range == 0 or body == 0:
+        return False
+    
     upper_wick = candle['high'] - max(candle['open'], candle['close'])
     lower_wick = min(candle['open'], candle['close']) - candle['low']
     
-    return (upper_wick > 2 * body and 
-            lower_wick < body and 
-            body > 0)
+    # Ombra superiore deve essere almeno 2x il corpo
+    # Ombra inferiore deve essere piccola
+    # Corpo deve essere nella parte inferiore
+    return (upper_wick >= 2 * body and 
+            lower_wick <= body * 0.5 and
+            body > 0 and
+            body / total_range <= 0.3)
 
 
 def is_morning_star(a, b, c):
-    """Pattern: Morning Star (3 candele - bullish reversal)"""
-    return (a['close'] < a['open'] and
-            abs(b['close'] - b['open']) < abs(a['close'] - a['open']) * 0.3 and
-            c['close'] > c['open'] and
-            c['close'] > (a['open'] + a['close']) / 2)
+    """
+    Pattern: Morning Star (3 candele - bullish reversal)
+    1. Candela ribassista grande
+    2. Candela piccola (indecisione)
+    3. Candela rialzista grande che recupera oltre il 50%
+    """
+    # Prima candela: ribassista con corpo decente
+    a_body = abs(a['close'] - a['open'])
+    a_range = a['high'] - a['low']
+    is_a_bearish = a['close'] < a['open']
+    
+    # Seconda candela: piccola (corpo < 30% della prima)
+    b_body = abs(b['close'] - b['open'])
+    is_b_small = b_body < a_body * 0.3
+    
+    # Terza candela: rialzista e chiude sopra il 50% della prima
+    is_c_bullish = c['close'] > c['open']
+    c_recovers = c['close'] > (a['open'] + a['close']) / 2
+    
+    return (is_a_bearish and 
+            a_body / a_range > 0.5 and  # Prima candela ha corpo significativo
+            is_b_small and 
+            is_c_bullish and 
+            c_recovers)
 
 
 def is_evening_star(a, b, c):
-    """Pattern: Evening Star (3 candele - bearish reversal)"""
-    return (a['close'] > a['open'] and
-            abs(b['close'] - b['open']) < abs(a['close'] - a['open']) * 0.3 and
-            c['close'] < c['open'] and
-            c['close'] < (a['open'] + a['close']) / 2)
+    """
+    Pattern: Evening Star (3 candele - bearish reversal)
+    1. Candela rialzista grande
+    2. Candela piccola (indecisione)
+    3. Candela ribassista grande che perde oltre il 50%
+    """
+    # Prima candela: rialzista con corpo decente
+    a_body = abs(a['close'] - a['open'])
+    a_range = a['high'] - a['low']
+    is_a_bullish = a['close'] > a['open']
+    
+    # Seconda candela: piccola
+    b_body = abs(b['close'] - b['open'])
+    is_b_small = b_body < a_body * 0.3
+    
+    # Terza candela: ribassista e chiude sotto il 50% della prima
+    is_c_bearish = c['close'] < c['open']
+    c_drops = c['close'] < (a['open'] + a['close']) / 2
+    
+    return (is_a_bullish and 
+            a_body / a_range > 0.5 and
+            is_b_small and 
+            is_c_bearish and 
+            c_drops)
 
 
 def is_pin_bar(candle):
-    """Pattern: Pin Bar"""
+    """
+    Pattern: Pin Bar
+    Ombra molto lunga da un lato, corpo piccolo
+    """
     body = abs(candle['close'] - candle['open'])
-    upper = candle['high'] - max(candle['close'], candle['open'])
-    lower = min(candle['close'], candle['open']) - candle['low']
+    total_range = candle['high'] - candle['low']
     
-    return ((lower > 2 * body and upper < body) or 
-            (upper > 2 * body and lower < body))
+    if total_range == 0:
+        return False
+    
+    upper_wick = candle['high'] - max(candle['close'], candle['open'])
+    lower_wick = min(candle['close'], candle['open']) - candle['low']
+    
+    # Pin bar rialzista: ombra inferiore lunga
+    bullish_pin = (lower_wick >= total_range * 0.6 and 
+                   body <= total_range * 0.3)
+    
+    # Pin bar ribassista: ombra superiore lunga
+    bearish_pin = (upper_wick >= total_range * 0.6 and 
+                   body <= total_range * 0.3)
+    
+    return bullish_pin or bearish_pin
+
+
+def is_doji(candle):
+    """
+    Pattern: Doji - indecisione
+    Corpo molto piccolo, apertura e chiusura quasi uguali
+    """
+    body = abs(candle['close'] - candle['open'])
+    total_range = candle['high'] - candle['low']
+    
+    if total_range == 0:
+        return False
+    
+    # Corpo deve essere meno del 5% del range totale
+    return body <= total_range * 0.05
+
+
+def is_three_white_soldiers(a, b, c):
+    """
+    Pattern: Three White Soldiers - forte trend rialzista
+    Tre candele rialziste consecutive, ognuna chiude vicino al massimo
+    """
+    # Tutte e tre devono essere rialziste
+    all_bullish = (a['close'] > a['open'] and 
+                   b['close'] > b['open'] and 
+                   c['close'] > c['open'])
+    
+    # Ogni candela chiude più in alto della precedente
+    ascending = c['close'] > b['close'] > a['close']
+    
+    # Ogni candela ha corpo significativo (almeno 60% del range)
+    a_body_ratio = abs(a['close'] - a['open']) / (a['high'] - a['low']) if (a['high'] - a['low']) > 0 else 0
+    b_body_ratio = abs(b['close'] - b['open']) / (b['high'] - b['low']) if (b['high'] - b['low']) > 0 else 0
+    c_body_ratio = abs(c['close'] - c['open']) / (c['high'] - c['low']) if (c['high'] - c['low']) > 0 else 0
+    
+    strong_bodies = (a_body_ratio >= 0.6 and 
+                     b_body_ratio >= 0.6 and 
+                     c_body_ratio >= 0.6)
+    
+    return all_bullish and ascending and strong_bodies
+
+
+def is_three_black_crows(a, b, c):
+    """
+    Pattern: Three Black Crows - forte trend ribassista
+    Tre candele ribassiste consecutive, ognuna chiude vicino al minimo
+    """
+    # Tutte e tre devono essere ribassiste
+    all_bearish = (a['close'] < a['open'] and 
+                   b['close'] < b['open'] and 
+                   c['close'] < c['open'])
+    
+    # Ogni candela chiude più in basso della precedente
+    descending = c['close'] < b['close'] < a['close']
+    
+    # Ogni candela ha corpo significativo
+    a_body_ratio = abs(a['close'] - a['open']) / (a['high'] - a['low']) if (a['high'] - a['low']) > 0 else 0
+    b_body_ratio = abs(b['close'] - b['open']) / (b['high'] - b['low']) if (b['high'] - b['low']) > 0 else 0
+    c_body_ratio = abs(c['close'] - c['open']) / (c['high'] - c['low']) if (c['high'] - c['low']) > 0 else 0
+    
+    strong_bodies = (a_body_ratio >= 0.6 and 
+                     b_body_ratio >= 0.6 and 
+                     c_body_ratio >= 0.6)
+    
+    return all_bearish and descending and strong_bodies
 
 
 def check_patterns(df: pd.DataFrame):
@@ -241,7 +420,7 @@ def check_patterns(df: pd.DataFrame):
     prev = df.iloc[-2]
     prev2 = df.iloc[-3]
 
-    # Pattern a 2 candele
+    # Pattern a 2 candele (controllati per primi perché più comuni)
     if is_bullish_engulfing(prev, last):
         return (True, 'Buy', 'Bullish Engulfing')
     if is_bearish_engulfing(prev, last):
@@ -253,18 +432,33 @@ def check_patterns(df: pd.DataFrame):
     if is_shooting_star(last):
         return (True, 'Sell', 'Shooting Star')
     
+    # Pin bar (più frequente di hammer/shooting star)
+    if is_pin_bar(last):
+        lower_wick = min(last['open'], last['close']) - last['low']
+        upper_wick = last['high'] - max(last['open'], last['close'])
+        side = 'Buy' if lower_wick > upper_wick else 'Sell'
+        return (True, side, 'Pin Bar')
+    
+    # Doji (indecisione)
+    if is_doji(last):
+        # Il doji da solo non dà direzione, guardiamo il trend
+        # Se il trend è rialzista (prev è bullish), doji può essere ribassista
+        # Se il trend è ribassista (prev è bearish), doji può essere rialzista
+        if prev['close'] > prev['open']:
+            return (True, 'Sell', 'Doji (reversione)')
+        else:
+            return (True, 'Buy', 'Doji (reversione)')
+    
     # Pattern a 3 candele
     if is_morning_star(prev2, prev, last):
         return (True, 'Buy', 'Morning Star')
     if is_evening_star(prev2, prev, last):
         return (True, 'Sell', 'Evening Star')
     
-    # Pin bar
-    if is_pin_bar(last):
-        lower_wick = min(last['open'], last['close']) - last['low']
-        upper_wick = last['high'] - max(last['open'], last['close'])
-        side = 'Buy' if lower_wick > upper_wick else 'Sell'
-        return (True, side, 'Pin Bar')
+    if is_three_white_soldiers(prev2, prev, last):
+        return (True, 'Buy', 'Three White Soldiers')
+    if is_three_black_crows(prev2, prev, last):
+        return (True, 'Sell', 'Three Black Crows')
     
     return (False, None, None)
 
@@ -639,6 +833,110 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode='HTML')
 
 
+async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /test SYMBOL TIMEFRAME
+    Testa i pattern sull'ultima candela e mostra debug info
+    """
+    args = context.args
+    
+    if len(args) < 2:
+        await update.message.reply_text(
+            '❌ Uso: /test SYMBOL TIMEFRAME\n'
+            'Esempio: /test BTCUSDT 15m\n'
+            'Questo comando mostra info dettagliate sui pattern rilevati'
+        )
+        return
+    
+    symbol = args[0].upper()
+    timeframe = args[1].lower()
+    
+    if timeframe not in ENABLED_TFS:
+        await update.message.reply_text(
+            f'❌ Timeframe non supportato.\n'
+            f'Disponibili: {", ".join(ENABLED_TFS)}'
+        )
+        return
+    
+    await update.message.reply_text(f'🔍 Analizzo {symbol} {timeframe}...')
+    
+    try:
+        # Ottieni dati
+        df = bybit_get_klines(symbol, timeframe, limit=200)
+        if df.empty:
+            await update.message.reply_text(f'❌ Nessun dato per {symbol}')
+            return
+        
+        # Analizza pattern
+        found, side, pattern = check_patterns(df)
+        
+        # Info candele recenti
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+        prev2 = df.iloc[-3]
+        
+        # Calcola metriche
+        last_body = abs(last['close'] - last['open'])
+        last_range = last['high'] - last['low']
+        last_body_pct = (last_body / last_range * 100) if last_range > 0 else 0
+        
+        lower_wick = min(last['open'], last['close']) - last['low']
+        upper_wick = last['high'] - max(last['open'], last['close'])
+        
+        # Test individuali
+        tests = {
+            'Bullish Engulfing': is_bullish_engulfing(prev, last),
+            'Bearish Engulfing': is_bearish_engulfing(prev, last),
+            'Hammer': is_hammer(last),
+            'Shooting Star': is_shooting_star(last),
+            'Pin Bar': is_pin_bar(last),
+            'Doji': is_doji(last),
+            'Morning Star': is_morning_star(prev2, prev, last),
+            'Evening Star': is_evening_star(prev2, prev, last),
+            'Three White Soldiers': is_three_white_soldiers(prev2, prev, last),
+            'Three Black Crows': is_three_black_crows(prev2, prev, last)
+        }
+        
+        # Costruisci messaggio
+        msg = f"🔍 <b>Test Pattern: {symbol} {timeframe}</b>\n\n"
+        
+        if found:
+            msg += f"✅ <b>PATTERN TROVATO: {pattern}</b>\n"
+            msg += f"📈 Direzione: {side}\n\n"
+        else:
+            msg += "❌ Nessun pattern rilevato\n\n"
+        
+        msg += f"📊 <b>Ultima candela:</b>\n"
+        msg += f"O: ${last['open']:.2f} | H: ${last['high']:.2f}\n"
+        msg += f"L: ${last['low']:.2f} | C: ${last['close']:.2f}\n"
+        msg += f"{'🟢 Bullish' if last['close'] > last['open'] else '🔴 Bearish'}\n"
+        msg += f"Corpo: {last_body_pct:.1f}% del range\n"
+        msg += f"Ombra inf: ${lower_wick:.2f} ({lower_wick/last_range*100:.1f}%)\n"
+        msg += f"Ombra sup: ${upper_wick:.2f} ({upper_wick/last_range*100:.1f}%)\n\n"
+        
+        msg += "🧪 <b>Test Pattern:</b>\n"
+        for pattern_name, result in tests.items():
+            emoji = "✅" if result else "❌"
+            msg += f"{emoji} {pattern_name}\n"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+        
+        # Invia anche il grafico
+        try:
+            chart_buffer = generate_chart(df, symbol, timeframe)
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=chart_buffer,
+                caption=f"Grafico di test per {symbol} {timeframe}"
+            )
+        except Exception as e:
+            logging.error(f'Errore generazione grafico test: {e}')
+    
+    except Exception as e:
+        logging.exception('Errore in cmd_test')
+        await update.message.reply_text(f'❌ Errore: {str(e)}')
+
+
 # ----------------------------- MAIN -----------------------------
 
 def main():
@@ -648,15 +946,6 @@ def main():
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-
-        # Test JobQueue
-    try:
-        from telegram.ext import JobQueue
-        from apscheduler.schedulers.asyncio import AsyncIOScheduler
-        logging.info('✅ JobQueue disponibile')
-    except ImportError as e:
-        logging.error(f'❌ JobQueue mancante: {e}')
-        return
     
     # Verifica variabili d'ambiente
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == '':
@@ -685,6 +974,7 @@ def main():
     application.add_handler(CommandHandler('analizza', cmd_analizza))
     application.add_handler(CommandHandler('stop', cmd_stop))
     application.add_handler(CommandHandler('list', cmd_list))
+    application.add_handler(CommandHandler('test', cmd_test))
     
     # Avvia bot
     logging.info('🚀 Bot avviato correttamente!')
