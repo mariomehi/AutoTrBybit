@@ -443,6 +443,74 @@ def is_three_black_crows(a, b, c):
     return all_bearish and descending and strong_bodies
 
 
+def is_bullish_comeback(candles):
+    """
+    Pattern: Bullish Comeback - forte inversione rialzista dopo consolidamento ribassista
+    
+    Struttura (4-5 candele):
+    1. Grande candela ribassista (forte vendita)
+    2-3. 2-3 piccole candele ribassiste o indecise (consolidamento/esaurimento)
+    4. Grande candela rialzista che recupera e supera (inversione confermata)
+    
+    Questo pattern cattura inversioni dopo capitolazione venditori
+    """
+    if len(candles) < 4:
+        return False
+    
+    # Prendi le ultime 4-5 candele
+    last = candles.iloc[-1]
+    prev1 = candles.iloc[-2]
+    prev2 = candles.iloc[-3]
+    prev3 = candles.iloc[-4]
+    
+    # 1. Prima candela: grande ribassista
+    first_bearish = prev3['close'] < prev3['open']
+    first_body = abs(prev3['close'] - prev3['open'])
+    first_range = prev3['high'] - prev3['low']
+    first_strong = (first_body / first_range) > 0.6 if first_range > 0 else False
+    
+    # 2-3. Candele intermedie: piccole (consolidamento)
+    middle_bodies = [
+        abs(prev2['close'] - prev2['open']),
+        abs(prev1['close'] - prev1['open'])
+    ]
+    middle_avg = sum(middle_bodies) / len(middle_bodies)
+    
+    # Le candele medie devono essere più piccole della prima (almeno 70% più piccole)
+    middle_small = middle_avg < first_body * 0.3
+    
+    # Le candele medie dovrebbero essere ribassiste o indecise
+    middle_bearish_or_neutral = (
+        prev2['close'] <= prev2['open'] * 1.005 and  # Tolleranza 0.5%
+        prev1['close'] <= prev1['open'] * 1.005
+    )
+    
+    # 4. Ultima candela: grande rialzista
+    last_bullish = last['close'] > last['open']
+    last_body = abs(last['close'] - last['open'])
+    last_range = last['high'] - last['low']
+    last_strong = (last_body / last_range) > 0.6 if last_range > 0 else False
+    
+    # L'ultima candela deve essere grande (simile o più grande della prima)
+    last_big = last_body >= first_body * 0.7
+    
+    # L'ultima candela deve chiudere sopra il minimo delle candele precedenti
+    # Idealmente sopra l'apertura della prima candela ribassista
+    strong_recovery = last['close'] > prev3['open'] * 0.995  # Almeno vicino all'apertura iniziale
+    
+    # Volume check (opzionale): l'ultima candela dovrebbe avere volume decente
+    # (questo è implicito se VOLUME_FILTER è attivo globalmente)
+    
+    return (first_bearish and 
+            first_strong and 
+            middle_small and 
+            middle_bearish_or_neutral and
+            last_bullish and 
+            last_strong and 
+            last_big and 
+            strong_recovery)
+
+
 def check_patterns(df: pd.DataFrame):
     """
     Controlla tutti i pattern
@@ -450,7 +518,7 @@ def check_patterns(df: pd.DataFrame):
     
     NOTA: Per ora solo segnali BUY attivi, SELL commentati
     """
-    if len(df) < 4:
+    if len(df) < 5:  # Aumentato a 5 per supportare Bullish Comeback
         return (False, None, None)
     
     last = df.iloc[-1]
@@ -458,6 +526,10 @@ def check_patterns(df: pd.DataFrame):
     prev2 = df.iloc[-3]
 
     # ===== PATTERN BUY (ATTIVI) =====
+    
+    # NUOVO: Bullish Comeback (controlla per primo perché più specifico)
+    if is_bullish_comeback(df):
+        return (True, 'Buy', 'Bullish Comeback')
     
     # Pattern a 2 candele
     if is_bullish_engulfing(prev, last):
@@ -512,7 +584,97 @@ def check_patterns(df: pd.DataFrame):
     return (False, None, None)
 
 
-# ----------------------------- TRADING HELPERS -----------------------------
+async def get_open_positions_from_bybit(symbol: str = None):
+    """
+    Recupera le posizioni aperte reali da Bybit
+    Se symbol è specificato, controlla solo quel symbol
+    Altrimenti ritorna tutte le posizioni
+    """
+    if BybitHTTP is None:
+        return []
+    
+    try:
+        session = create_bybit_session()
+        
+        # Ottieni posizioni aperte
+        params = {
+            'category': 'linear',
+            'settleCoin': 'USDT'
+        }
+        
+        if symbol:
+            params['symbol'] = symbol
+        
+        positions = session.get_positions(**params)
+        
+        if positions.get('retCode') == 0:
+            pos_list = positions.get('result', {}).get('list', [])
+            
+            # Filtra solo posizioni con size > 0
+            open_positions = []
+            for pos in pos_list:
+                size = float(pos.get('size', 0))
+                if size > 0:
+                    open_positions.append({
+                        'symbol': pos.get('symbol'),
+                        'side': pos.get('side'),
+                        'size': size,
+                        'entry_price': float(pos.get('avgPrice', 0)),
+                        'unrealized_pnl': float(pos.get('unrealisedPnl', 0))
+                    })
+            
+            return open_positions
+        else:
+            logging.error(f"Errore recupero posizioni: {positions.get('retMsg')}")
+            return []
+            
+    except Exception as e:
+        logging.exception('Errore in get_open_positions_from_bybit')
+        return []
+
+
+async def sync_positions_with_bybit():
+    """
+    Sincronizza il tracking locale con le posizioni reali su Bybit
+    """
+    try:
+        real_positions = await get_open_positions_from_bybit()
+        
+        with POSITIONS_LOCK:
+            # Crea un set dei symbol con posizioni reali
+            real_symbols = {pos['symbol'] for pos in real_positions}
+            
+            # Rimuovi dal tracking le posizioni che non esistono più su Bybit
+            to_remove = []
+            for symbol in ACTIVE_POSITIONS.keys():
+                if symbol not in real_symbols:
+                    to_remove.append(symbol)
+            
+            for symbol in to_remove:
+                logging.info(f'🔄 Rimossa {symbol} dal tracking (non presente su Bybit)')
+                del ACTIVE_POSITIONS[symbol]
+            
+            # Aggiungi al tracking posizioni che esistono su Bybit ma non sono tracciate
+            for pos in real_positions:
+                symbol = pos['symbol']
+                if symbol not in ACTIVE_POSITIONS:
+                    ACTIVE_POSITIONS[symbol] = {
+                        'side': pos['side'],
+                        'qty': pos['size'],
+                        'sl': 0,  # Non disponibile da API posizioni
+                        'tp': 0,  # Non disponibile da API posizioni
+                        'order_id': None,
+                        'timestamp': datetime.now(timezone.utc).isoformat(),
+                        'synced_from_bybit': True
+                    }
+                    logging.info(f'🔄 Aggiunta {symbol} al tracking (trovata su Bybit)')
+        
+        logging.info(f'✅ Sync posizioni completata: {len(real_positions)} posizioni attive')
+        return True
+        
+    except Exception as e:
+        logging.exception('Errore in sync_positions_with_bybit')
+        return False
 
 def calculate_position_size(entry_price: float, sl_price: float, risk_usd: float):
     """
@@ -547,7 +709,7 @@ def calculate_position_size(entry_price: float, sl_price: float, risk_usd: float
 async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float):
     """
     Piazza ordine market su Bybit (Demo o Live)
-    Controlla prima se esiste già una posizione aperta per questo symbol
+    Controlla REALMENTE su Bybit se esiste già una posizione aperta
     
     Parametri:
     - symbol: es. 'BTCUSDT'
@@ -559,16 +721,20 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     if BybitHTTP is None:
         return {'error': 'pybit non disponibile'}
     
-    # Controlla se esiste già una posizione aperta per questo symbol
-    with POSITIONS_LOCK:
-        if symbol in ACTIVE_POSITIONS:
-            existing = ACTIVE_POSITIONS[symbol]
-            logging.info(f'⚠️ Posizione già aperta per {symbol}: {existing}')
-            return {
-                'error': 'position_exists',
-                'message': f'Posizione già aperta per {symbol}',
-                'existing_position': existing
-            }
+    # SINCRONIZZA con Bybit prima di controllare
+    await sync_positions_with_bybit()
+    
+    # Controlla se esiste VERAMENTE una posizione aperta per questo symbol
+    real_positions = await get_open_positions_from_bybit(symbol)
+    
+    if real_positions:
+        existing = real_positions[0]
+        logging.info(f'⚠️ Posizione REALE trovata su Bybit per {symbol}: {existing}')
+        return {
+            'error': 'position_exists',
+            'message': f'Posizione già aperta per {symbol} su Bybit',
+            'existing_position': existing
+        }
     
     try:
         session = create_bybit_session()
@@ -894,7 +1060,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/riprendi SYMBOL TF - Riattiva notifiche\n\n"
         "💼 <b>Comandi Trading:</b>\n"
         "/balance - Mostra saldo\n"
-        "/posizioni - Posizioni aperte\n"
+        "/posizioni - Posizioni aperte (sync Bybit)\n"
+        "/sync - Sincronizza tracking con Bybit\n"
         "/chiudi SYMBOL - Rimuovi posizione dal tracking\n\n"
         "🔍 <b>Comandi Debug:</b>\n"
         "/test SYMBOL TF - Test pattern\n\n"
@@ -904,6 +1071,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ <b>NOTA:</b> Solo segnali BUY attivi"
     )
     await update.message.reply_text(welcome_text, parse_mode='HTML')
+
+
+        await update.message.reply_text(msg, parse_mode='HTML')
+
 
 async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -994,38 +1165,59 @@ async def cmd_riprendi(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_posizioni(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /posizioni
-    Mostra tutte le posizioni aperte tracciate dal bot
+    Mostra tutte le posizioni aperte REALI da Bybit (sincronizzate)
     """
-    with POSITIONS_LOCK:
-        if not ACTIVE_POSITIONS:
-            await update.message.reply_text(
-                '📭 <b>Nessuna posizione aperta</b>\n\n'
-                'Il bot non ha posizioni attive in questo momento.',
-                parse_mode='HTML'
-            )
-            return
+    await update.message.reply_text('🔄 Sincronizzando con Bybit...')
+    
+    # Sincronizza prima
+    sync_success = await sync_positions_with_bybit()
+    
+    if not sync_success:
+        await update.message.reply_text(
+            '⚠️ Errore nella sincronizzazione con Bybit.\n'
+            'Verifica le API keys e riprova.'
+        )
+        return
+    
+    # Ottieni posizioni reali
+    real_positions = await get_open_positions_from_bybit()
+    
+    if not real_positions:
+        with POSITIONS_LOCK:
+            tracked = len(ACTIVE_POSITIONS)
         
-        msg = '📊 <b>Posizioni Aperte</b>\n\n'
+        msg = '📭 <b>Nessuna posizione aperta</b>\n\n'
         
-        for symbol, pos in ACTIVE_POSITIONS.items():
-            side = pos.get('side', 'N/A')
-            qty = pos.get('qty', 0)
-            sl = pos.get('sl', 0)
-            tp = pos.get('tp', 0)
-            timestamp = pos.get('timestamp', 'N/A')
-            
-            side_emoji = "🟢" if side == 'Buy' else "🔴"
-            
-            msg += f"{side_emoji} <b>{symbol}</b> - {side}\n"
-            msg += f"  📦 Qty: {qty:.4f}\n"
-            msg += f"  🛑 SL: ${sl:.2f}\n"
-            msg += f"  🎯 TP: ${tp:.2f}\n"
-            msg += f"  🕐 {timestamp[:19]}\n\n"
+        if tracked > 0:
+            msg += f'⚠️ Tracking locale aveva {tracked} posizioni, ma Bybit mostra 0.\n'
+            msg += 'Tracking sincronizzato e pulito.\n\n'
         
-        msg += f"💼 Totale posizioni: {len(ACTIVE_POSITIONS)}\n\n"
-        msg += "💡 Usa /chiudi SYMBOL per chiudere manualmente"
+        msg += 'Il bot non ha posizioni attive su Bybit.'
         
         await update.message.reply_text(msg, parse_mode='HTML')
+        return
+    
+    msg = '📊 <b>Posizioni Aperte (da Bybit)</b>\n\n'
+    
+    for pos in real_positions:
+        symbol = pos['symbol']
+        side = pos['side']
+        size = pos['size']
+        entry_price = pos['entry_price']
+        pnl = pos['unrealized_pnl']
+        
+        side_emoji = "🟢" if side == 'Buy' else "🔴"
+        pnl_emoji = "📈" if pnl >= 0 else "📉"
+        
+        msg += f"{side_emoji} <b>{symbol}</b> - {side}\n"
+        msg += f"  📦 Size: {size}\n"
+        msg += f"  💵 Entry: ${entry_price:.4f}\n"
+        msg += f"  {pnl_emoji} PnL: ${pnl:+.2f}\n\n"
+    
+    msg += f"💼 Totale posizioni: {len(real_positions)}\n\n"
+    msg += "💡 Posizioni sincronizzate con Bybit in tempo reale"
+    
+    await update.message.reply_text(msg, parse_mode='HTML')
 
 
 async def cmd_chiudi(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1040,7 +1232,8 @@ async def cmd_chiudi(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '❌ Uso: /chiudi SYMBOL\n'
             'Esempio: /chiudi BTCUSDT\n\n'
             'Rimuove la posizione dal tracking del bot.\n'
-            '(Non chiude automaticamente la posizione su Bybit)'
+            '(Non chiude automaticamente la posizione su Bybit)\n\n'
+            'Oppure usa /sync per sincronizzare automaticamente.'
         )
         return
     
@@ -1062,8 +1255,48 @@ async def cmd_chiudi(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await update.message.reply_text(
-                f'⚠️ Nessuna posizione tracciata per {symbol}'
+                f'⚠️ Nessuna posizione tracciata per {symbol}\n\n'
+                f'Usa /posizioni per vedere le posizioni attive.'
             )
+
+
+async def cmd_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /sync
+    Forza la sincronizzazione del tracking locale con Bybit
+    """
+    await update.message.reply_text('🔄 Sincronizzando con Bybit...')
+    
+    success = await sync_positions_with_bybit()
+    
+    if success:
+        # Mostra risultato
+        real_positions = await get_open_positions_from_bybit()
+        
+        with POSITIONS_LOCK:
+            tracked_count = len(ACTIVE_POSITIONS)
+        
+        msg = '✅ <b>Sincronizzazione completata!</b>\n\n'
+        msg += f'📊 Posizioni su Bybit: {len(real_positions)}\n'
+        msg += f'💾 Posizioni tracciate: {tracked_count}\n\n'
+        
+        if real_positions:
+            msg += '<b>Posizioni attive:</b>\n'
+            for pos in real_positions:
+                msg += f"• {pos['symbol']} - {pos['side']} ({pos['size']})\n"
+        else:
+            msg += 'Nessuna posizione aperta su Bybit.'
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+    else:
+        await update.message.reply_text(
+            '❌ <b>Errore nella sincronizzazione</b>\n\n'
+            'Verifica:\n'
+            '• API keys configurate correttamente\n'
+            '• Permessi API corretti\n'
+            '• Connessione a Bybit attiva',
+            parse_mode='HTML'
+        )
 
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1386,6 +1619,7 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Test individuali
         tests = {
+            '🆕 Bullish Comeback': is_bullish_comeback(df),
             'Bullish Engulfing': is_bullish_engulfing(prev, last),
             'Bearish Engulfing': is_bearish_engulfing(prev, last),
             'Hammer': is_hammer(last),
@@ -1481,6 +1715,7 @@ def main():
     application.add_handler(CommandHandler('riprendi', cmd_riprendi))
     application.add_handler(CommandHandler('posizioni', cmd_posizioni))
     application.add_handler(CommandHandler('chiudi', cmd_chiudi))
+    application.add_handler(CommandHandler('sync', cmd_sync))
     
     # Avvia bot
     mode_emoji = "🎮" if TRADING_MODE == 'demo' else "⚠️💰"
