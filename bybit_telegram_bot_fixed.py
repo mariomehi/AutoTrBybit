@@ -903,23 +903,56 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
 
 def generate_chart(df: pd.DataFrame, symbol: str, timeframe: str) -> io.BytesIO:
     """
-    Genera grafico candlestick usando mplfinance
+    Genera grafico candlestick usando mplfinance con EMA overlay
     Returns: BytesIO object (immagine in memoria)
     """
     try:
         # Usa gli ultimi 100 candles per il grafico
-        chart_df = df.tail(100)
+        chart_df = df.tail(100).copy()
+        
+        # Calcola EMA (5, 10, 60, 223)
+        ema_5 = chart_df['close'].ewm(span=5, adjust=False).mean()
+        ema_10 = chart_df['close'].ewm(span=10, adjust=False).mean()
+        ema_60 = chart_df['close'].ewm(span=60, adjust=False).mean()
+        ema_223 = chart_df['close'].ewm(span=223, adjust=False).mean()
+        
+        # Crea plot addizionali per le EMA
+        apds = [
+            mpf.make_addplot(ema_5, color='#00FF00', width=1.5, label='EMA 5'),
+            mpf.make_addplot(ema_10, color='#FFA500', width=1.5, label='EMA 10'),
+            mpf.make_addplot(ema_60, color='#FF1493', width=1.5, label='EMA 60'),
+            mpf.make_addplot(ema_223, color='#1E90FF', width=2, label='EMA 223')
+        ]
         
         # Crea il grafico in memoria
         buffer = io.BytesIO()
         
+        # Stile personalizzato
+        mc = mpf.make_marketcolors(
+            up='#26a69a',
+            down='#ef5350',
+            edge='inherit',
+            wick='inherit',
+            volume='in'
+        )
+        
+        s = mpf.make_mpf_style(
+            marketcolors=mc,
+            gridstyle='-',
+            gridcolor='#2e2e2e',
+            facecolor='#1e1e1e',
+            figcolor='#1e1e1e',
+            y_on_right=False
+        )
+        
         mpf.plot(
             chart_df,
             type='candle',
-            style='charles',
+            style=s,
             title=f'{symbol} - {timeframe}',
             ylabel='Price',
             volume=True,
+            addplot=apds,
             savefig=dict(fname=buffer, dpi=100, bbox_inches='tight')
         )
         
@@ -1127,6 +1160,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ <b>NOTA:</b> Solo segnali BUY attivi"
     )
     await update.message.reply_text(welcome_text, parse_mode='HTML')
+
 
 async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1630,18 +1664,67 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /list - mostra analisi attive"""
+    """
+    Comando /list - mostra analisi attive con dettagli completi
+    """
     chat_id = update.effective_chat.id
-    chat_map = ACTIVE_ANALYSES.get(chat_id, {})
+    
+    with ACTIVE_ANALYSES_LOCK:
+        chat_map = ACTIVE_ANALYSES.get(chat_id, {})
     
     if not chat_map:
-        await update.message.reply_text('📭 Nessuna analisi attiva in questa chat.')
+        await update.message.reply_text(
+            '📭 <b>Nessuna analisi attiva</b>\n\n'
+            'Usa /analizza SYMBOL TIMEFRAME per iniziare.',
+            parse_mode='HTML'
+        )
         return
     
-    text = '📊 <b>Analisi attive:</b>\n\n' + '\n'.join(
-        f'• {key}' for key in chat_map.keys()
-    )
-    await update.message.reply_text(text, parse_mode='HTML')
+    # Prepara messaggio dettagliato
+    msg = f'📊 <b>Analisi Attive ({len(chat_map)})</b>\n\n'
+    
+    for key, job in chat_map.items():
+        symbol, timeframe = key.split('-')
+        job_data = job.data
+        
+        # Determina autotrade
+        autotrade = job_data.get('autotrade', False)
+        autotrade_emoji = "🤖" if autotrade else "📊"
+        autotrade_text = "Autotrade ON" if autotrade else "Solo monitoraggio"
+        
+        # Determina modalità notifiche
+        with FULL_NOTIFICATIONS_LOCK:
+            full_mode = chat_id in FULL_NOTIFICATIONS and key in FULL_NOTIFICATIONS[chat_id]
+        
+        notif_emoji = "🔔" if full_mode else "🔕"
+        notif_text = "Tutte le notifiche" if full_mode else "Solo pattern"
+        
+        # Costruisci riga per questo symbol
+        msg += f"{autotrade_emoji} <b>{symbol}</b> - {timeframe}\n"
+        msg += f"  {notif_emoji} {notif_text}\n"
+        msg += f"  {'🤖 ' + autotrade_text}\n"
+        
+        # Verifica se ha posizione aperta
+        if symbol in ACTIVE_POSITIONS:
+            pos = ACTIVE_POSITIONS[symbol]
+            msg += f"  💼 Posizione: {pos.get('side')} ({pos.get('qty'):.4f})\n"
+        
+        msg += "\n"
+    
+    msg += "━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += "<b>Legenda:</b>\n"
+    msg += "🤖 = Autotrade attivo\n"
+    msg += "📊 = Solo monitoraggio\n"
+    msg += "🔔 = Notifiche complete\n"
+    msg += "🔕 = Solo pattern (default)\n"
+    msg += "💼 = Posizione aperta\n\n"
+    msg += "<b>Comandi:</b>\n"
+    msg += "/stop SYMBOL - Ferma analisi\n"
+    msg += "/abilita SYMBOL TF - Attiva notifiche complete\n"
+    msg += "/pausa SYMBOL TF - Solo pattern\n"
+    msg += "/posizioni - Dettagli posizioni"
+    
+    await update.message.reply_text(msg, parse_mode='HTML')
 
 
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
