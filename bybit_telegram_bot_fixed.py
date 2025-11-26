@@ -445,19 +445,25 @@ def is_three_black_crows(a, b, c):
 
 def is_bullish_comeback(candles):
     """
-    Pattern: Bullish Comeback - forte inversione rialzista dopo consolidamento ribassista
+    Pattern: Bullish Comeback - forte inversione rialzista dopo tentativo ribassista
     
-    Struttura (4-5 candele):
+    VARIANTE 1 (Originale):
     1. Grande candela ribassista (forte vendita)
     2-3. 2-3 piccole candele ribassiste o indecise (consolidamento/esaurimento)
     4. Grande candela rialzista che recupera e supera (inversione confermata)
     
-    Questo pattern cattura inversioni dopo capitolazione venditori
+    VARIANTE 2 (Nuovo - Bullish Rejection):
+    1. Candela verde (trend rialzista)
+    2. Grande candela rossa che rompe il minimo della verde precedente (tentativo ribassista)
+    3-4. Due piccole candele (rosse o verdi, indifferente - esaurimento)
+    5. Candela verde con corpo più grande della precedente (rigetto e recupero)
+    
+    Questo pattern cattura inversioni dopo capitolazione venditori O rigetti di tentativi ribassisti
     """
     if len(candles) < 4:
         return False
     
-    # Prendi le ultime 4-5 candele
+    # ===== VARIANTE 1: Classica (da grande rossa) =====
     last = candles.iloc[-1]
     prev1 = candles.iloc[-2]
     prev2 = candles.iloc[-3]
@@ -495,20 +501,68 @@ def is_bullish_comeback(candles):
     last_big = last_body >= first_body * 0.7
     
     # L'ultima candela deve chiudere sopra il minimo delle candele precedenti
-    # Idealmente sopra l'apertura della prima candela ribassista
-    strong_recovery = last['close'] > prev3['open'] * 0.995  # Almeno vicino all'apertura iniziale
+    strong_recovery = last['close'] > prev3['open'] * 0.995
     
-    # Volume check (opzionale): l'ultima candela dovrebbe avere volume decente
-    # (questo è implicito se VOLUME_FILTER è attivo globalmente)
+    variant1_valid = (first_bearish and 
+                     first_strong and 
+                     middle_small and 
+                     middle_bearish_or_neutral and
+                     last_bullish and 
+                     last_strong and 
+                     last_big and 
+                     strong_recovery)
     
-    return (first_bearish and 
-            first_strong and 
-            middle_small and 
-            middle_bearish_or_neutral and
-            last_bullish and 
-            last_strong and 
-            last_big and 
-            strong_recovery)
+    # ===== VARIANTE 2: Bullish Rejection (da verde + grande rossa) =====
+    if len(candles) >= 5:
+        prev4 = candles.iloc[-5]
+        
+        # 1. Candela iniziale: verde (trend rialzista)
+        initial_bullish = prev4['close'] > prev4['open']
+        initial_body = abs(prev4['close'] - prev4['open'])
+        
+        # 2. Grande candela rossa che rompe il minimo della verde precedente
+        second_bearish = prev3['close'] < prev3['open']
+        second_body = abs(prev3['close'] - prev3['open'])
+        second_range = prev3['high'] - prev3['low']
+        second_strong = (second_body / second_range) > 0.5 if second_range > 0 else False
+        
+        # La candela rossa deve rompere il minimo della verde precedente
+        breaks_low = prev3['low'] < prev4['low']
+        
+        # 3-4. Due candele piccole (colore indifferente)
+        small1_body = abs(prev2['close'] - prev2['open'])
+        small2_body = abs(prev1['close'] - prev1['open'])
+        
+        # Entrambe devono essere piccole rispetto alla grande rossa
+        both_small = (small1_body < second_body * 0.4 and 
+                     small2_body < second_body * 0.4)
+        
+        # 5. Candela verde finale con corpo più grande della precedente
+        final_bullish = last['close'] > last['open']
+        final_body = abs(last['close'] - last['open'])
+        
+        # Corpo finale deve essere più grande della candela precedente
+        bigger_than_prev = final_body > small2_body
+        
+        # La candela finale dovrebbe avere un corpo decente
+        final_decent = final_body > second_body * 0.4
+        
+        # Idealmente chiude sopra la metà della grande candela rossa
+        closes_above_mid = last['close'] > (prev3['open'] + prev3['close']) / 2
+        
+        variant2_valid = (initial_bullish and
+                         second_bearish and
+                         second_strong and
+                         breaks_low and
+                         both_small and
+                         final_bullish and
+                         bigger_than_prev and
+                         final_decent and
+                         closes_above_mid)
+    else:
+        variant2_valid = False
+    
+    return variant1_valid or variant2_valid
 
 
 def check_patterns(df: pd.DataFrame):
@@ -518,7 +572,7 @@ def check_patterns(df: pd.DataFrame):
     
     NOTA: Per ora solo segnali BUY attivi, SELL commentati
     """
-    if len(df) < 5:  # Aumentato a 5 per supportare Bullish Comeback
+    if len(df) < 6:  # Aumentato a 6 per supportare Bullish Comeback Variante 2
         return (False, None, None)
     
     last = df.iloc[-1]
@@ -527,7 +581,7 @@ def check_patterns(df: pd.DataFrame):
 
     # ===== PATTERN BUY (ATTIVI) =====
     
-    # NUOVO: Bullish Comeback (controlla per primo perché più specifico)
+    # NUOVO: Bullish Comeback (2 varianti - controlla per primo perché più specifico)
     if is_bullish_comeback(df):
         return (True, 'Buy', 'Bullish Comeback')
     
