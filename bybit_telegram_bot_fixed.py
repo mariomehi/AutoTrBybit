@@ -95,9 +95,10 @@ INTERVAL_SECONDS = {
 ACTIVE_ANALYSES = {}
 ACTIVE_ANALYSES_LOCK = threading.Lock()
 
-# Paused notifications: chat_id -> set of "SYMBOL-TIMEFRAME" keys
-PAUSED_NOTIFICATIONS = {}
-PAUSED_LOCK = threading.Lock()
+# Full notifications (include grafici senza pattern): chat_id -> set of "SYMBOL-TIMEFRAME" keys
+# DEFAULT: solo pattern. Se symbol-tf è in questo set, invia TUTTE le notifiche
+FULL_NOTIFICATIONS = {}
+FULL_NOTIFICATIONS_LOCK = threading.Lock()
 
 # Active positions tracking: symbol -> order_info
 ACTIVE_POSITIONS = {}
@@ -1025,7 +1026,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             position_exists = symbol in ACTIVE_POSITIONS
             
             caption = (
-                f"🔥 {symbol} <b>SEGNALE TROVATO!</b>\n\n"
+                f"🔥 <b>SEGNALE TROVATO!</b>\n\n"
                 f"📊 Pattern: <b>{pattern}</b>\n"
                 f"💹 Direzione: <b>{side}</b>\n"
                 f"🪙 {symbol} ({timeframe})\n"
@@ -1110,8 +1111,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/analizza SYMBOL TF - Inizia analisi\n"
         "/stop SYMBOL - Ferma analisi\n"
         "/list - Analisi attive\n"
-        "/pausa SYMBOL TF - Silenzia notifiche senza pattern\n"
-        "/riprendi SYMBOL TF - Riattiva notifiche\n\n"
+        "/abilita SYMBOL TF - Notifiche complete (ogni candela)\n"
+        "/pausa SYMBOL TF - Solo pattern (default)\n\n"
         "💼 <b>Comandi Trading:</b>\n"
         "/balance - Mostra saldo\n"
         "/posizioni - Posizioni aperte (sync Bybit)\n"
@@ -1122,6 +1123,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📝 Esempio: /analizza BTCUSDT 15m\n"
         f"⏱️ Timeframes: {', '.join(ENABLED_TFS)}\n"
         f"💰 Rischio: ${RISK_USD}\n\n"
+        "🔕 <b>DEFAULT:</b> Solo notifiche con pattern\n"
         "⚠️ <b>NOTA:</b> Solo segnali BUY attivi"
     )
     await update.message.reply_text(welcome_text, parse_mode='HTML')
@@ -1129,7 +1131,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /pausa SYMBOL TIMEFRAME
-    Mette in pausa le notifiche senza pattern per un symbol/timeframe specifico
+    DISABILITA le notifiche complete e torna alla modalità default (solo pattern)
     """
     chat_id = update.effective_chat.id
     args = context.args
@@ -1138,8 +1140,10 @@ async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             '❌ Uso: /pausa SYMBOL TIMEFRAME\n'
             'Esempio: /pausa BTCUSDT 15m\n\n'
-            'Mette in pausa le notifiche quando NON viene rilevato nessun pattern.\n'
-            'Riceverai comunque notifiche quando ci sono segnali di trading.'
+            'Disabilita le notifiche complete e torna a modalità default.\n'
+            '<b>Modalità default:</b> Ricevi solo notifiche quando ci sono pattern.\n\n'
+            'Usa /abilita per riattivare tutte le notifiche.',
+            parse_mode='HTML'
         )
         return
     
@@ -1157,34 +1161,46 @@ async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
     
-    # Aggiungi alla lista pause
-    with PAUSED_LOCK:
-        if chat_id not in PAUSED_NOTIFICATIONS:
-            PAUSED_NOTIFICATIONS[chat_id] = set()
-        PAUSED_NOTIFICATIONS[chat_id].add(key)
-    
-    await update.message.reply_text(
-        f'🔇 <b>Notifiche in pausa per {symbol} {timeframe}</b>\n\n'
-        f'Non riceverai più notifiche quando NON ci sono pattern.\n'
-        f'Riceverai comunque i segnali di trading quando vengono rilevati.\n\n'
-        f'Usa /riprendi {symbol} {timeframe} per riattivare tutte le notifiche.',
-        parse_mode='HTML'
-    )
+    # Rimuovi dalle notifiche complete (torna a default = solo pattern)
+    with FULL_NOTIFICATIONS_LOCK:
+        if chat_id in FULL_NOTIFICATIONS and key in FULL_NOTIFICATIONS[chat_id]:
+            FULL_NOTIFICATIONS[chat_id].remove(key)
+            
+            # Pulisci se il set è vuoto
+            if not FULL_NOTIFICATIONS[chat_id]:
+                del FULL_NOTIFICATIONS[chat_id]
+            
+            await update.message.reply_text(
+                f'🔕 <b>Modalità default attivata per {symbol} {timeframe}</b>\n\n'
+                f'Riceverai notifiche <b>SOLO quando viene rilevato un pattern</b>.\n'
+                f'Niente più grafici senza segnali.\n\n'
+                f'Usa /abilita {symbol} {timeframe} per riattivare tutte le notifiche.',
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                f'ℹ️ {symbol} {timeframe} è già in modalità default (solo pattern).\n\n'
+                f'Non stai ricevendo notifiche complete.'
+            )
 
 
-async def cmd_riprendi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_abilita(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Comando /riprendi SYMBOL TIMEFRAME
-    Riattiva tutte le notifiche per un symbol/timeframe
+    Comando /abilita SYMBOL TIMEFRAME
+    ABILITA le notifiche complete (anche quando non ci sono pattern)
     """
     chat_id = update.effective_chat.id
     args = context.args
     
     if len(args) < 2:
         await update.message.reply_text(
-            '❌ Uso: /riprendi SYMBOL TIMEFRAME\n'
-            'Esempio: /riprendi BTCUSDT 15m\n\n'
-            'Riattiva tutte le notifiche (anche senza pattern).'
+            '❌ Uso: /abilita SYMBOL TIMEFRAME\n'
+            'Esempio: /abilita BTCUSDT 15m\n\n'
+            'Abilita le notifiche complete per un symbol/timeframe.\n'
+            '<b>Con notifiche complete:</b> Ricevi grafici ad ogni chiusura candela,\n'
+            'anche quando non ci sono pattern.\n\n'
+            'Utile per: monitoraggio visivo continuo, analisi manuale, debug.',
+            parse_mode='HTML'
         )
         return
     
@@ -1192,23 +1208,34 @@ async def cmd_riprendi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     timeframe = args[1].lower()
     key = f'{symbol}-{timeframe}'
     
-    # Rimuovi dalla lista pause
-    with PAUSED_LOCK:
-        if chat_id in PAUSED_NOTIFICATIONS and key in PAUSED_NOTIFICATIONS[chat_id]:
-            PAUSED_NOTIFICATIONS[chat_id].remove(key)
-            
-            # Pulisci se il set è vuoto
-            if not PAUSED_NOTIFICATIONS[chat_id]:
-                del PAUSED_NOTIFICATIONS[chat_id]
-            
+    # Verifica che l'analisi sia attiva
+    with ACTIVE_ANALYSES_LOCK:
+        chat_map = ACTIVE_ANALYSES.get(chat_id, {})
+        if key not in chat_map:
             await update.message.reply_text(
-                f'🔔 <b>Notifiche riattivate per {symbol} {timeframe}</b>\n\n'
-                f'Riceverai ora tutte le notifiche, anche quando non ci sono pattern.',
-                parse_mode='HTML'
+                f'⚠️ Non c\'è un\'analisi attiva per {symbol} {timeframe}.\n'
+                f'Usa /analizza {symbol} {timeframe} per iniziare prima.'
+            )
+            return
+    
+    # Aggiungi alle notifiche complete
+    with FULL_NOTIFICATIONS_LOCK:
+        if chat_id not in FULL_NOTIFICATIONS:
+            FULL_NOTIFICATIONS[chat_id] = set()
+        
+        if key in FULL_NOTIFICATIONS[chat_id]:
+            await update.message.reply_text(
+                f'ℹ️ Le notifiche complete per {symbol} {timeframe} sono già attive.'
             )
         else:
+            FULL_NOTIFICATIONS[chat_id].add(key)
+            
             await update.message.reply_text(
-                f'⚠️ Le notifiche per {symbol} {timeframe} non erano in pausa.'
+                f'🔔 <b>Notifiche complete attivate per {symbol} {timeframe}</b>\n\n'
+                f'Riceverai grafici ad <b>ogni chiusura candela</b>,\n'
+                f'anche quando non ci sono pattern.\n\n'
+                f'Usa /pausa {symbol} {timeframe} per tornare a modalità default (solo pattern).',
+                parse_mode='HTML'
             )
 
 
@@ -1762,7 +1789,7 @@ def main():
     application.add_handler(CommandHandler('test', cmd_test))
     application.add_handler(CommandHandler('balance', cmd_balance))
     application.add_handler(CommandHandler('pausa', cmd_pausa))
-    application.add_handler(CommandHandler('riprendi', cmd_riprendi))
+    application.add_handler(CommandHandler('abilita', cmd_abilita))
     application.add_handler(CommandHandler('posizioni', cmd_posizioni))
     application.add_handler(CommandHandler('chiudi', cmd_chiudi))
     application.add_handler(CommandHandler('sync', cmd_sync))
