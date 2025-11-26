@@ -1025,7 +1025,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             position_exists = symbol in ACTIVE_POSITIONS
             
             caption = (
-                f"🔥 <b>SEGNALE TROVATO!</b>\n\n"
+                f"🔥 {symbol} <b>SEGNALE TROVATO!</b>\n\n"
                 f"📊 Pattern: <b>{pattern}</b>\n"
                 f"💹 Direzione: <b>{side}</b>\n"
                 f"🪙 {symbol} ({timeframe})\n"
