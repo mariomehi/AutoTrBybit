@@ -1148,8 +1148,11 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     key = f'{symbol}-{timeframe}'
 
     # Verifica se le notifiche sono in pausa per questo symbol/timeframe
-    with PAUSED_LOCK:
-        is_paused = chat_id in PAUSED_NOTIFICATIONS and key in PAUSED_NOTIFICATIONS[chat_id]
+     with FULL_NOTIFICATIONS_LOCK:
+        full_mode = chat_id in FULL_NOTIFICATIONS and key in FULL_NOTIFICATIONS[chat_id]
+      
+    'with PAUSED_LOCK:
+        'is_paused = chat_id in PAUSED_NOTIFICATIONS and key in PAUSED_NOTIFICATIONS[chat_id]
 
     try:
         # Ottieni dati
