@@ -1161,7 +1161,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(welcome_text, parse_mode='HTML')
 
-
 async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /pausa SYMBOL TIMEFRAME
