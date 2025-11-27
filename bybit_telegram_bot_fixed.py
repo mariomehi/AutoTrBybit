@@ -1,21 +1,4 @@
 """
-Telegram Bot for automated pattern detection + Bybit Testnet trading
-- Features:
-  * /analizza <SYMBOL> <TIMEFRAME> -> starts continuous analysis for that symbol+tf
-  * /stop <SYMBOL> -> stops analysis for that symbol (in that chat)
-  * multi-symbol, multi-timeframe per chat
-  * volume filter
-  * SL = ATR * X (user config)
-  * TP = ATR * X (user config)
-  * position sizing by risk per trade (USD risk)
-  * uses Bybit Testnet for orders (pybit) and Bybit public REST for klines
-  * generates candle chart when signal is found (mplfinance)
-
-Notes:
-- This is a starter, modular and documented file. You must set your TELEGRAM_BOT_TOKEN and BYBIT API keys.
-- Test thoroughly on Bybit TESTNET before switching to real account.
-- Designed to run on Railway / VPS.
-
 Telegram Bot for automated pattern detection + Bybit Testnet trading - FIXED VERSION
 Correzioni principali:
 - Gestione corretta del filesystem su Railway
@@ -78,6 +61,99 @@ SYMBOL_RISK_OVERRIDE = {
     # 'SHIBUSDT': 3.0,
     # Per symbol normali, usa RISK_USD default
 }
+
+# Pattern Management System
+# Ogni pattern può essere abilitato/disabilitato globalmente
+AVAILABLE_PATTERNS = {
+    'bullish_comeback': {
+        'name': 'Bullish Comeback',
+        'enabled': True,
+        'description': 'Inversione/rigetto rialzista (2 varianti)',
+        'side': 'Buy',
+        'emoji': '🔄'
+    },
+    'bullish_engulfing': {
+        'name': 'Bullish Engulfing',
+        'enabled': True,
+        'description': 'Candela rialzista ingloba ribassista',
+        'side': 'Buy',
+        'emoji': '🟢'
+    },
+    'hammer': {
+        'name': 'Hammer',
+        'enabled': True,
+        'description': 'Corpo piccolo in alto, ombra lunga sotto',
+        'side': 'Buy',
+        'emoji': '🔨'
+    },
+    'pin_bar_bullish': {
+        'name': 'Pin Bar Bullish',
+        'enabled': True,
+        'description': 'Ombra inferiore molto lunga',
+        'side': 'Buy',
+        'emoji': '📍'
+    },
+    'morning_star': {
+        'name': 'Morning Star',
+        'enabled': True,
+        'description': '3 candele: ribassista, piccola, rialzista',
+        'side': 'Buy',
+        'emoji': '⭐'
+    },
+    'three_white_soldiers': {
+        'name': 'Three White Soldiers',
+        'enabled': True,
+        'description': '3 candele rialziste consecutive forti',
+        'side': 'Buy',
+        'emoji': '⬆️'
+    },
+    # Pattern SELL (disabilitati di default)
+    'bearish_engulfing': {
+        'name': 'Bearish Engulfing',
+        'enabled': False,
+        'description': 'Candela ribassista ingloba rialzista',
+        'side': 'Sell',
+        'emoji': '🔴'
+    },
+    'shooting_star': {
+        'name': 'Shooting Star',
+        'enabled': False,
+        'description': 'Corpo piccolo in basso, ombra lunga sopra',
+        'side': 'Sell',
+        'emoji': '💫'
+    },
+    'pin_bar_bearish': {
+        'name': 'Pin Bar Bearish',
+        'enabled': False,
+        'description': 'Ombra superiore molto lunga',
+        'side': 'Sell',
+        'emoji': '📍'
+    },
+    'evening_star': {
+        'name': 'Evening Star',
+        'enabled': False,
+        'description': '3 candele: rialzista, piccola, ribassista',
+        'side': 'Sell',
+        'emoji': '🌙'
+    },
+    'three_black_crows': {
+        'name': 'Three Black Crows',
+        'enabled': False,
+        'description': '3 candele ribassiste consecutive forti',
+        'side': 'Sell',
+        'emoji': '⬇️'
+    },
+    'doji': {
+        'name': 'Doji',
+        'enabled': False,
+        'description': 'Indecisione, corpo molto piccolo',
+        'side': 'Both',
+        'emoji': '➖'
+    }
+}
+
+# Lock per modifiche thread-safe ai pattern
+PATTERNS_LOCK = threading.Lock()
 
 # Klines map
 BYBIT_INTERVAL_MAP = {
@@ -568,73 +644,86 @@ def is_bullish_comeback(candles):
 
 def check_patterns(df: pd.DataFrame):
     """
-    Controlla tutti i pattern
+    Controlla tutti i pattern ABILITATI
     Returns: (found: bool, side: str, pattern_name: str)
-    
-    NOTA: Per ora solo segnali BUY attivi, SELL commentati
     """
-    if len(df) < 6:  # Aumentato a 6 per supportare Bullish Comeback Variante 2
+    if len(df) < 6:
         return (False, None, None)
     
     last = df.iloc[-1]
     prev = df.iloc[-2]
     prev2 = df.iloc[-3]
 
-    # ===== PATTERN BUY (ATTIVI) =====
+    # ===== PATTERN BUY =====
     
-    # NUOVO: Bullish Comeback (2 varianti - controlla per primo perché più specifico)
-    if is_bullish_comeback(df):
-        return (True, 'Buy', 'Bullish Comeback')
+    # Bullish Comeback (controlla per primo perché più specifico)
+    if AVAILABLE_PATTERNS['bullish_comeback']['enabled']:
+        if is_bullish_comeback(df):
+            return (True, 'Buy', 'Bullish Comeback')
     
-    # Pattern a 2 candele
-    if is_bullish_engulfing(prev, last):
-        return (True, 'Buy', 'Bullish Engulfing')
+    # Bullish Engulfing
+    if AVAILABLE_PATTERNS['bullish_engulfing']['enabled']:
+        if is_bullish_engulfing(prev, last):
+            return (True, 'Buy', 'Bullish Engulfing')
     
-    # Bearish Engulfing commentato (segnale SELL)
-    # if is_bearish_engulfing(prev, last):
-    #     return (True, 'Sell', 'Bearish Engulfing')
+    # Bearish Engulfing (SELL)
+    if AVAILABLE_PATTERNS['bearish_engulfing']['enabled']:
+        if is_bearish_engulfing(prev, last):
+            return (True, 'Sell', 'Bearish Engulfing')
     
-    # Pattern singola candela - BUY
-    if is_hammer(last):
-        return (True, 'Buy', 'Hammer')
+    # Hammer
+    if AVAILABLE_PATTERNS['hammer']['enabled']:
+        if is_hammer(last):
+            return (True, 'Buy', 'Hammer')
     
-    # Shooting Star commentato (segnale SELL)
-    # if is_shooting_star(last):
-    #     return (True, 'Sell', 'Shooting Star')
+    # Shooting Star (SELL)
+    if AVAILABLE_PATTERNS['shooting_star']['enabled']:
+        if is_shooting_star(last):
+            return (True, 'Sell', 'Shooting Star')
     
-    # Pin bar - solo BUY
-    if is_pin_bar(last):
-        lower_wick = min(last['open'], last['close']) - last['low']
-        upper_wick = last['high'] - max(last['open'], last['close'])
-        
-        # Solo pin bar rialzisti (ombra inferiore lunga)
-        if lower_wick > upper_wick:
-            return (True, 'Buy', 'Pin Bar Bullish')
-        # Pin bar ribassisti commentati
-        # else:
-        #     return (True, 'Sell', 'Pin Bar Bearish')
+    # Pin bar
+    if AVAILABLE_PATTERNS['pin_bar_bullish']['enabled'] or AVAILABLE_PATTERNS['pin_bar_bearish']['enabled']:
+        if is_pin_bar(last):
+            lower_wick = min(last['open'], last['close']) - last['low']
+            upper_wick = last['high'] - max(last['open'], last['close'])
+            
+            if lower_wick > upper_wick:
+                # Pin bar bullish
+                if AVAILABLE_PATTERNS['pin_bar_bullish']['enabled']:
+                    return (True, 'Buy', 'Pin Bar Bullish')
+            else:
+                # Pin bar bearish
+                if AVAILABLE_PATTERNS['pin_bar_bearish']['enabled']:
+                    return (True, 'Sell', 'Pin Bar Bearish')
     
-    # Doji - commentato perché può dare segnali SELL
-    # if is_doji(last):
-    #     if prev['close'] > prev['open']:
-    #         return (True, 'Sell', 'Doji (reversione)')
-    #     else:
-    #         return (True, 'Buy', 'Doji (reversione)')
+    # Doji
+    if AVAILABLE_PATTERNS['doji']['enabled']:
+        if is_doji(last):
+            # Il doji può essere sia BUY che SELL a seconda del trend
+            if prev['close'] > prev['open']:
+                return (True, 'Sell', 'Doji (reversione)')
+            else:
+                return (True, 'Buy', 'Doji (reversione)')
     
-    # Pattern a 3 candele - solo BUY
-    if is_morning_star(prev2, prev, last):
-        return (True, 'Buy', 'Morning Star')
+    # Morning Star
+    if AVAILABLE_PATTERNS['morning_star']['enabled']:
+        if is_morning_star(prev2, prev, last):
+            return (True, 'Buy', 'Morning Star')
     
-    # Evening Star commentato (segnale SELL)
-    # if is_evening_star(prev2, prev, last):
-    #     return (True, 'Sell', 'Evening Star')
+    # Evening Star (SELL)
+    if AVAILABLE_PATTERNS['evening_star']['enabled']:
+        if is_evening_star(prev2, prev, last):
+            return (True, 'Sell', 'Evening Star')
     
-    if is_three_white_soldiers(prev2, prev, last):
-        return (True, 'Buy', 'Three White Soldiers')
+    # Three White Soldiers
+    if AVAILABLE_PATTERNS['three_white_soldiers']['enabled']:
+        if is_three_white_soldiers(prev2, prev, last):
+            return (True, 'Buy', 'Three White Soldiers')
     
-    # Three Black Crows commentato (segnale SELL)
-    # if is_three_black_crows(prev2, prev, last):
-    #     return (True, 'Sell', 'Three Black Crows')
+    # Three Black Crows (SELL)
+    if AVAILABLE_PATTERNS['three_black_crows']['enabled']:
+        if is_three_black_crows(prev2, prev, last):
+            return (True, 'Sell', 'Three Black Crows')
     
     return (False, None, None)
 
@@ -1319,6 +1408,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/chiudi SYMBOL - Rimuovi posizione dal tracking\n\n"
         "🔍 <b>Comandi Debug:</b>\n"
         "/test SYMBOL TF - Test pattern\n\n"
+        "🎯 <b>Comandi Pattern:</b>\n"
+        "/patterns - Lista pattern e status\n"
+        "/pattern_on NOME - Abilita pattern\n"
+        "/pattern_off NOME - Disabilita pattern\n\n"
         "📝 Esempio: /analizza BTCUSDT 15m\n"
         f"⏱️ Timeframes: {', '.join(ENABLED_TFS)}\n"
         f"💰 Rischio: ${RISK_USD}\n\n"
@@ -1326,7 +1419,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ <b>NOTA:</b> Solo segnali BUY attivi"
     )
     await update.message.reply_text(welcome_text, parse_mode='HTML')
-
 
 async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1574,6 +1666,206 @@ async def cmd_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '• Connessione a Bybit attiva',
             parse_mode='HTML'
         )
+
+
+async def cmd_patterns(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /patterns
+    Mostra tutti i pattern disponibili e il loro stato (abilitato/disabilitato)
+    """
+    with PATTERNS_LOCK:
+        # Separa pattern per tipo
+        buy_patterns = []
+        sell_patterns = []
+        both_patterns = []
+        
+        for pattern_key, pattern_info in AVAILABLE_PATTERNS.items():
+            emoji = pattern_info['emoji']
+            name = pattern_info['name']
+            enabled = pattern_info['enabled']
+            side = pattern_info['side']
+            status_emoji = "✅" if enabled else "❌"
+            
+            pattern_line = f"{status_emoji} {emoji} <code>{pattern_key}</code> - {name}"
+            
+            if side == 'Buy':
+                buy_patterns.append(pattern_line)
+            elif side == 'Sell':
+                sell_patterns.append(pattern_line)
+            else:
+                both_patterns.append(pattern_line)
+    
+    msg = "📊 <b>Pattern Disponibili</b>\n\n"
+    
+    msg += "🟢 <b>Pattern BUY:</b>\n"
+    msg += "\n".join(buy_patterns) + "\n\n"
+    
+    msg += "🔴 <b>Pattern SELL:</b>\n"
+    msg += "\n".join(sell_patterns) + "\n\n"
+    
+    if both_patterns:
+        msg += "⚪ <b>Pattern BOTH:</b>\n"
+        msg += "\n".join(both_patterns) + "\n\n"
+    
+    msg += "━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += "✅ = Abilitato (attivo)\n"
+    msg += "❌ = Disabilitato (inattivo)\n\n"
+    msg += "<b>Comandi:</b>\n"
+    msg += "/pattern_on NOME - Abilita pattern\n"
+    msg += "/pattern_off NOME - Disabilita pattern\n"
+    msg += "/pattern_info NOME - Info dettagliate\n\n"
+    msg += "Esempio: <code>/pattern_on bearish_engulfing</code>"
+    
+    await update.message.reply_text(msg, parse_mode='HTML')
+
+
+async def cmd_pattern_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /pattern_on PATTERN_KEY
+    Abilita un pattern specifico
+    """
+    args = context.args
+    
+    if len(args) < 1:
+        await update.message.reply_text(
+            '❌ Uso: /pattern_on PATTERN_KEY\n\n'
+            'Esempio: /pattern_on bearish_engulfing\n\n'
+            'Usa /patterns per vedere tutti i pattern disponibili.'
+        )
+        return
+    
+    pattern_key = args[0].lower()
+    
+    with PATTERNS_LOCK:
+        if pattern_key not in AVAILABLE_PATTERNS:
+            await update.message.reply_text(
+                f'❌ Pattern "{pattern_key}" non trovato.\n\n'
+                f'Usa /patterns per vedere la lista completa.'
+            )
+            return
+        
+        pattern_info = AVAILABLE_PATTERNS[pattern_key]
+        
+        if pattern_info['enabled']:
+            await update.message.reply_text(
+                f'ℹ️ Pattern <b>{pattern_info["name"]}</b> è già abilitato.',
+                parse_mode='HTML'
+            )
+            return
+        
+        # Abilita il pattern
+        AVAILABLE_PATTERNS[pattern_key]['enabled'] = True
+        
+        emoji = pattern_info['emoji']
+        name = pattern_info['name']
+        side = pattern_info['side']
+        desc = pattern_info['description']
+        
+        await update.message.reply_text(
+            f'✅ <b>Pattern Abilitato!</b>\n\n'
+            f'{emoji} <b>{name}</b>\n'
+            f'📝 {desc}\n'
+            f'📈 Direzione: {side}\n\n'
+            f'Il bot ora rileverà questo pattern e invierà segnali.',
+            parse_mode='HTML'
+        )
+
+
+async def cmd_pattern_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /pattern_off PATTERN_KEY
+    Disabilita un pattern specifico
+    """
+    args = context.args
+    
+    if len(args) < 1:
+        await update.message.reply_text(
+            '❌ Uso: /pattern_off PATTERN_KEY\n\n'
+            'Esempio: /pattern_off hammer\n\n'
+            'Usa /patterns per vedere tutti i pattern disponibili.'
+        )
+        return
+    
+    pattern_key = args[0].lower()
+    
+    with PATTERNS_LOCK:
+        if pattern_key not in AVAILABLE_PATTERNS:
+            await update.message.reply_text(
+                f'❌ Pattern "{pattern_key}" non trovato.\n\n'
+                f'Usa /patterns per vedere la lista completa.'
+            )
+            return
+        
+        pattern_info = AVAILABLE_PATTERNS[pattern_key]
+        
+        if not pattern_info['enabled']:
+            await update.message.reply_text(
+                f'ℹ️ Pattern <b>{pattern_info["name"]}</b> è già disabilitato.',
+                parse_mode='HTML'
+            )
+            return
+        
+        # Disabilita il pattern
+        AVAILABLE_PATTERNS[pattern_key]['enabled'] = False
+        
+        emoji = pattern_info['emoji']
+        name = pattern_info['name']
+        
+        await update.message.reply_text(
+            f'❌ <b>Pattern Disabilitato!</b>\n\n'
+            f'{emoji} <b>{name}</b>\n\n'
+            f'Il bot non rileverà più questo pattern.',
+            parse_mode='HTML'
+        )
+
+
+async def cmd_pattern_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /pattern_info PATTERN_KEY
+    Mostra informazioni dettagliate su un pattern
+    """
+    args = context.args
+    
+    if len(args) < 1:
+        await update.message.reply_text(
+            '❌ Uso: /pattern_info PATTERN_KEY\n\n'
+            'Esempio: /pattern_info bullish_comeback\n\n'
+            'Usa /patterns per vedere tutti i pattern disponibili.'
+        )
+        return
+    
+    pattern_key = args[0].lower()
+    
+    with PATTERNS_LOCK:
+        if pattern_key not in AVAILABLE_PATTERNS:
+            await update.message.reply_text(
+                f'❌ Pattern "{pattern_key}" non trovato.\n\n'
+                f'Usa /patterns per vedere la lista completa.'
+            )
+            return
+        
+        pattern_info = AVAILABLE_PATTERNS[pattern_key]
+        
+        emoji = pattern_info['emoji']
+        name = pattern_info['name']
+        enabled = pattern_info['enabled']
+        side = pattern_info['side']
+        desc = pattern_info['description']
+        
+        status = "✅ Abilitato" if enabled else "❌ Disabilitato"
+        
+        msg = f"{emoji} <b>{name}</b>\n\n"
+        msg += f"📝 <b>Descrizione:</b>\n{desc}\n\n"
+        msg += f"📈 <b>Direzione:</b> {side}\n"
+        msg += f"🔘 <b>Status:</b> {status}\n"
+        msg += f"🔑 <b>Key:</b> <code>{pattern_key}</code>\n\n"
+        
+        if enabled:
+            msg += f"Per disabilitare: /pattern_off {pattern_key}"
+        else:
+            msg += f"Per abilitare: /pattern_on {pattern_key}"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
 
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2042,6 +2334,10 @@ def main():
     application.add_handler(CommandHandler('posizioni', cmd_posizioni))
     application.add_handler(CommandHandler('chiudi', cmd_chiudi))
     application.add_handler(CommandHandler('sync', cmd_sync))
+    application.add_handler(CommandHandler('patterns', cmd_patterns))
+    application.add_handler(CommandHandler('pattern_on', cmd_pattern_on))
+    application.add_handler(CommandHandler('pattern_off', cmd_pattern_off))
+    application.add_handler(CommandHandler('pattern_info', cmd_pattern_info))
     
     # Avvia bot
     mode_emoji = "🎮" if TRADING_MODE == 'demo' else "⚠️💰"
@@ -2068,4 +2364,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
