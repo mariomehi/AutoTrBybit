@@ -1147,10 +1147,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     timeframe = job_ctx['timeframe']
     key = f'{symbol}-{timeframe}'
 
-    # Verifica se le notifiche sono in pausa per questo symbol/timeframe     
-    'with PAUSED_LOCK:
-        'is_paused = chat_id in PAUSED_NOTIFICATIONS and key in PAUSED_NOTIFICATIONS[chat_id]
-
     try:
         # Ottieni dati
         df = bybit_get_klines(symbol, timeframe, limit=200)
