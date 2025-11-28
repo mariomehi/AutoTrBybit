@@ -54,16 +54,63 @@ RISK_USD = 10.0
 ENABLED_TFS = ['1m','3m','5m','15m','30m','1h','4h']
 
 # Symbol-specific risk overrides (opzionale)
-# Usa questo per impostare risk diversi per symbol specifici
 SYMBOL_RISK_OVERRIDE = {
     # Esempio: per MONUSDT usa solo $5 invece di $10
     # 'MONUSDT': 5.0,
-    # 'SHIBUSDT': 3.0,
-    # Per symbol normali, usa RISK_USD default
+}
+
+# EMA Filter System
+EMA_FILTER_ENABLED = True  # Abilita/disabilita filtro EMA
+
+# Modalità EMA Filter
+# 'strict' = Pattern valido SOLO se tutte le condizioni EMA sono rispettate
+# 'loose' = Pattern valido ma segnala se condizioni EMA non ottimali
+# 'off' = Nessun filtro EMA (solo pattern)
+EMA_FILTER_MODE = 'loose'  # 'strict', 'loose', 'off'
+
+# Configurazione EMA per diversi timeframe
+EMA_CONFIG = {
+    # Scalping (5m, 15m) - Focus su EMA veloci
+    'scalping': {
+        'timeframes': ['5m', '15m'],
+        'rules': {
+            # MUST: Prezzo sopra EMA 10
+            'price_above_ema10': True,
+            # BONUS: EMA 5 sopra EMA 10 (momentum forte)
+            'ema5_above_ema10': True,
+            # GOLD: Pattern vicino a EMA 10 (pullback)
+            'near_ema10': False  # Opzionale per scalping
+        }
+    },
+    
+    # Day Trading (30m, 1h) - Balance tra veloce e medio
+    'daytrading': {
+        'timeframes': ['30m', '1h'],
+        'rules': {
+            # MUST: Prezzo sopra EMA 60
+            'price_above_ema60': True,
+            # BONUS: EMA 10 sopra EMA 60
+            'ema10_above_ema60': True,
+            # GOLD: Pattern vicino a EMA 60 (pullback zone)
+            'near_ema60': True
+        }
+    },
+    
+    # Swing Trading (4h, 1d) - Focus su trend lungo
+    'swing': {
+        'timeframes': ['4h'],
+        'rules': {
+            # MUST: Prezzo sopra EMA 223 (trend principale)
+            'price_above_ema223': True,
+            # BONUS: EMA 60 sopra EMA 223
+            'ema60_above_ema223': True,
+            # GOLD: Pattern vicino a EMA 223 (bounce)
+            'near_ema223': True
+        }
+    }
 }
 
 # Pattern Management System
-# Ogni pattern può essere abilitato/disabilitato globalmente
 AVAILABLE_PATTERNS = {
     'bullish_comeback': {
         'name': 'Bullish Comeback',
@@ -152,7 +199,7 @@ AVAILABLE_PATTERNS = {
     }
 }
 
-# Lock per modifiche thread-safe ai pattern
+# Lock per modifiche thread-safe
 PATTERNS_LOCK = threading.Lock()
 
 # Klines map
@@ -273,6 +320,190 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     
     return tr.rolling(period).mean()
+
+
+def analyze_ema_conditions(df: pd.DataFrame, timeframe: str):
+    """
+    Analizza le condizioni EMA per il timeframe specificato
+    
+    Returns:
+        dict con:
+        - score: punteggio 0-100
+        - quality: 'GOLD', 'GOOD', 'OK', 'WEAK', 'BAD'
+        - conditions: dict di condizioni soddisfatte
+        - details: messaggio testuale
+    """
+    if not EMA_FILTER_ENABLED or EMA_FILTER_MODE == 'off':
+        return {
+            'score': 100,
+            'quality': 'OK',
+            'conditions': {},
+            'details': 'Filtro EMA disabilitato',
+            'passed': True
+        }
+    
+    # Calcola EMA
+    ema_5 = df['close'].ewm(span=5, adjust=False).mean()
+    ema_10 = df['close'].ewm(span=10, adjust=False).mean()
+    ema_60 = df['close'].ewm(span=60, adjust=False).mean()
+    ema_223 = df['close'].ewm(span=223, adjust=False).mean()
+    
+    last_close = df['close'].iloc[-1]
+    last_ema5 = ema_5.iloc[-1]
+    last_ema10 = ema_10.iloc[-1]
+    last_ema60 = ema_60.iloc[-1]
+    last_ema223 = ema_223.iloc[-1]
+    
+    # Determina configurazione per timeframe
+    config = None
+    for strategy, cfg in EMA_CONFIG.items():
+        if timeframe in cfg['timeframes']:
+            config = cfg
+            break
+    
+    if not config:
+        # Default: usa day trading config
+        config = EMA_CONFIG['daytrading']
+    
+    rules = config['rules']
+    conditions = {}
+    score = 0
+    details = []
+    
+    # === SCALPING RULES (5m, 15m) ===
+    if timeframe in ['5m', '15m']:
+        # MUST: Prezzo sopra EMA 10
+        if rules.get('price_above_ema10'):
+            if last_close > last_ema10:
+                conditions['price_above_ema10'] = True
+                score += 40
+                details.append("✅ Prezzo > EMA 10")
+            else:
+                conditions['price_above_ema10'] = False
+                score -= 30
+                details.append("❌ Prezzo < EMA 10")
+        
+        # BONUS: EMA 5 sopra EMA 10
+        if rules.get('ema5_above_ema10'):
+            if last_ema5 > last_ema10:
+                conditions['ema5_above_ema10'] = True
+                score += 30
+                details.append("✅ EMA 5 > EMA 10 (momentum)")
+            else:
+                conditions['ema5_above_ema10'] = False
+                score += 10  # Non critico
+                details.append("⚠️ EMA 5 < EMA 10")
+        
+        # GOLD: Pattern vicino a EMA 10 (pullback)
+        distance_to_ema10 = abs(last_close - last_ema10) / last_ema10
+        if distance_to_ema10 < 0.005:  # Entro 0.5%
+            conditions['near_ema10'] = True
+            score += 30
+            details.append("🌟 Vicino EMA 10 (pullback zone!)")
+        else:
+            conditions['near_ema10'] = False
+    
+    # === DAY TRADING RULES (30m, 1h) ===
+    elif timeframe in ['30m', '1h']:
+        # MUST: Prezzo sopra EMA 60
+        if rules.get('price_above_ema60'):
+            if last_close > last_ema60:
+                conditions['price_above_ema60'] = True
+                score += 40
+                details.append("✅ Prezzo > EMA 60")
+            else:
+                conditions['price_above_ema60'] = False
+                score -= 30
+                details.append("❌ Prezzo < EMA 60")
+        
+        # BONUS: EMA 10 sopra EMA 60
+        if rules.get('ema10_above_ema60'):
+            if last_ema10 > last_ema60:
+                conditions['ema10_above_ema60'] = True
+                score += 30
+                details.append("✅ EMA 10 > EMA 60 (trend ok)")
+            else:
+                conditions['ema10_above_ema60'] = False
+                score += 10
+                details.append("⚠️ EMA 10 < EMA 60")
+        
+        # GOLD: Pattern vicino a EMA 60
+        distance_to_ema60 = abs(last_close - last_ema60) / last_ema60
+        if distance_to_ema60 < 0.01:  # Entro 1%
+            conditions['near_ema60'] = True
+            score += 30
+            details.append("🌟 Vicino EMA 60 (bounce zone!)")
+        else:
+            conditions['near_ema60'] = False
+    
+    # === SWING TRADING RULES (4h) ===
+    elif timeframe in ['4h']:
+        # MUST: Prezzo sopra EMA 223
+        if rules.get('price_above_ema223'):
+            if last_close > last_ema223:
+                conditions['price_above_ema223'] = True
+                score += 40
+                details.append("✅ Prezzo > EMA 223 (bull market)")
+            else:
+                conditions['price_above_ema223'] = False
+                score -= 30
+                details.append("❌ Prezzo < EMA 223 (bear market)")
+        
+        # BONUS: EMA 60 sopra EMA 223
+        if rules.get('ema60_above_ema223'):
+            if last_ema60 > last_ema223:
+                conditions['ema60_above_ema223'] = True
+                score += 30
+                details.append("✅ EMA 60 > EMA 223 (strong trend)")
+            else:
+                conditions['ema60_above_ema223'] = False
+                score += 10
+                details.append("⚠️ EMA 60 < EMA 223")
+        
+        # GOLD: Pattern vicino a EMA 223
+        distance_to_ema223 = abs(last_close - last_ema223) / last_ema223
+        if distance_to_ema223 < 0.02:  # Entro 2%
+            conditions['near_ema223'] = True
+            score += 30
+            details.append("🌟 Vicino EMA 223 (major support!)")
+        else:
+            conditions['near_ema223'] = False
+    
+    # Normalizza score tra 0-100
+    score = max(0, min(100, score))
+    
+    # Determina quality
+    if score >= 80:
+        quality = 'GOLD'  # 🌟 Setup perfetto
+    elif score >= 60:
+        quality = 'GOOD'  # ✅ Setup buono
+    elif score >= 40:
+        quality = 'OK'    # ⚠️ Setup accettabile
+    elif score >= 20:
+        quality = 'WEAK'  # 🔶 Setup debole
+    else:
+        quality = 'BAD'   # ❌ Setup da evitare
+    
+    # Determina se passa il filtro
+    if EMA_FILTER_MODE == 'strict':
+        passed = score >= 60  # Strict: solo GOOD e GOLD
+    else:  # loose
+        passed = score >= 40  # Loose: anche OK
+    
+    return {
+        'score': score,
+        'quality': quality,
+        'conditions': conditions,
+        'details': '\n'.join(details),
+        'passed': passed,
+        'ema_values': {
+            'ema5': last_ema5,
+            'ema10': last_ema10,
+            'ema60': last_ema60,
+            'ema223': last_ema223,
+            'price': last_close
+        }
+    }
 
 
 # ----------------------------- PATTERN DETECTION -----------------------------
@@ -1096,6 +1327,18 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             logging.debug(f'🔕 {symbol} {timeframe} - nessun pattern, skip notifica (default mode)')
             return
         
+        # === ANALISI EMA (solo per pattern BUY) ===
+        ema_analysis = None
+        if found and side == 'Buy' and EMA_FILTER_ENABLED:
+            ema_analysis = analyze_ema_conditions(df, timeframe)
+            
+            # Se modalità STRICT e non passa il filtro, skip
+            if EMA_FILTER_MODE == 'strict' and not ema_analysis['passed']:
+                logging.info(f'⚠️ Pattern {pattern} su {symbol} {timeframe} FILTRATO da EMA (score: {ema_analysis["score"]})')
+                # Non inviare segnale in modalità strict
+                if not full_mode:
+                    return
+        
         # Calcola ATR per eventuali SL/TP
         atr_series = atr(df, period=14)
         last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else np.nan
@@ -1150,8 +1393,23 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Verifica se esiste già una posizione
             position_exists = symbol in ACTIVE_POSITIONS
             
-            caption = (
-                f"🔥 <b>SEGNALE TROVATO!</b>\n\n"
+            # Costruisci messaggio segnale
+            quality_emoji = {
+                'GOLD': '🌟',
+                'GOOD': '✅',
+                'OK': '⚠️',
+                'WEAK': '🔶',
+                'BAD': '❌'
+            }
+            
+            caption = f"🔥 <b>SEGNALE TROVATO!</b>\n\n"
+            
+            # Se c'è analisi EMA, mostra quality
+            if ema_analysis:
+                q_emoji = quality_emoji.get(ema_analysis['quality'], '⚪')
+                caption += f"{q_emoji} <b>Quality: {ema_analysis['quality']}</b> ({ema_analysis['score']}/100)\n\n"
+            
+            caption += (
                 f"📊 Pattern: <b>{pattern}</b>\n"
                 f"💹 Direzione: <b>{side}</b>\n"
                 f"🪙 {symbol} ({timeframe})\n"
@@ -1163,6 +1421,11 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 f"💰 Rischio: ${risk_for_symbol}\n"
                 f"📏 R:R = {abs(tp_price-last_close)/abs(sl_price-last_close):.2f}:1"
             )
+            
+            # Aggiungi dettagli EMA se disponibili
+            if ema_analysis and EMA_FILTER_ENABLED:
+                caption += f"\n\n📈 <b>EMA Analysis:</b>\n"
+                caption += ema_analysis['details']
             
             if position_exists:
                 caption += f"\n\n⚠️ <b>Posizione già aperta per {symbol}</b>"
@@ -1235,6 +1498,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     symbol = job_ctx['symbol']
     timeframe = job_ctx['timeframe']
     key = f'{symbol}-{timeframe}'
+
+    # Verifica se le notifiche sono in pausa per questo symbol/timeframe
+    with PAUSED_LOCK:
+        is_paused = chat_id in PAUSED_NOTIFICATIONS and key in PAUSED_NOTIFICATIONS[chat_id]
 
     try:
         # Ottieni dati
@@ -1411,7 +1678,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎯 <b>Comandi Pattern:</b>\n"
         "/patterns - Lista pattern e status\n"
         "/pattern_on NOME - Abilita pattern\n"
-        "/pattern_off NOME - Disabilita pattern\n\n"
+        "/pattern_off NOME - Disabilita pattern\n"
+        "/ema_filter [MODE] - Gestisci filtro EMA\n\n"
         "📝 Esempio: /analizza BTCUSDT 15m\n"
         f"⏱️ Timeframes: {', '.join(ENABLED_TFS)}\n"
         f"💰 Rischio: ${RISK_USD}\n\n"
@@ -1866,6 +2134,81 @@ async def cmd_pattern_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"Per abilitare: /pattern_on {pattern_key}"
         
         await update.message.reply_text(msg, parse_mode='HTML')
+
+
+async def cmd_ema_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /ema_filter [MODE]
+    Mostra o modifica la modalità filtro EMA
+    """
+    global EMA_FILTER_MODE, EMA_FILTER_ENABLED
+    
+    args = context.args
+    
+    if len(args) == 0:
+        # Mostra stato attuale
+        status_emoji = "✅" if EMA_FILTER_ENABLED else "❌"
+        
+        msg = f"📈 <b>Filtro EMA Status</b>\n\n"
+        msg += f"🔘 Abilitato: {status_emoji}\n"
+        msg += f"🎯 Modalità: <b>{EMA_FILTER_MODE.upper()}</b>\n\n"
+        
+        msg += "<b>Modalità Disponibili:</b>\n"
+        msg += "• <code>strict</code> - Solo segnali con EMA perfette (score ≥ 60)\n"
+        msg += "• <code>loose</code> - Segnali con EMA accettabili (score ≥ 40)\n"
+        msg += "• <code>off</code> - Nessun filtro EMA\n\n"
+        
+        msg += "<b>Comandi:</b>\n"
+        msg += "/ema_filter strict - Modalità strict\n"
+        msg += "/ema_filter loose - Modalità loose\n"
+        msg += "/ema_filter off - Disabilita filtro\n\n"
+        
+        msg += "<b>Configurazione Timeframe:</b>\n"
+        msg += "• 5m, 15m (Scalping): Focus EMA 5, 10\n"
+        msg += "• 30m, 1h (Day): Focus EMA 10, 60\n"
+        msg += "• 4h (Swing): Focus EMA 60, 223"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+        return
+    
+    # Modifica modalità
+    mode = args[0].lower()
+    
+    if mode not in ['strict', 'loose', 'off']:
+        await update.message.reply_text(
+            '❌ Modalità non valida.\n\n'
+            'Usa: /ema_filter [strict|loose|off]'
+        )
+        return
+    
+    old_mode = EMA_FILTER_MODE
+    EMA_FILTER_MODE = mode
+    
+    if mode == 'off':
+        EMA_FILTER_ENABLED = False
+        msg = "❌ <b>Filtro EMA Disabilitato</b>\n\n"
+        msg += "I pattern saranno rilevati senza controlli EMA."
+    else:
+        EMA_FILTER_ENABLED = True
+        
+        if mode == 'strict':
+            msg = "🔒 <b>Modalità STRICT Attivata</b>\n\n"
+            msg += "Solo segnali con score EMA ≥ 60 (GOOD/GOLD)\n"
+            msg += "• Meno segnali\n"
+            msg += "• Qualità superiore\n"
+            msg += "• Win rate più alto\n\n"
+            msg += "⚠️ Pattern con EMA deboli saranno IGNORATI"
+        else:  # loose
+            msg = "🔓 <b>Modalità LOOSE Attivata</b>\n\n"
+            msg += "Segnali con score EMA ≥ 40 (OK/GOOD/GOLD)\n"
+            msg += "• Più segnali\n"
+            msg += "• Balance qualità/quantità\n"
+            msg += "• Avvisi se EMA non perfette\n\n"
+            msg += "⚠️ Pattern con EMA deboli ricevono warning"
+    
+    msg += f"\n\nModalità precedente: {old_mode.upper()}"
+    
+    await update.message.reply_text(msg, parse_mode='HTML')
 
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2338,6 +2681,7 @@ def main():
     application.add_handler(CommandHandler('pattern_on', cmd_pattern_on))
     application.add_handler(CommandHandler('pattern_off', cmd_pattern_off))
     application.add_handler(CommandHandler('pattern_info', cmd_pattern_info))
+    application.add_handler(CommandHandler('ema_filter', cmd_ema_filter))
     
     # Avvia bot
     mode_emoji = "🎮" if TRADING_MODE == 'demo' else "⚠️💰"
