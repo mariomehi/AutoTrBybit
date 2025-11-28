@@ -53,6 +53,21 @@ ATR_MULT_TP = 2.0
 RISK_USD = 10.0
 ENABLED_TFS = ['1m','3m','5m','15m','30m','1h','4h']
 
+# EMA-based Stop Loss System
+USE_EMA_STOP_LOSS = True  # Usa EMA invece di ATR per stop loss
+EMA_STOP_LOSS_CONFIG = {
+    # Per ogni timeframe, quale EMA usare come stop loss dinamico
+    '5m': 'ema10',   # Scalping: EMA 10
+    '15m': 'ema10',  # Scalping: EMA 10
+    '30m': 'ema10',  # Day: EMA 10
+    '1h': 'ema60',   # Day: EMA 60 (più spazio)
+    '4h': 'ema60',   # Swing: EMA 60 (più conservativo)
+}
+
+# Buffer EMA Stop Loss (% sotto l'EMA per evitare falsi breakout)
+EMA_SL_BUFFER = 0.002  # 0.2% sotto l'EMA
+# Esempio: se EMA 10 = $100, SL = $100 * (1 - 0.002) = $99.80
+
 # Symbol-specific risk overrides (opzionale)
 SYMBOL_RISK_OVERRIDE = {
     # Esempio: per MONUSDT usa solo $5 invece di $10
@@ -1051,7 +1066,84 @@ async def sync_positions_with_bybit():
         logging.exception('Errore in sync_positions_with_bybit')
         return False
 
-def calculate_position_size(entry_price: float, sl_price: float, risk_usd: float):
+def calculate_ema_stop_loss(df: pd.DataFrame, timeframe: str, entry_price: float, side: str = 'Buy'):
+    """
+    Calcola stop loss basato su EMA invece che ATR
+    
+    Args:
+        df: DataFrame con dati OHLCV
+        timeframe: '5m', '15m', '30m', '1h', '4h'
+        entry_price: prezzo di entrata
+        side: 'Buy' o 'Sell'
+    
+    Returns:
+        stop_loss_price: prezzo dello stop loss
+        ema_used: quale EMA è stata usata
+        ema_value: valore dell'EMA
+    """
+    if not USE_EMA_STOP_LOSS:
+        # Fallback a ATR se disabilitato
+        atr_val = atr(df, period=14).iloc[-1]
+        if side == 'Buy':
+            sl_price = entry_price - atr_val * ATR_MULT_SL
+        else:
+            sl_price = entry_price + atr_val * ATR_MULT_SL
+        return sl_price, 'ATR', atr_val
+    
+    # Determina quale EMA usare per questo timeframe
+    ema_to_use = EMA_STOP_LOSS_CONFIG.get(timeframe, 'ema10')
+    
+    # Calcola le EMA
+    ema_5 = df['close'].ewm(span=5, adjust=False).mean()
+    ema_10 = df['close'].ewm(span=10, adjust=False).mean()
+    ema_60 = df['close'].ewm(span=60, adjust=False).mean()
+    
+    # Seleziona l'EMA appropriata
+    if ema_to_use == 'ema5':
+        ema_value = ema_5.iloc[-1]
+        ema_name = 'EMA 5'
+    elif ema_to_use == 'ema10':
+        ema_value = ema_10.iloc[-1]
+        ema_name = 'EMA 10'
+    elif ema_to_use == 'ema60':
+        ema_value = ema_60.iloc[-1]
+        ema_name = 'EMA 60'
+    else:
+        # Default a EMA 10
+        ema_value = ema_10.iloc[-1]
+        ema_name = 'EMA 10'
+    
+    # Calcola stop loss con buffer
+    if side == 'Buy':
+        # Per posizioni BUY: SL sotto l'EMA
+        sl_price = ema_value * (1 - EMA_SL_BUFFER)
+        
+        # Verifica che non sia troppo lontano (max 3% dall'entry)
+        max_sl_distance = entry_price * 0.03
+        if (entry_price - sl_price) > max_sl_distance:
+            sl_price = entry_price - max_sl_distance
+            ema_name += ' (limitato)'
+        
+        # Verifica che non sia troppo vicino (min 0.5% dall'entry)
+        min_sl_distance = entry_price * 0.005
+        if (entry_price - sl_price) < min_sl_distance:
+            sl_price = entry_price - min_sl_distance
+            ema_name += ' (ampliato)'
+    else:
+        # Per posizioni SELL: SL sopra l'EMA
+        sl_price = ema_value * (1 + EMA_SL_BUFFER)
+        
+        max_sl_distance = entry_price * 0.03
+        if (sl_price - entry_price) > max_sl_distance:
+            sl_price = entry_price + max_sl_distance
+            ema_name += ' (limitato)'
+        
+        min_sl_distance = entry_price * 0.005
+        if (sl_price - entry_price) < min_sl_distance:
+            sl_price = entry_price + min_sl_distance
+            ema_name += ' (ampliato)'
+    
+    return sl_price, ema_name, ema_value
     """
     Calcola la quantità basata sul rischio in USD
     Formula: Qty = Risk USD / |Entry - SL|
@@ -1364,21 +1456,36 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         if found:
             logging.info(f'🎯 SEGNALE: {pattern} - {side} su {symbol} {timeframe}')
             
-            # Calcola SL e TP
+            # Calcola SL basato su EMA o ATR
+            if USE_EMA_STOP_LOSS:
+                sl_price, ema_used, ema_value = calculate_ema_stop_loss(df, timeframe, last_close, side)
+            else:
+                # Fallback ATR tradizionale
+                if not math.isnan(last_atr) and last_atr > 0:
+                    if side == 'Buy':
+                        sl_price = last_close - last_atr * ATR_MULT_SL
+                    else:
+                        sl_price = last_close + last_atr * ATR_MULT_SL
+                    ema_used = 'ATR'
+                    ema_value = last_atr
+                else:
+                    if side == 'Buy':
+                        sl_price = df['low'].iloc[-1]
+                    else:
+                        sl_price = df['high'].iloc[-1]
+                    ema_used = 'Candle Low/High'
+                    ema_value = 0
+            
+            # Calcola TP (sempre con ATR)
             if not math.isnan(last_atr) and last_atr > 0:
                 if side == 'Buy':
-                    sl_price = last_close - last_atr * ATR_MULT_SL
                     tp_price = last_close + last_atr * ATR_MULT_TP
                 else:
-                    sl_price = last_close + last_atr * ATR_MULT_SL
                     tp_price = last_close - last_atr * ATR_MULT_TP
             else:
-                # Fallback: usa low/high della candela
                 if side == 'Buy':
-                    sl_price = df['low'].iloc[-1]
                     tp_price = last_close * 1.02
                 else:
-                    sl_price = df['high'].iloc[-1]
                     tp_price = last_close * 0.98
             
             # Calcola position size
@@ -1415,7 +1522,17 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 f"🪙 {symbol} ({timeframe})\n"
                 f"🕐 {timestamp_str}\n\n"
                 f"💵 Prezzo Entry: ${last_close:.4f}\n"
-                f"🛑 Stop Loss: ${sl_price:.4f}\n"
+            )
+            
+            # Mostra info stop loss
+            if USE_EMA_STOP_LOSS:
+                caption += f"🛑 Stop Loss: ${sl_price:.4f} (sotto {ema_used})\n"
+                if isinstance(ema_value, (int, float)) and ema_value > 0:
+                    caption += f"   📍 {ema_used} value: ${ema_value:.4f}\n"
+            else:
+                caption += f"🛑 Stop Loss: ${sl_price:.4f} (ATR-based)\n"
+            
+            caption += (
                 f"🎯 Take Profit: ${tp_price:.4f}\n"
                 f"📦 Qty suggerita: {qty:.4f}\n"
                 f"💰 Rischio: ${risk_for_symbol}\n"
@@ -1426,6 +1543,11 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             if ema_analysis and EMA_FILTER_ENABLED:
                 caption += f"\n\n📈 <b>EMA Analysis:</b>\n"
                 caption += ema_analysis['details']
+                
+                # Aggiungi reminder sulla strategia EMA SL
+                if USE_EMA_STOP_LOSS:
+                    caption += f"\n\n💡 <b>Strategia EMA Stop:</b>\n"
+                    caption += f"Posizione chiusa se prezzo rompe {ema_used} al ribasso"
             
             if position_exists:
                 caption += f"\n\n⚠️ <b>Posizione già aperta per {symbol}</b>"
@@ -1448,6 +1570,25 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             caption += f"\n{mode_emoji} Nessun pattern rilevato"
             if not math.isnan(last_atr):
                 caption += f"\n📏 ATR(14): ${last_atr:.4f}"
+            
+            # AGGIUNGI ANALISI EMA anche senza pattern (per notifiche complete)
+            if full_mode and EMA_FILTER_ENABLED:
+                ema_check = analyze_ema_conditions(df, timeframe)
+                
+                caption += f"\n\n📈 <b>EMA Market Analysis:</b>\n"
+                caption += f"Score: {ema_check['score']}/100 ({ema_check['quality']})\n"
+                caption += ema_check['details']
+                
+                # Aggiungi suggerimento basato su quality
+                if ema_check['quality'] == 'GOLD':
+                    caption += f"\n\n🌟 Setup EMA perfetto! Aspetta pattern qui."
+                elif ema_check['quality'] == 'GOOD':
+                    caption += f"\n\n✅ Condizioni EMA buone per entry."
+                elif ema_check['quality'] == 'OK':
+                    caption += f"\n\n⚠️ Condizioni EMA accettabili."
+                elif ema_check['quality'] in ['WEAK', 'BAD']:
+                    caption += f"\n\n❌ Condizioni EMA sfavorevoli. Evita entry."
+            
             caption += f"\n\n💡 Modalità: Notifiche complete attive"
         
         # Genera e invia il grafico
@@ -1499,9 +1640,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     timeframe = job_ctx['timeframe']
     key = f'{symbol}-{timeframe}'
 
-    # Verifica se le notifiche sono in pausa per questo symbol/timeframe
-    with PAUSED_LOCK:
-        is_paused = chat_id in PAUSED_NOTIFICATIONS and key in PAUSED_NOTIFICATIONS[chat_id]
 
     try:
         # Ottieni dati
@@ -1679,7 +1817,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/patterns - Lista pattern e status\n"
         "/pattern_on NOME - Abilita pattern\n"
         "/pattern_off NOME - Disabilita pattern\n"
-        "/ema_filter [MODE] - Gestisci filtro EMA\n\n"
+        "/ema_filter [MODE] - Gestisci filtro EMA\n"
+        "/ema_sl [on|off] - EMA Stop Loss\n\n"
         "📝 Esempio: /analizza BTCUSDT 15m\n"
         f"⏱️ Timeframes: {', '.join(ENABLED_TFS)}\n"
         f"💰 Rischio: ${RISK_USD}\n\n"
@@ -2148,25 +2287,34 @@ async def cmd_ema_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(args) == 0:
         # Mostra stato attuale
         status_emoji = "✅" if EMA_FILTER_ENABLED else "❌"
+        sl_emoji = "✅" if USE_EMA_STOP_LOSS else "❌"
         
         msg = f"📈 <b>Filtro EMA Status</b>\n\n"
-        msg += f"🔘 Abilitato: {status_emoji}\n"
-        msg += f"🎯 Modalità: <b>{EMA_FILTER_MODE.upper()}</b>\n\n"
+        msg += f"🔘 Filtro Abilitato: {status_emoji}\n"
+        msg += f"🎯 Modalità: <b>{EMA_FILTER_MODE.upper()}</b>\n"
+        msg += f"🛑 EMA Stop Loss: {sl_emoji}\n\n"
         
-        msg += "<b>Modalità Disponibili:</b>\n"
-        msg += "• <code>strict</code> - Solo segnali con EMA perfette (score ≥ 60)\n"
-        msg += "• <code>loose</code> - Segnali con EMA accettabili (score ≥ 40)\n"
+        if USE_EMA_STOP_LOSS:
+            msg += "<b>📍 EMA Stop Loss Config:</b>\n"
+            for tf, ema in EMA_STOP_LOSS_CONFIG.items():
+                msg += f"• {tf}: {ema.upper()}\n"
+            msg += f"\nBuffer: {EMA_SL_BUFFER*100}% sotto EMA\n\n"
+        
+        msg += "<b>Modalità Filtro:</b>\n"
+        msg += "• <code>strict</code> - Solo score ≥ 60 (GOOD/GOLD)\n"
+        msg += "• <code>loose</code> - Score ≥ 40 (OK/GOOD/GOLD)\n"
         msg += "• <code>off</code> - Nessun filtro EMA\n\n"
         
         msg += "<b>Comandi:</b>\n"
         msg += "/ema_filter strict - Modalità strict\n"
         msg += "/ema_filter loose - Modalità loose\n"
-        msg += "/ema_filter off - Disabilita filtro\n\n"
+        msg += "/ema_filter off - Disabilita filtro\n"
+        msg += "/ema_sl - Gestisci EMA Stop Loss\n\n"
         
-        msg += "<b>Configurazione Timeframe:</b>\n"
-        msg += "• 5m, 15m (Scalping): Focus EMA 5, 10\n"
-        msg += "• 30m, 1h (Day): Focus EMA 10, 60\n"
-        msg += "• 4h (Swing): Focus EMA 60, 223"
+        msg += "<b>Timeframe Config:</b>\n"
+        msg += "• 5m, 15m: EMA 5, 10\n"
+        msg += "• 30m, 1h: EMA 10, 60\n"
+        msg += "• 4h: EMA 60, 223"
         
         await update.message.reply_text(msg, parse_mode='HTML')
         return
@@ -2207,6 +2355,102 @@ async def cmd_ema_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += "⚠️ Pattern con EMA deboli ricevono warning"
     
     msg += f"\n\nModalità precedente: {old_mode.upper()}"
+    
+    await update.message.reply_text(msg, parse_mode='HTML')
+
+
+async def cmd_ema_sl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /ema_sl [on|off]
+    Gestisce lo stop loss basato su EMA
+    """
+    global USE_EMA_STOP_LOSS
+    
+    args = context.args
+    
+    if len(args) == 0:
+        # Mostra info
+        status_emoji = "✅" if USE_EMA_STOP_LOSS else "❌"
+        
+        msg = f"🛑 <b>EMA Stop Loss System</b>\n\n"
+        msg += f"Status: {status_emoji} {'Attivo' if USE_EMA_STOP_LOSS else 'Disattivo'}\n\n"
+        
+        if USE_EMA_STOP_LOSS:
+            msg += "<b>📍 Configurazione per Timeframe:</b>\n"
+            for tf, ema in EMA_STOP_LOSS_CONFIG.items():
+                msg += f"• {tf} → {ema.upper()}\n"
+            
+            msg += f"\n<b>Buffer Safety:</b> {EMA_SL_BUFFER*100}%\n"
+            msg += f"(SL piazzato {EMA_SL_BUFFER*100}% sotto l'EMA)\n\n"
+            
+            msg += "<b>💡 Come Funziona:</b>\n"
+            msg += "1. Pattern rilevato → Entry\n"
+            msg += "2. Stop Loss = EMA - buffer\n"
+            msg += "3. Se prezzo rompe EMA → SL hit\n"
+            msg += "4. EMA segue il prezzo = trailing stop\n\n"
+            
+            msg += "<b>🎯 Vantaggi:</b>\n"
+            msg += "✅ Stop loss dinamico\n"
+            msg += "✅ Si adatta al trend\n"
+            msg += "✅ Evita stop troppo stretti\n"
+            msg += "✅ Protegge profitti\n\n"
+            
+            msg += "<b>Esempio BTCUSDT 15m:</b>\n"
+            msg += "Entry: $98,500\n"
+            msg += "EMA 10: $98,200\n"
+            msg += "SL: $98,200 - 0.2% = $98,003\n"
+            msg += "Se prezzo scende sotto EMA 10 → Stop!\n\n"
+            
+        else:
+            msg += "<b>Status: Disattivo</b>\n"
+            msg += "Stop loss calcolato con ATR tradizionale.\n\n"
+            msg += "ATR Stop = Entry ± (ATR × 1.5)\n\n"
+            msg += "<b>Abilita EMA SL per:</b>\n"
+            msg += "✅ Stop loss dinamici\n"
+            msg += "✅ Trailing automatico\n"
+            msg += "✅ Protezione trend\n\n"
+        
+        msg += "<b>Comandi:</b>\n"
+        msg += "/ema_sl on - Abilita EMA Stop Loss\n"
+        msg += "/ema_sl off - Disabilita (usa ATR)"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+        return
+    
+    # Modifica setting
+    action = args[0].lower()
+    
+    if action == 'on':
+        USE_EMA_STOP_LOSS = True
+        msg = "✅ <b>EMA Stop Loss Attivato!</b>\n\n"
+        msg += "Gli stop loss saranno ora posizionati sotto le EMA chiave:\n\n"
+        
+        for tf, ema in EMA_STOP_LOSS_CONFIG.items():
+            msg += f"• {tf} → {ema.upper()}\n"
+        
+        msg += f"\nBuffer: {EMA_SL_BUFFER*100}% sotto EMA\n\n"
+        msg += "💡 <b>Vantaggi:</b>\n"
+        msg += "✅ Stop dinamico che segue il trend\n"
+        msg += "✅ Protezione automatica profitti\n"
+        msg += "✅ Exit quando trend si inverte\n\n"
+        msg += "⚠️ <b>Importante:</b>\n"
+        msg += "Monitora le posizioni! Se prezzo rompe\n"
+        msg += "l'EMA significativa, esci manualmente."
+        
+    elif action == 'off':
+        USE_EMA_STOP_LOSS = False
+        msg = "❌ <b>EMA Stop Loss Disattivato</b>\n\n"
+        msg += "Stop loss calcolati con ATR tradizionale:\n"
+        msg += "SL = Entry ± (ATR × 1.5)\n\n"
+        msg += "Questo è uno stop FISSO, non si muove\n"
+        msg += "con il prezzo."
+        
+    else:
+        await update.message.reply_text(
+            '❌ Argomento non valido.\n\n'
+            'Usa: /ema_sl [on|off]'
+        )
+        return
     
     await update.message.reply_text(msg, parse_mode='HTML')
 
@@ -2682,6 +2926,7 @@ def main():
     application.add_handler(CommandHandler('pattern_off', cmd_pattern_off))
     application.add_handler(CommandHandler('pattern_info', cmd_pattern_info))
     application.add_handler(CommandHandler('ema_filter', cmd_ema_filter))
+    application.add_handler(CommandHandler('ema_sl', cmd_ema_sl))
     
     # Avvia bot
     mode_emoji = "🎮" if TRADING_MODE == 'demo' else "⚠️💰"
