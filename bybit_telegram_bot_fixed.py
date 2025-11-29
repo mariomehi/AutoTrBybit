@@ -344,6 +344,28 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.rolling(period).mean()
 
 
+def get_price_decimals(price: float) -> int:
+    """
+    Determina il numero di decimali in base al prezzo
+    
+    - Prezzo >= 1000 (es. BTC): 2 decimali
+    - Prezzo >= 100: 3 decimali
+    - Prezzo >= 10: 4 decimali
+    - Prezzo >= 1: 5 decimali
+    - Prezzo < 1: 6 decimali
+    """
+    if price >= 1000:
+        return 2
+    elif price >= 100:
+        return 3
+    elif price >= 10:
+        return 4
+    elif price >= 1:
+        return 5
+    else:
+        return 6
+
+
 def analyze_ema_conditions(df: pd.DataFrame, timeframe: str):
     """
     Analizza le condizioni EMA per il timeframe specificato
@@ -1428,9 +1450,8 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         if qty < 0.001:
             return {'error': f'Qty troppo piccola ({qty}). Aumenta RISK_USD o riduci ATR.'}
         
-        # Arrotonda prezzi (2 decimali per la maggior parte dei symbol)
-        # Per symbol con prezzi molto bassi (<1), usa 4 decimali
-        price_decimals = 4 if sl_price < 1 else 2
+        # Arrotonda prezzi con decimali dinamici
+        price_decimals = get_price_decimals(sl_price)
         sl_price = round(sl_price, price_decimals)
         tp_price = round(tp_price, price_decimals)
         
@@ -2673,6 +2694,7 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /orders [LIMIT]
     Mostra gli ultimi ordini chiusi con P&L da Bybit
+    CON DECIMALI DINAMICI basati sul prezzo
     """
     if not BYBIT_API_KEY or not BYBIT_API_SECRET:
         await update.message.reply_text(
@@ -2750,11 +2772,14 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         pnl_percent = ((avg_entry - avg_exit) / avg_entry) * 100
                 
-                # CORREZIONE: Usa solo HTML sicuro
+                # ===== DECIMALI DINAMICI =====
+                price_decimals = get_price_decimals(avg_entry)
+                
+                # Costruisci messaggio ordine
                 msg += f"{side_emoji} <b>{symbol}</b> - {side}\n"
                 msg += f"  Qty: {qty:.4f}\n"
-                msg += f"  Entry: ${avg_entry:.4f}\n"
-                msg += f"  Exit: ${avg_exit:.4f}\n"
+                msg += f"  Entry: ${avg_entry:.{price_decimals}f}\n"
+                msg += f"  Exit: ${avg_exit:.{price_decimals}f}\n"
                 msg += f"  {pnl_emoji} PnL: ${closed_pnl:+.2f} ({pnl_percent:+.2f}%)\n"
                 msg += f"  Time: {time_str}\n\n"
             
@@ -2767,7 +2792,7 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 win_rate = (win_count / (win_count + loss_count)) * 100
                 msg += f"📊 Win Rate: {win_rate:.1f}%\n"
             
-            msg += f"\n💡 Usa /orders [numero] per vedere più ordini"
+            msg += f"\n💡 Usa /orders [numero] per vedere più ordini\n"
             msg += f"Esempio: /orders 20"
             
             await update.message.reply_text(msg, parse_mode='HTML')
