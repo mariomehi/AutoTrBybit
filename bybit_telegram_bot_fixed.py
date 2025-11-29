@@ -1686,29 +1686,30 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Se c'è analisi EMA, mostra quality
             if ema_analysis:
                 q_emoji = quality_emoji.get(ema_analysis['quality'], '⚪')
-                caption += f"{q_emoji} <b>Quality: {ema_analysis['quality']}</b> ({ema_analysis['score']}/100)\n\n"
+                # CORREZIONE: emoji FUORI dai tag HTML
+                caption += f"{q_emoji} <b>Quality:</b> {ema_analysis['quality']} ({ema_analysis['score']}/100)\n\n"
             
             caption += (
-                f"📊 Pattern: <b>{pattern}</b>\n"
-                f"💹 Direzione: <b>{side}</b>\n"
+                f"📊 <b>Pattern:</b> {pattern}\n"
+                f"💹 <b>Direzione:</b> {side}\n"
                 f"🪙 {symbol} ({timeframe})\n"
                 f"🕐 {timestamp_str}\n\n"
-                f"💵 Prezzo Entry: ${last_close:.4f}\n"
+                f"💵 <b>Prezzo Entry:</b> ${last_close:.4f}\n"
             )
             
             # Mostra info stop loss
             if USE_EMA_STOP_LOSS:
-                caption += f"🛑 Stop Loss: ${sl_price:.4f} (sotto {ema_used})\n"
+                caption += f"🛑 <b>Stop Loss:</b> ${sl_price:.4f} (sotto {ema_used})\n"
                 if isinstance(ema_value, (int, float)) and ema_value > 0:
-                    caption += f"   📍 {ema_used} value: ${ema_value:.4f}\n"
+                    caption += f"   {ema_used} value: ${ema_value:.4f}\n"
             else:
-                caption += f"🛑 Stop Loss: ${sl_price:.4f} (ATR-based)\n"
+                caption += f"🛑 <b>Stop Loss:</b> ${sl_price:.4f} (ATR-based)\n"
             
             caption += (
-                f"🎯 Take Profit: ${tp_price:.4f}\n"
-                f"📦 Qty suggerita: {qty:.4f}\n"
-                f"💰 Rischio: ${risk_for_symbol}\n"
-                f"📏 R:R = {abs(tp_price-last_close)/abs(sl_price-last_close):.2f}:1"
+                f"🎯 <b>Take Profit:</b> ${tp_price:.4f}\n"
+                f"📦 <b>Qty suggerita:</b> {qty:.4f}\n"
+                f"💰 <b>Rischio:</b> ${risk_for_symbol}\n"
+                f"📏 <b>R:R:</b> {abs(tp_price-last_close)/abs(sl_price-last_close):.2f}:1"
             )
             
             # Aggiungi dettagli EMA se disponibili
