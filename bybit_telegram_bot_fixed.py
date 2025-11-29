@@ -1554,8 +1554,15 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     """
     Job che viene eseguito ad ogni chiusura candela
     
-    COMPORTAMENTO DEFAULT: Invia grafico SOLO quando trova un pattern
-    Se symbol-timeframe è in FULL_NOTIFICATIONS: Invia SEMPRE (anche senza pattern)
+    LOGICA EMA-FIRST (ottimizzata):
+    1. Analizza condizioni EMA
+    2. Se EMA non valide → SKIP ricerca pattern (risparmio risorse)
+    3. Se EMA OK → Cerca pattern
+    4. Se pattern trovato → Invia segnale
+    
+    COMPORTAMENTO:
+    - DEFAULT: Invia grafico SOLO quando trova pattern
+    - FULL_MODE: Invia sempre (anche senza pattern, con analisi EMA)
     """
     job_ctx = context.job.data
     chat_id = job_ctx['chat_id']
@@ -1563,12 +1570,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     timeframe = job_ctx['timeframe']
     key = f'{symbol}-{timeframe}'
 
-    # Verifica se le notifiche complete sono attive per questo symbol/timeframe
+    # Verifica se le notifiche complete sono attive
     with FULL_NOTIFICATIONS_LOCK:
         full_mode = chat_id in FULL_NOTIFICATIONS and key in FULL_NOTIFICATIONS[chat_id]
 
     try:
-        # Ottieni dati
+        # ===== STEP 1: OTTIENI DATI =====
         df = bybit_get_klines(symbol, timeframe, limit=200)
         if df.empty:
             logging.warning(f'Nessun dato per {symbol} {timeframe}')
@@ -1583,94 +1590,102 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         last_time = df.index[-1]
         timestamp_str = last_time.strftime('%Y-%m-%d %H:%M UTC')
         
-        # Controlla pattern
-        found, side, pattern = check_patterns(df)
-        
-        # Se NON c'è pattern e NON siamo in full mode, skip completamente
-        if not found and not full_mode:
-            logging.debug(f'🔕 {symbol} {timeframe} - nessun pattern, skip notifica (default mode)')
-            return
-        
-        # === ANALISI EMA (SEMPRE - per tutti i pattern BUY) ===
+        # ===== STEP 2: PRE-FILTER EMA (PRIMA DI CERCARE PATTERN) =====
         ema_analysis = None
-        if side == 'Buy' and EMA_FILTER_ENABLED:
+        pattern_search_allowed = True  # Default: cerca pattern
+        
+        if EMA_FILTER_ENABLED:
             ema_analysis = analyze_ema_conditions(df, timeframe)
             
-            logging.info(f'📊 EMA Analysis for {symbol} {timeframe}: Score={ema_analysis["score"]}, Quality={ema_analysis["quality"]}, Passed={ema_analysis["passed"]}')
+            logging.info(f'📊 EMA Pre-Filter {symbol} {timeframe}: Score={ema_analysis["score"]}, Quality={ema_analysis["quality"]}, Passed={ema_analysis["passed"]}')
             
-            # Se modalità STRICT e pattern NON passa filtro EMA, BLOCCA segnale
-            if found and EMA_FILTER_MODE == 'strict' and not ema_analysis['passed']:
-                logging.warning(f'🚫 Pattern {pattern} su {symbol} {timeframe} BLOCCATO da EMA filter STRICT (score: {ema_analysis["score"]}/100)')
+            # STRICT MODE: Blocca completamente se EMA non passa
+            if EMA_FILTER_MODE == 'strict' and not ema_analysis['passed']:
+                pattern_search_allowed = False
+                logging.warning(f'🚫 {symbol} {timeframe} - EMA STRICT BLOCK (score {ema_analysis["score"]}/100). Skip pattern search.')
                 
-                # Se full mode è attivo, invia comunque notifica con warning
+                # Se full mode, invia comunque analisi mercato
                 if full_mode:
-                    warning_msg = (
-                        f"⚠️ <b>Pattern FILTRATO (EMA Strict)</b>\n\n"
-                        f"📊 Pattern: {pattern} su {symbol} {timeframe}\n"
-                        f"❌ EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n\n"
-                        f"🚫 Segnale NON inviato per score EMA insufficiente.\n"
-                        f"Modalità STRICT richiede score ≥ 60.\n\n"
-                        f"Dettagli EMA:\n{ema_analysis['details']}"
-                    )
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=warning_msg,
-                        parse_mode='HTML'
-                    )
-                return  # BLOCCA completamente il segnale
+                    caption = f"📊 <b>{symbol}</b> ({timeframe})\n"
+                    caption += f"🕐 {timestamp_str}\n"
+                    caption += f"💵 Price: ${last_close:.4f}\n\n"
+                    caption += f"🚫 <b>ZONA NON VALIDA (EMA Strict)</b>\n\n"
+                    caption += f"Score EMA: {ema_analysis['score']}/100\n"
+                    caption += f"Quality: {ema_analysis['quality']}\n\n"
+                    caption += ema_analysis['details']
+                    caption += f"\n\n⚠️ Pattern search DISABILITATA per score EMA insufficiente.\n"
+                    caption += f"Attendi miglioramento condizioni EMA."
+                    
+                    try:
+                        chart_buffer = generate_chart(df, symbol, timeframe)
+                        await context.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=chart_buffer,
+                            caption=caption,
+                            parse_mode='HTML'
+                        )
+                    except:
+                        await context.bot.send_message(chat_id=chat_id, text=caption, parse_mode='HTML')
+                
+                return  # STOP QUI - Non cerca pattern
             
-            # Se modalità LOOSE e pattern non passa, AVVISA ma continua
-            if found and EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
-                logging.warning(f'⚠️ Pattern {pattern} su {symbol} {timeframe} con EMA deboli (score: {ema_analysis["score"]}/100) - Loose mode: continuo')
+            # LOOSE MODE: Avvisa ma continua
+            elif EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
+                logging.warning(f'⚠️ {symbol} {timeframe} - EMA LOOSE warning (score {ema_analysis["score"]}/100). Continue pattern search.')
+                # pattern_search_allowed rimane True
         
-        # Calcola ATR
+        # ===== STEP 3: CERCA PATTERN (solo se EMA permette) =====
+        found = False
+        side = None
+        pattern = None
+        
+        if pattern_search_allowed:
+            found, side, pattern = check_patterns(df)
+            
+            if found:
+                logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
+            else:
+                logging.debug(f'🔍 {symbol} {timeframe} - Nessun pattern rilevato')
+        
+        # Se NON pattern e NON full_mode → Skip notifica
+        if not found and not full_mode:
+            logging.debug(f'🔕 {symbol} {timeframe} - No pattern, no full mode → Skip')
+            return
+        
+        # ===== STEP 4: CALCOLA PARAMETRI TRADING =====
         atr_series = atr(df, period=14)
         last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else np.nan
         
-        # === COSTRUISCI MESSAGGIO ===
+        # ===== STEP 5: COSTRUISCI MESSAGGIO =====
         
-        if found:
-            # ========== PATTERN TROVATO ==========
-            logging.info(f'🎯 SEGNALE: {pattern} - {side} su {symbol} {timeframe}')
+        if found and side == 'Buy':
+            # ========== SEGNALE BUY ==========
             
-            # Calcola SL basato su EMA o ATR
+            # Calcola SL
             if USE_EMA_STOP_LOSS:
                 sl_price, ema_used, ema_value = calculate_ema_stop_loss(df, timeframe, last_close, side)
             else:
                 if not math.isnan(last_atr) and last_atr > 0:
-                    if side == 'Buy':
-                        sl_price = last_close - last_atr * ATR_MULT_SL
-                    else:
-                        sl_price = last_close + last_atr * ATR_MULT_SL
+                    sl_price = last_close - last_atr * ATR_MULT_SL
                     ema_used = 'ATR'
                     ema_value = last_atr
                 else:
-                    if side == 'Buy':
-                        sl_price = df['low'].iloc[-1]
-                    else:
-                        sl_price = df['high'].iloc[-1]
-                    ema_used = 'Low/High'
+                    sl_price = df['low'].iloc[-1]
+                    ema_used = 'Low'
                     ema_value = 0
             
             # Calcola TP
             if not math.isnan(last_atr) and last_atr > 0:
-                if side == 'Buy':
-                    tp_price = last_close + last_atr * ATR_MULT_TP
-                else:
-                    tp_price = last_close - last_atr * ATR_MULT_TP
+                tp_price = last_close + last_atr * ATR_MULT_TP
             else:
-                if side == 'Buy':
-                    tp_price = last_close * 1.02
-                else:
-                    tp_price = last_close * 0.98
+                tp_price = last_close * 1.02
             
-            # Risk e qty
+            # Risk e Qty
             risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
             qty = calculate_position_size(last_close, sl_price, risk_for_symbol)
             position_exists = symbol in ACTIVE_POSITIONS
             
-            # === COSTRUISCI CAPTION CON EMA ANALYSIS ===
-            
+            # === COSTRUISCI CAPTION ===
             quality_emoji_map = {
                 'GOLD': '🌟',
                 'GOOD': '✅',
@@ -1679,9 +1694,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 'BAD': '❌'
             }
             
-            caption = "🔥 <b>SEGNALE TROVATO</b>\n\n"
+            caption = "🔥 <b>SEGNALE BUY</b>\n\n"
             
-            # MOSTRA SEMPRE EMA QUALITY se disponibile
+            # MOSTRA EMA QUALITY SEMPRE in cima
             if ema_analysis:
                 q_emoji = quality_emoji_map.get(ema_analysis['quality'], '⚪')
                 caption += f"{q_emoji} <b>EMA Quality: {ema_analysis['quality']}</b>\n"
@@ -1689,11 +1704,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             
             # Pattern info
             caption += f"📊 <b>Pattern:</b> {pattern}\n"
-            caption += f"💹 <b>Side:</b> {side}\n"
             caption += f"🪙 <b>Symbol:</b> {symbol} ({timeframe})\n"
             caption += f"🕐 {timestamp_str}\n\n"
             
-            # Trading info
+            # Trading params
             caption += f"💵 <b>Entry:</b> ${last_close:.4f}\n"
             
             if USE_EMA_STOP_LOSS:
@@ -1719,15 +1733,15 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     avg_vol = vol.iloc[-21:-1].mean()
                     current_vol = vol.iloc[-1]
                     vol_ratio = (current_vol / avg_vol) if avg_vol > 0 else 0
-                    caption += f"📊 <b>Volume:</b> {vol_ratio:.2f}x media\n"
+                    caption += f"📊 <b>Volume:</b> {vol_ratio:.2f}x\n"
             
-            # === DETTAGLI EMA (SEMPRE MOSTRATI) ===
+            # === DETTAGLI EMA COMPLETI ===
             if ema_analysis:
                 caption += "\n━━━━━━━━━━━━━━━━━━━\n"
-                caption += "📈 <b>EMA Analysis Details:</b>\n\n"
+                caption += "📈 <b>EMA Analysis:</b>\n\n"
                 caption += ema_analysis['details']
                 
-                # Valori EMA attuali
+                # Valori EMA
                 if 'ema_values' in ema_analysis:
                     ema_vals = ema_analysis['ema_values']
                     caption += f"\n\n💡 <b>EMA Values:</b>\n"
@@ -1737,65 +1751,75 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"EMA 60: ${ema_vals['ema60']:.2f}\n"
                     caption += f"EMA 223: ${ema_vals['ema223']:.2f}\n"
                 
-                # Strategy reminder
+                # Strategy
                 if USE_EMA_STOP_LOSS:
-                    caption += f"\n🎯 <b>EMA Stop Strategy:</b>\n"
-                    caption += f"Exit if price breaks {ema_used} to downside"
+                    caption += f"\n🎯 <b>EMA Stop:</b> Exit se prezzo rompe {ema_used}"
+            
+            # Warning se LOOSE mode con EMA deboli
+            if ema_analysis and EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
+                caption += f"\n\n⚠️ <b>ATTENZIONE:</b> Setup con EMA non ottimali"
+                caption += f"\nConsidera ridurre position size o aspettare."
             
             # Posizione esistente
             if position_exists:
-                caption += "\n\n⚠️ <b>ATTENZIONE:</b>"
-                caption += f"\nPosizione già aperta per {symbol}"
-                caption += "\nOrdine NON eseguito"
+                caption += "\n\n🚫 <b>Posizione già aperta</b>"
+                caption += f"\nOrdine NON eseguito per {symbol}"
             
             # Autotrade
             if job_ctx.get('autotrade') and qty > 0 and not position_exists:
                 order_res = await place_bybit_order(symbol, side, qty, sl_price, tp_price)
                 
                 if 'error' in order_res:
-                    if order_res.get('error') == 'position_exists':
-                        caption += "\n\n⚠️ Posizione già aperta su Bybit"
-                    else:
-                        caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
+                    caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
                 else:
-                    caption += f"\n\n✅ <b>Ordine eseguito su Bybit {TRADING_MODE.upper()}</b>"
+                    caption += f"\n\n✅ <b>Ordine su Bybit {TRADING_MODE.upper()}</b>"
+        
+        elif found and side == 'Sell':
+            # ========== SEGNALE SELL (se abilitato) ==========
+            caption = f"🔴 <b>SEGNALE SELL</b>\n\n"
+            caption += f"📊 Pattern: {pattern}\n"
+            caption += f"🪙 {symbol} ({timeframe})\n\n"
+            caption += "⚠️ Pattern SELL rilevato ma NON tradato\n"
+            caption += "(Solo pattern BUY sono attivi)"
         
         else:
-            # ========== NESSUN PATTERN (full mode attivo) ==========
+            # ========== NESSUN PATTERN (full mode) ==========
             caption = f"📊 <b>{symbol}</b> ({timeframe})\n"
             caption += f"🕐 {timestamp_str}\n"
             caption += f"💵 Price: ${last_close:.4f}\n\n"
-            caption += "🔔 <b>Full Mode - Nessun pattern</b>\n"
+            
+            if pattern_search_allowed:
+                caption += "🔔 <b>Full Mode - Nessun pattern</b>\n"
+            else:
+                caption += "🚫 <b>Pattern search bloccata da EMA</b>\n"
             
             if not math.isnan(last_atr):
                 caption += f"📏 ATR(14): ${last_atr:.4f}\n"
             
-            # ANALISI EMA anche senza pattern
-            if EMA_FILTER_ENABLED:
-                ema_check = analyze_ema_conditions(df, timeframe)
-                
+            # ANALISI EMA MERCATO
+            if ema_analysis:
                 caption += "\n━━━━━━━━━━━━━━━━━━━\n"
                 caption += "📈 <b>EMA Market Analysis:</b>\n\n"
-                caption += f"<b>Score:</b> {ema_check['score']}/100\n"
-                caption += f"<b>Quality:</b> {ema_check['quality']}\n\n"
-                caption += ema_check['details']
+                caption += f"<b>Score:</b> {ema_analysis['score']}/100\n"
+                caption += f"<b>Quality:</b> {ema_analysis['quality']}\n\n"
+                caption += ema_analysis['details']
                 
                 # Suggerimenti
                 caption += "\n\n💡 <b>Suggerimento:</b>\n"
-                if ema_check['quality'] == 'GOLD':
-                    caption += "🌟 Setup EMA PERFETTO!\nAspetta un pattern qui per entry ottimale."
-                elif ema_check['quality'] == 'GOOD':
-                    caption += "✅ Condizioni EMA favorevoli.\nSetup valido per pattern rialzisti."
-                elif ema_check['quality'] == 'OK':
-                    caption += "⚠️ Condizioni EMA accettabili.\nPattern validi ma non ottimali."
-                elif ema_check['quality'] == 'WEAK':
-                    caption += "🔶 Condizioni EMA deboli.\nPreferibile aspettare setup migliore."
+                if ema_analysis['quality'] == 'GOLD':
+                    caption += "🌟 Setup PERFETTO! Aspetta pattern qui."
+                elif ema_analysis['quality'] == 'GOOD':
+                    caption += "✅ Buone condizioni. Setup valido."
+                elif ema_analysis['quality'] == 'OK':
+                    caption += "⚠️ Accettabile ma non ottimale."
+                elif ema_analysis['quality'] == 'WEAK':
+                    caption += "🔶 Condizioni deboli. Meglio aspettare."
                 else:  # BAD
-                    caption += "❌ Condizioni EMA sfavorevoli.\nEVITA entry, attendere miglioramento."
+                    caption += "❌ Condizioni sfavorevoli. NO entry."
                 
                 # Valori EMA
-                if 'ema_values' in ema_check:
-                    ema_vals = ema_check['ema_values']
+                if 'ema_values' in ema_analysis:
+                    ema_vals = ema_analysis['ema_values']
                     caption += f"\n\n📊 <b>EMA Values:</b>\n"
                     caption += f"Price: ${ema_vals['price']:.2f}\n"
                     caption += f"EMA 5: ${ema_vals['ema5']:.2f}\n"
@@ -1803,7 +1827,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"EMA 60: ${ema_vals['ema60']:.2f}\n"
                     caption += f"EMA 223: ${ema_vals['ema223']:.2f}"
         
-        # === INVIA GRAFICO UNA SOLA VOLTA ===
+        # ===== STEP 6: INVIA GRAFICO =====
         try:
             chart_buffer = generate_chart(df, symbol, timeframe)
             
@@ -1814,11 +1838,17 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
             
-            status = f'✅ {pattern}' if found else '🔔 Full mode'
-            if found and ema_analysis:
-                status += f' (EMA: {ema_analysis["quality"]})'
+            # Log status
+            if found:
+                status = f'✅ {pattern}'
+                if ema_analysis:
+                    status += f' (EMA: {ema_analysis["quality"]} - {ema_analysis["score"]}/100)'
+            else:
+                status = '🔔 Full mode'
+                if ema_analysis:
+                    status += f' (EMA: {ema_analysis["quality"]})'
             
-            logging.info(f"📸 Grafico inviato: {symbol} {timeframe} - {status}")
+            logging.info(f"📸 {symbol} {timeframe} → {status}")
             
         except Exception as e:
             logging.error(f'Errore grafico: {e}')
