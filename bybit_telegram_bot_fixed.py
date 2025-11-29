@@ -1949,13 +1949,24 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
 
+# SOSTITUISCI il blocco except in analyze_job (circa riga 1940-1960)
+
     except Exception as e:
         logging.exception(f'Errore in analyze_job per {symbol} {timeframe}')
-        if not is_paused:  # Invia errori solo se non in pausa
-            await context.bot.send_message(
-                chat_id=chat_id, 
-                text=f"❌ Errore nell'analisi di {symbol} {timeframe}: {str(e)}"
-            )
+        
+        # Invia errori solo se full mode attivo (per evitare spam)
+        try:
+            with FULL_NOTIFICATIONS_LOCK:
+                should_send_error = chat_id in FULL_NOTIFICATIONS and key in FULL_NOTIFICATIONS[chat_id]
+            
+            if should_send_error:
+                await context.bot.send_message(
+                    chat_id=chat_id, 
+                    text=f"❌ Errore nell'analisi di {symbol} {timeframe}: {str(e)}"
+                )
+        except:
+            # Se anche questo fallisce, logga e basta
+            logging.error(f'Impossibile inviare messaggio di errore per {symbol} {timeframe}')
 
 
 # ----------------------------- TELEGRAM COMMANDS -----------------------------
