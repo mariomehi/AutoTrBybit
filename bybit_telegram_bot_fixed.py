@@ -1831,9 +1831,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         # Controlla pattern
         found, side, pattern = check_patterns(df)
         
-        # Se in pausa e NON c'è pattern, non inviare nulla
-        if is_paused and not found:
-            logging.debug(f'🔇 {symbol} {timeframe} in pausa - nessun pattern, skip notifica')
+        # Se NON c'è pattern e NON siamo in full mode, skip completamente
+        if not found and not full_mode:
+            logging.debug(f'🔕 {symbol} {timeframe} - nessun pattern, skip notifica (default mode)')
             return
         
         # Calcola ATR per eventuali SL/TP
