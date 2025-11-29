@@ -1762,15 +1762,18 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += "📈 <b>EMA Analysis:</b>\n\n"
                 caption += ema_analysis['details']
                 
-                # Valori EMA
+            # Valori EMA CON DECIMALI DINAMICI
                 if 'ema_values' in ema_analysis:
                     ema_vals = ema_analysis['ema_values']
+                    # Usa il prezzo corrente per determinare i decimali
+                    ema_decimals = get_price_decimals(ema_vals['price'])
+                    
                     caption += f"\n\n💡 <b>EMA Values:</b>\n"
-                    caption += f"Price: ${ema_vals['price']:.2f}\n"
-                    caption += f"EMA 5: ${ema_vals['ema5']:.2f}\n"
-                    caption += f"EMA 10: ${ema_vals['ema10']:.2f}\n"
-                    caption += f"EMA 60: ${ema_vals['ema60']:.2f}\n"
-                    caption += f"EMA 223: ${ema_vals['ema223']:.2f}\n"
+                    caption += f"Price: ${ema_vals['price']:.{ema_decimals}f}\n"
+                    caption += f"EMA 5: ${ema_vals['ema5']:.{ema_decimals}f}\n"
+                    caption += f"EMA 10: ${ema_vals['ema10']:.{ema_decimals}f}\n"
+                    caption += f"EMA 60: ${ema_vals['ema60']:.{ema_decimals}f}\n"
+                    caption += f"EMA 223: ${ema_vals['ema223']:.{ema_decimals}f}\n"
                 
                 # Strategy
                 if USE_EMA_STOP_LOSS:
@@ -1838,15 +1841,18 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:  # BAD
                     caption += "❌ Condizioni sfavorevoli. NO entry."
                 
-                # Valori EMA
+        # Valori EMA CON DECIMALI DINAMICI
                 if 'ema_values' in ema_analysis:
                     ema_vals = ema_analysis['ema_values']
-                    caption += f"\n\n📊 <b>EMA Values:</b>\n"
-                    caption += f"Price: ${ema_vals['price']:.2f}\n"
-                    caption += f"EMA 5: ${ema_vals['ema5']:.2f}\n"
-                    caption += f"EMA 10: ${ema_vals['ema10']:.2f}\n"
-                    caption += f"EMA 60: ${ema_vals['ema60']:.2f}\n"
-                    caption += f"EMA 223: ${ema_vals['ema223']:.2f}"
+                    # Usa il prezzo corrente per determinare i decimali
+                    ema_decimals = get_price_decimals(ema_vals['price'])
+                    
+                    caption += f"\n\n💡 <b>EMA Values:</b>\n"
+                    caption += f"Price: ${ema_vals['price']:.{ema_decimals}f}\n"
+                    caption += f"EMA 5: ${ema_vals['ema5']:.{ema_decimals}f}\n"
+                    caption += f"EMA 10: ${ema_vals['ema10']:.{ema_decimals}f}\n"
+                    caption += f"EMA 60: ${ema_vals['ema60']:.{ema_decimals}f}\n"
+                    caption += f"EMA 223: ${ema_vals['ema223']:.{ema_decimals}f}\n"
         
         # ===== STEP 6: INVIA GRAFICO =====
         try:
