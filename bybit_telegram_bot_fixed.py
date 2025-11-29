@@ -2803,23 +2803,24 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         pnl_percent = ((avg_entry - avg_exit) / avg_entry) * 100
                 
+                # CORREZIONE: Usa solo HTML sicuro
                 msg += f"{side_emoji} <b>{symbol}</b> - {side}\n"
-                msg += f"  📦 Qty: {qty:.4f}\n"
-                msg += f"  📍 Entry: ${avg_entry:.4f}\n"
-                msg += f"  🚪 Exit: ${avg_exit:.4f}\n"
-                msg += f"  {pnl_emoji} P&L: ${closed_pnl:+.2f} ({pnl_percent:+.2f}%)\n"
-                msg += f"  🕐 {time_str}\n\n"
+                msg += f"  Qty: {qty:.4f}\n"
+                msg += f"  Entry: ${avg_entry:.4f}\n"
+                msg += f"  Exit: ${avg_exit:.4f}\n"
+                msg += f"  {pnl_emoji} PnL: ${closed_pnl:+.2f} ({pnl_percent:+.2f}%)\n"
+                msg += f"  Time: {time_str}\n\n"
             
             # Statistiche finali
             msg += "━━━━━━━━━━━━━━━━━━━\n\n"
-            msg += f"💰 <b>P&L Totale: ${total_pnl:+.2f}</b>\n"
+            msg += f"💰 <b>PnL Totale: ${total_pnl:+.2f}</b>\n"
             msg += f"✅ Win: {win_count} | ❌ Loss: {loss_count}\n"
             
             if (win_count + loss_count) > 0:
                 win_rate = (win_count / (win_count + loss_count)) * 100
                 msg += f"📊 Win Rate: {win_rate:.1f}%\n"
             
-            msg += f"\n💡 Usa /orders [numero] per vedere più ordini\n"
+            msg += f"\n💡 Usa /orders [numero] per vedere più ordini"
             msg += f"Esempio: /orders 20"
             
             await update.message.reply_text(msg, parse_mode='HTML')
