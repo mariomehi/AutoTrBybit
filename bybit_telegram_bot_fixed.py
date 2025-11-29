@@ -1921,7 +1921,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"\n\n✅ Ordine piazzato su Bybit {TRADING_MODE.upper()}"
         else:
             # Nessun pattern trovato
-            pause_emoji = "🔇" if is_paused else "⏳"
+            pause_emoji = "🔇" if full_mode else "⏳"
             caption += f"\n{pause_emoji} Nessun pattern rilevato"
             if not math.isnan(last_atr):
                 caption += f"\n📏 ATR(14): ${last_atr:.4f}"
@@ -1937,7 +1937,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='HTML'
             )
             
-            status = '✅ '+pattern if found else ('🔇 Pausa' if is_paused else '❌ Nessuno')
+            status = '✅ '+pattern if found else ('🔇 Pausa' if full_mode else '❌ Nessuno')
             logging.info(f"📸 Grafico inviato per {symbol} {timeframe} - Pattern: {status}")
             
         except Exception as e:
