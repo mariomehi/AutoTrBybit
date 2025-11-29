@@ -134,6 +134,13 @@ AVAILABLE_PATTERNS = {
         'side': 'Buy',
         'emoji': '🔄'
     },
+    'compression_breakout': { 
+        'name': 'Compression Breakout',
+        'enabled': True,
+        'description': 'Breakout esplosivo dopo compressione EMA',
+        'side': 'Buy',
+        'emoji': '💥'
+    },
     'bullish_engulfing': {
         'name': 'Bullish Engulfing',
         'enabled': True,
@@ -888,6 +895,135 @@ def is_bullish_comeback(candles):
     return variant1_valid or variant2_valid
 
 
+def is_compression_breakout(df: pd.DataFrame):
+    """
+    Pattern: Compression Breakout
+    Breakout esplosivo dopo compressione delle EMA 5, 10, 223
+    
+    FASE 1 - COMPRESSIONE (candele -3, -2):
+    - EMA 5 ≈ EMA 10 ≈ EMA 223 (tutte vicine)
+    - Prezzo in range stretto
+    - Bassa volatilità
+    
+    FASE 2 - BREAKOUT (candela -1):
+    - Prezzo rompe sopra tutte le EMA
+    - Candela rialzista significativa
+    - EMA 5 inizia a separarsi
+    
+    FASE 3 - CONFERMA (candela corrente):
+    - Continua movimento rialzista
+    - EMA 5 > EMA 10 > EMA 223
+    - Nessun retest zona compressione
+    """
+    if len(df) < 50:  # Servono dati per EMA 223
+        return False
+    
+    # Calcola EMA
+    ema_5 = df['close'].ewm(span=5, adjust=False).mean()
+    ema_10 = df['close'].ewm(span=10, adjust=False).mean()
+    ema_223 = df['close'].ewm(span=223, adjust=False).mean()
+    
+    # Candele da analizzare
+    curr = df.iloc[-1]  # Candela corrente (conferma)
+    prev = df.iloc[-2]  # Candela breakout
+    prev2 = df.iloc[-3] # Compressione
+    prev3 = df.iloc[-4] # Compressione
+    
+    # Valori EMA
+    curr_ema5 = ema_5.iloc[-1]
+    curr_ema10 = ema_10.iloc[-1]
+    curr_ema223 = ema_223.iloc[-1]
+    
+    prev_ema5 = ema_5.iloc[-2]
+    prev_ema10 = ema_10.iloc[-2]
+    prev_ema223 = ema_223.iloc[-2]
+    
+    prev2_ema5 = ema_5.iloc[-3]
+    prev2_ema10 = ema_10.iloc[-3]
+    prev2_ema223 = ema_223.iloc[-3]
+    
+    # === FASE 1: COMPRESSIONE (candele -3, -2) ===
+    
+    # EMA 5 e 10 molto vicine (< 0.5%)
+    compression_510_prev2 = abs(prev2_ema5 - prev2_ema10) / prev2_ema10 < 0.005
+    
+    # EMA 10 e 223 relativamente vicine (< 2%)
+    compression_10223_prev2 = abs(prev2_ema10 - prev2_ema223) / prev2_ema223 < 0.02
+    
+    # La compressione deve durare almeno 2 candele
+    compression_510_prev = abs(prev_ema5 - prev_ema10) / prev_ema10 < 0.008
+    
+    has_compression = (compression_510_prev2 and 
+                      compression_10223_prev2 and 
+                      compression_510_prev)
+    
+    if not has_compression:
+        return False
+    
+    # === FASE 2: BREAKOUT (candela -1) ===
+    
+    # Candela precedente deve essere rialzista
+    prev_bullish = prev['close'] > prev['open']
+    
+    # Deve chiudere sopra tutte le EMA
+    breaks_all_ema = (prev['close'] > prev_ema5 and 
+                      prev['close'] > prev_ema10 and 
+                      prev['close'] > prev_ema223)
+    
+    # Candela deve avere corpo significativo (almeno 50% del range)
+    prev_body = abs(prev['close'] - prev['open'])
+    prev_range = prev['high'] - prev['low']
+    prev_strong = (prev_body / prev_range) > 0.5 if prev_range > 0 else False
+    
+    # Il corpo deve essere significativo rispetto alla compressione
+    compression_range = max(prev2_ema5, prev2_ema10, prev2_ema223) - min(prev2_ema5, prev2_ema10, prev2_ema223)
+    if compression_range > 0:
+        body_vs_compression = prev_body > compression_range * 1.5
+    else:
+        body_vs_compression = prev_body > prev['close'] * 0.005  # Almeno 0.5%
+    
+    has_breakout = (prev_bullish and 
+                   breaks_all_ema and 
+                   prev_strong and 
+                   body_vs_compression)
+    
+    if not has_breakout:
+        return False
+    
+    # === FASE 3: CONFERMA (candela corrente) ===
+    
+    # Candela corrente rialzista o almeno non ribassista forte
+    curr_not_bearish = curr['close'] >= curr['open'] * 0.995  # Tolleranza 0.5%
+    
+    # Prezzo corrente sopra le EMA (o vicino)
+    stays_above = curr['close'] > curr_ema10 * 0.998  # Tolleranza 0.2%
+    
+    # EMA 5 deve essere sopra EMA 10 (separazione iniziata)
+    ema5_above_10 = curr_ema5 > curr_ema10
+    
+    # NO retest profondo della zona di compressione
+    # (può toccare EMA 10 ma non deve chiudere sotto)
+    no_deep_retest = curr['close'] > curr_ema10 * 0.997
+    
+    # Check volume (opzionale - solo se disponibile)
+    volume_ok = True
+    if 'volume' in df.columns:
+        vol = df['volume']
+        if len(vol) >= 21:
+            avg_vol = vol.iloc[-21:-1].mean()
+            prev_vol = vol.iloc[-2]
+            # Volume breakout deve essere superiore alla media
+            volume_ok = prev_vol > avg_vol * 1.2
+    
+    has_confirmation = (curr_not_bearish and 
+                       stays_above and 
+                       ema5_above_10 and 
+                       no_deep_retest and
+                       volume_ok)
+    
+    return has_confirmation
+
+
 def check_patterns(df: pd.DataFrame):
     """
     Controlla tutti i pattern ABILITATI
@@ -906,6 +1042,11 @@ def check_patterns(df: pd.DataFrame):
     if AVAILABLE_PATTERNS['bullish_comeback']['enabled']:
         if is_bullish_comeback(df):
             return (True, 'Buy', 'Bullish Comeback')
+
+    # Compression Breakout (molto specifico, alta priorità)
+    if AVAILABLE_PATTERNS['compression_breakout']['enabled']:
+        if is_compression_breakout(df):
+            return (True, 'Buy', 'Compression Breakout')
     
     # Bullish Engulfing
     if AVAILABLE_PATTERNS['bullish_engulfing']['enabled']:
