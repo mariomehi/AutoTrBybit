@@ -2580,6 +2580,133 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode='HTML')
 
 
+async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /orders [LIMIT]
+    Mostra gli ultimi ordini chiusi con P&L da Bybit
+    """
+    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+        await update.message.reply_text(
+            '⚠️ API Bybit non configurate.\n'
+            'Configura BYBIT_API_KEY e BYBIT_API_SECRET nelle variabili d\'ambiente.'
+        )
+        return
+    
+    # Limita numero ordini da mostrare
+    args = context.args
+    limit = 10
+    if args and args[0].isdigit():
+        limit = min(int(args[0]), 50)  # Max 50 ordini
+    
+    await update.message.reply_text(f'🔍 Recupero ultimi {limit} ordini...')
+    
+    try:
+        session = create_bybit_session()
+        
+        # Ottieni closed P&L (ordini chiusi con profitti/perdite)
+        pnl_response = session.get_closed_pnl(
+            category='linear',
+            limit=limit
+        )
+        
+        logging.info(f'📊 Closed P&L response: {pnl_response}')
+        
+        if pnl_response.get('retCode') == 0:
+            result = pnl_response.get('result', {})
+            pnl_list = result.get('list', [])
+            
+            if not pnl_list:
+                await update.message.reply_text(
+                    '📭 <b>Nessun ordine chiuso trovato</b>\n\n'
+                    'Non ci sono ancora trade completati nel tuo account.',
+                    parse_mode='HTML'
+                )
+                return
+            
+            msg = f"📊 <b>Ultimi {len(pnl_list)} Ordini Chiusi ({TRADING_MODE.upper()})</b>\n\n"
+            
+            total_pnl = 0
+            win_count = 0
+            loss_count = 0
+            
+            for pnl_entry in pnl_list:
+                symbol = pnl_entry.get('symbol', 'N/A')
+                side = pnl_entry.get('side', 'N/A')
+                qty = float(pnl_entry.get('qty', 0))
+                avg_entry = float(pnl_entry.get('avgEntryPrice', 0))
+                avg_exit = float(pnl_entry.get('avgExitPrice', 0))
+                closed_pnl = float(pnl_entry.get('closedPnl', 0))
+                
+                # Timestamp chiusura (millisecondi)
+                updated_time = int(pnl_entry.get('updatedTime', 0))
+                close_time = datetime.fromtimestamp(updated_time / 1000, tz=timezone.utc)
+                time_str = close_time.strftime('%d/%m %H:%M')
+                
+                # Statistiche
+                total_pnl += closed_pnl
+                if closed_pnl > 0:
+                    win_count += 1
+                else:
+                    loss_count += 1
+                
+                # Emoji in base al risultato
+                side_emoji = "🟢" if side == 'Buy' else "🔴"
+                pnl_emoji = "✅" if closed_pnl > 0 else "❌"
+                
+                # Calcola P&L %
+                pnl_percent = 0
+                if avg_entry > 0:
+                    if side == 'Buy':
+                        pnl_percent = ((avg_exit - avg_entry) / avg_entry) * 100
+                    else:
+                        pnl_percent = ((avg_entry - avg_exit) / avg_entry) * 100
+                
+                msg += f"{side_emoji} <b>{symbol}</b> - {side}\n"
+                msg += f"  📦 Qty: {qty:.4f}\n"
+                msg += f"  📍 Entry: ${avg_entry:.4f}\n"
+                msg += f"  🚪 Exit: ${avg_exit:.4f}\n"
+                msg += f"  {pnl_emoji} P&L: ${closed_pnl:+.2f} ({pnl_percent:+.2f}%)\n"
+                msg += f"  🕐 {time_str}\n\n"
+            
+            # Statistiche finali
+            msg += "━━━━━━━━━━━━━━━━━━━\n\n"
+            msg += f"💰 <b>P&L Totale: ${total_pnl:+.2f}</b>\n"
+            msg += f"✅ Win: {win_count} | ❌ Loss: {loss_count}\n"
+            
+            if (win_count + loss_count) > 0:
+                win_rate = (win_count / (win_count + loss_count)) * 100
+                msg += f"📊 Win Rate: {win_rate:.1f}%\n"
+            
+            msg += f"\n💡 Usa /orders [numero] per vedere più ordini\n"
+            msg += f"Esempio: /orders 20"
+            
+            await update.message.reply_text(msg, parse_mode='HTML')
+        else:
+            error_code = pnl_response.get('retCode', 'N/A')
+            error_msg = pnl_response.get('retMsg', 'Errore sconosciuto')
+            
+            msg = f"❌ <b>Errore API Bybit</b>\n\n"
+            msg += f"Codice: {error_code}\n"
+            msg += f"Messaggio: {error_msg}\n\n"
+            
+            await update.message.reply_text(msg, parse_mode='HTML')
+            
+    except Exception as e:
+        logging.exception('Errore in cmd_orders')
+        
+        error_str = str(e)
+        msg = f"❌ <b>Errore nel recuperare gli ordini</b>\n\n"
+        msg += f"Dettagli: {error_str}\n\n"
+        
+        # Suggerimenti
+        if 'Invalid API' in error_str or 'authentication' in error_str.lower():
+            msg += "💡 Verifica le tue API keys:\n"
+            msg += "1. Hanno i permessi corretti?\n"
+            msg += "2. Non sono scadute?\n"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+
+
 async def cmd_analizza(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /analizza SYMBOL TIMEFRAME [autotrade]"""
     chat_id = update.effective_chat.id
@@ -2916,6 +3043,7 @@ def main():
     application.add_handler(CommandHandler('list', cmd_list))
     application.add_handler(CommandHandler('test', cmd_test))
     application.add_handler(CommandHandler('balance', cmd_balance))
+    application.add_handler(CommandHandler('orders', cmd_orders))
     application.add_handler(CommandHandler('pausa', cmd_pausa))
     application.add_handler(CommandHandler('abilita', cmd_abilita))
     application.add_handler(CommandHandler('posizioni', cmd_posizioni))
