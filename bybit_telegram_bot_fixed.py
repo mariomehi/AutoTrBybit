@@ -1950,6 +1950,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💼 <b>Comandi Trading:</b>\n"
         "/balance - Mostra saldo\n"
         "/posizioni - Posizioni aperte (sync Bybit)\n"
+        "/orders - Ordini chiusi con P&L\n"
         "/sync - Sincronizza tracking con Bybit\n"
         "/chiudi SYMBOL - Rimuovi posizione dal tracking\n\n"
         "🔍 <b>Comandi Debug:</b>\n"
