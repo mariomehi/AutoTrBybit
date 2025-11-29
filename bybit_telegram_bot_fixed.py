@@ -1207,6 +1207,37 @@ async def sync_positions_with_bybit():
         logging.exception('Errore in sync_positions_with_bybit')
         return False
 
+
+def calculate_position_size(entry_price: float, sl_price: float, risk_usd: float):
+    """
+    Calcola la quantità basata sul rischio in USD
+    Formula: Qty = Risk USD / |Entry - SL|
+    
+    Con limiti di sicurezza per evitare qty troppo grandi
+    """
+    risk_per_unit = abs(entry_price - sl_price)
+    if risk_per_unit == 0:
+        return 0
+    
+    qty = risk_usd / risk_per_unit
+    
+    # Limite massimo di sicurezza basato sul prezzo
+    # Per symbol a basso prezzo, limita qty massima
+    if entry_price < 1:
+        # Per coin sotto $1, max 10,000 contracts
+        max_qty = 10000
+    elif entry_price < 10:
+        # Per coin sotto $10, max 1,000 contracts
+        max_qty = 1000
+    else:
+        # Per coin normali, max 100 contracts
+        max_qty = 100
+    
+    qty = min(qty, max_qty)
+    
+    return float(max(0, qty))
+
+
 def calculate_ema_stop_loss(df: pd.DataFrame, timeframe: str, entry_price: float, side: str = 'Buy'):
     """
     Calcola stop loss basato su EMA invece che ATR
