@@ -1660,14 +1660,13 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     tp_price = last_close * 0.98
             
-            # Calcola position size
-            qty = calculate_position_size(last_close, sl_price, RISK_USD)
-            
             # Usa risk override se disponibile per questo symbol
             risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
             if risk_for_symbol != RISK_USD:
-                qty = calculate_position_size(last_close, sl_price, risk_for_symbol)
                 logging.info(f'💰 Using risk override for {symbol}: ${risk_for_symbol}')
+            
+            # Calcola position size
+            qty = calculate_position_size(last_close, sl_price, risk_for_symbol)
             
             # Verifica se esiste già una posizione
             position_exists = symbol in ACTIVE_POSITIONS
@@ -1686,7 +1685,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Se c'è analisi EMA, mostra quality
             if ema_analysis:
                 q_emoji = quality_emoji.get(ema_analysis['quality'], '⚪')
-                # CORREZIONE: emoji FUORI dai tag HTML
                 caption += f"{q_emoji} <b>Quality:</b> {ema_analysis['quality']} ({ema_analysis['score']}/100)\n\n"
             
             caption += (
@@ -1764,7 +1762,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             
             caption += f"\n\n💡 Modalità: Notifiche complete attive"
         
-        # Genera e invia il grafico
+        # Genera e invia il grafico UNA SOLA VOLTA
         try:
             chart_buffer = generate_chart(df, symbol, timeframe)
             
@@ -1786,171 +1784,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 text=f"⚠️ Errore nel grafico\n\n{caption}",
                 parse_mode='HTML'
             )
-
-    except Exception as e:
-        logging.exception(f'Errore in analyze_job per {symbol} {timeframe}')
-        # Invia errori solo se full mode attivo
-        # Ricontrolla perché full_mode potrebbe non essere in scope
-        try:
-            with FULL_NOTIFICATIONS_LOCK:
-                should_send_error = chat_id in FULL_NOTIFICATIONS and key in FULL_NOTIFICATIONS[chat_id]
-            
-            if should_send_error:
-                await context.bot.send_message(
-                    chat_id=chat_id, 
-                    text=f"❌ Errore nell'analisi di {symbol} {timeframe}: {str(e)}"
-                )
-        except:
-            # Se anche questo fallisce, logga e basta
-            logging.error(f'Impossibile inviare messaggio di errore per {symbol} {timeframe}')
-    """
-    Job che viene eseguito ad ogni chiusura candela
-    Se in pausa, invia grafico SOLO quando trova un pattern
-    """
-    job_ctx = context.job.data
-    chat_id = job_ctx['chat_id']
-    symbol = job_ctx['symbol']
-    timeframe = job_ctx['timeframe']
-    key = f'{symbol}-{timeframe}'
-
-
-    try:
-        # Ottieni dati
-        df = bybit_get_klines(symbol, timeframe, limit=200)
-        if df.empty:
-            logging.warning(f'Nessun dato per {symbol} {timeframe}')
-            if not is_paused:  # Invia errore solo se non in pausa
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f'⚠️ Nessun dato disponibile per {symbol} {timeframe}'
-                )
-            return
-
-        last_close = df['close'].iloc[-1]
-        last_time = df.index[-1]
-        
-        # Controlla pattern
-        found, side, pattern = check_patterns(df)
-        
-        # Se NON c'è pattern e NON siamo in full mode, skip completamente
-        if not found and not full_mode:
-            logging.debug(f'🔕 {symbol} {timeframe} - nessun pattern, skip notifica (default mode)')
-            return
-        
-        # Calcola ATR per eventuali SL/TP
-        atr_series = atr(df, period=14)
-        last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else np.nan
-        
-        # Prepara messaggio base
-        timestamp_str = last_time.strftime('%Y-%m-%d %H:%M UTC')
-        caption = (
-            f"📊 <b>{symbol}</b> ({timeframe})\n"
-            f"🕐 {timestamp_str}\n"
-            f"💵 Prezzo: ${last_close:.4f}\n"
-        )
-        
-        # Se c'è volume, mostralo
-        if VOLUME_FILTER:
-            vol = df['volume']
-            if len(vol) >= 21:
-                avg_vol = vol.iloc[-21:-1].mean()
-                current_vol = vol.iloc[-1]
-                vol_ratio = (current_vol / avg_vol) if avg_vol > 0 else 0
-                caption += f"📈 Volume: {vol_ratio:.2f}x media\n"
-        
-        # Se pattern trovato, aggiungi dettagli
-        if found:
-            logging.info(f'🎯 SEGNALE: {pattern} - {side} su {symbol} {timeframe}')
-            
-            # Calcola SL e TP
-            if not math.isnan(last_atr) and last_atr > 0:
-                if side == 'Buy':
-                    sl_price = last_close - last_atr * ATR_MULT_SL
-                    tp_price = last_close + last_atr * ATR_MULT_TP
-                else:
-                    sl_price = last_close + last_atr * ATR_MULT_SL
-                    tp_price = last_close - last_atr * ATR_MULT_TP
-            else:
-                # Fallback: usa low/high della candela
-                if side == 'Buy':
-                    sl_price = df['low'].iloc[-1]
-                    tp_price = last_close * 1.02
-                else:
-                    sl_price = df['high'].iloc[-1]
-                    tp_price = last_close * 0.98
-            
-            # Calcola position size
-            qty = calculate_position_size(last_close, sl_price, RISK_USD)
-            
-            # Usa risk override se disponibile per questo symbol
-            risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
-            if risk_for_symbol != RISK_USD:
-                qty = calculate_position_size(last_close, sl_price, risk_for_symbol)
-                logging.info(f'💰 Using risk override for {symbol}: ${risk_for_symbol}')
-            
-            # Verifica se esiste già una posizione
-            position_exists = symbol in ACTIVE_POSITIONS
-            
-            caption = (
-                f"🔥 <b>SEGNALE TROVATO!</b>\n\n"
-                f"📊 Pattern: <b>{pattern}</b>\n"
-                f"💹 Direzione: <b>{side}</b>\n"
-                f"🪙 {symbol} ({timeframe})\n"
-                f"🕐 {timestamp_str}\n\n"
-                f"💵 Prezzo Entry: ${last_close:.4f}\n"
-                f"🛑 Stop Loss: ${sl_price:.4f}\n"
-                f"🎯 Take Profit: ${tp_price:.4f}\n"
-                f"📦 Qty suggerita: {qty:.4f}\n"
-                f"💰 Rischio: ${RISK_USD}\n"
-                f"📏 R:R = {abs(tp_price-last_close)/abs(sl_price-last_close):.2f}:1"
-            )
-            
-            if position_exists:
-                caption += f"\n\n⚠️ <b>Posizione già aperta per {symbol}</b>"
-                caption += f"\nOrdine NON piazzato per evitare duplicati"
-            
-            # Piazza ordine se autotrade è abilitato E non esiste già posizione
-            if job_ctx.get('autotrade') and qty > 0 and not position_exists:
-                order_res = await place_bybit_order(symbol, side, qty, sl_price, tp_price)
-                
-                if 'error' in order_res:
-                    if order_res.get('error') == 'position_exists':
-                        caption += f"\n\n⚠️ Posizione già aperta, ordine saltato"
-                    else:
-                        caption += f"\n\n❌ Errore ordine: {order_res['error']}"
-                else:
-                    caption += f"\n\n✅ Ordine piazzato su Bybit {TRADING_MODE.upper()}"
-        else:
-            # Nessun pattern trovato
-            pause_emoji = "🔇" if full_mode else "⏳"
-            caption += f"\n{pause_emoji} Nessun pattern rilevato"
-            if not math.isnan(last_atr):
-                caption += f"\n📏 ATR(14): ${last_atr:.4f}"
-        
-        # SEMPRE genera e invia il grafico
-        try:
-            chart_buffer = generate_chart(df, symbol, timeframe)
-            
-            await context.bot.send_photo(
-                chat_id=chat_id, 
-                photo=chart_buffer, 
-                caption=caption,
-                parse_mode='HTML'
-            )
-            
-            status = '✅ '+pattern if found else ('🔇 Pausa' if full_mode else '❌ Nessuno')
-            logging.info(f"📸 Grafico inviato per {symbol} {timeframe} - Pattern: {status}")
-            
-        except Exception as e:
-            logging.error(f'Errore generazione/invio grafico: {e}')
-            # Se il grafico fallisce, invia almeno il testo
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"⚠️ Errore nel grafico\n\n{caption}",
-                parse_mode='HTML'
-            )
-
-# SOSTITUISCI il blocco except in analyze_job (circa riga 1940-1960)
 
     except Exception as e:
         logging.exception(f'Errore in analyze_job per {symbol} {timeframe}')
