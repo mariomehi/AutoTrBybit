@@ -512,6 +512,67 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str):
             details.append("🌟 Vicino EMA 223 (major support!)")
         else:
             conditions['near_ema223'] = False
+
+    # === BREAKOUT SCALPING (1m, 3m) - EMA 223 Breakout Detection ===
+    elif timeframe in ['1m', '3m']:
+        # Check se prezzo ha appena rotto EMA 223 al rialzo
+        
+        # 1. Prezzo deve essere APPENA sopra EMA 223 (entro 0.5%)
+        just_above_223 = (last_close > last_ema223 and 
+                         (last_close - last_ema223) / last_ema223 < 0.005)
+        
+        # 2. Verifica che nelle ultime 3 candele il prezzo ERA sotto EMA 223
+        was_below = False
+        if len(df) >= 4:
+            prev_closes = [df['close'].iloc[-2], df['close'].iloc[-3], df['close'].iloc[-4]]
+            prev_ema223 = [ema_223.iloc[-2], ema_223.iloc[-3], ema_223.iloc[-4]]
+            
+            # Almeno 2 delle 3 candele precedenti erano sotto EMA 223
+            below_count = sum(1 for c, e in zip(prev_closes, prev_ema223) if c < e)
+            was_below = below_count >= 2
+        
+        # 3. EMA 5 e 10 devono essere sopra EMA 223 (conferma momentum)
+        ema_aligned = last_ema5 > last_ema223 and last_ema10 > last_ema223
+        
+        # RILEVAMENTO BREAKOUT
+        if just_above_223 and was_below and ema_aligned:
+            # 🚀 BREAKOUT CONFERMATO!
+            conditions['breakout_ema223'] = True
+            score = 100  # Score massimo automatico
+            details.append("🚀 BREAKOUT EMA 223 CONFERMATO!")
+            details.append("✅ Prezzo ha rotto EMA 223 al rialzo")
+            details.append("✅ EMA 5 e 10 sopra EMA 223")
+            details.append("✅ Setup ad alta probabilità")
+        else:
+            # Setup normale per 1m/3m
+            # MUST: Prezzo sopra EMA 223
+            if last_close > last_ema223:
+                conditions['price_above_ema223'] = True
+                score += 40
+                details.append("✅ Prezzo > EMA 223")
+            else:
+                conditions['price_above_ema223'] = False
+                score -= 30
+                details.append("❌ Prezzo < EMA 223")
+            
+            # BONUS: EMA 5 e 10 sopra EMA 223
+            if last_ema5 > last_ema223 and last_ema10 > last_ema223:
+                conditions['ema_above_223'] = True
+                score += 30
+                details.append("✅ EMA 5,10 > EMA 223 (momentum)")
+            else:
+                conditions['ema_above_223'] = False
+                score += 10
+                details.append("⚠️ EMA non tutte sopra 223")
+            
+            # GOLD: Pattern molto vicino a EMA 223 (bounce)
+            distance_to_ema223 = abs(last_close - last_ema223) / last_ema223
+            if distance_to_ema223 < 0.003:  # Entro 0.3%
+                conditions['near_ema223'] = True
+                score += 30
+                details.append("🌟 Vicino EMA 223 (bounce zone!)")
+            else:
+                conditions['near_ema223'] = False
     
     # Normalizza score tra 0-100
     score = max(0, min(100, score))
