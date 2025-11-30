@@ -1717,11 +1717,11 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             
             caption = "🔥 <b>SEGNALE BUY</b>\n\n"
             
-            # MOSTRA EMA QUALITY SEMPRE in cima
+            # MOSTRA EMA QUALITY SEMPRE in cima - EMOJI FUORI DAI TAG
             if ema_analysis:
                 q_emoji = quality_emoji_map.get(ema_analysis['quality'], '⚪')
-                caption += f"{q_emoji} <b>EMA Quality: {ema_analysis['quality']}</b>\n"
-                caption += f"Score: {ema_analysis['score']}/100\n\n"
+                caption += f"{q_emoji} <b>EMA Quality:</b> {ema_analysis['quality']}\n"
+                caption += f"<b>Score:</b> {ema_analysis['score']}/100\n\n"
             
             # Pattern info
             caption += f"📊 <b>Pattern:</b> {pattern}\n"
