@@ -414,98 +414,98 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str):
     score = 0
     details = []
     
-# SCALPING (5m, 15m)
-if timeframe in ['5m', '15m']:
-    if rules.get('price_above_ema10'):
-        if last_close > last_ema10:
-            conditions['price_above_ema10'] = True
-            score += 40
-            details.append("Prezzo maggiore EMA 10")  # ✅ NO emoji
-        else:
-            conditions['price_above_ema10'] = False
-            score -= 30
-            details.append("Prezzo minore EMA 10")  # ✅ NO emoji
-    
-    if rules.get('ema5_above_ema10'):
-        if last_ema5 > last_ema10:
-            conditions['ema5_above_ema10'] = True
+    # SCALPING (5m, 15m)
+    if timeframe in ['5m', '15m']:
+        if rules.get('price_above_ema10'):
+            if last_close > last_ema10:
+                conditions['price_above_ema10'] = True
+                score += 40
+                details.append("Prezzo maggiore EMA 10")  # ✅ NO emoji
+            else:
+                conditions['price_above_ema10'] = False
+                score -= 30
+                details.append("Prezzo minore EMA 10")  # ✅ NO emoji
+        
+        if rules.get('ema5_above_ema10'):
+            if last_ema5 > last_ema10:
+                conditions['ema5_above_ema10'] = True
+                score += 30
+                details.append("EMA 5 maggiore EMA 10 (momentum)")  # ✅ NO emoji
+            else:
+                conditions['ema5_above_ema10'] = False
+                score += 10
+                details.append("EMA 5 minore EMA 10")  # ✅ NO emoji
+        
+        distance_to_ema10 = abs(last_close - last_ema10) / last_ema10
+        if distance_to_ema10 < 0.005:
+            conditions['near_ema10'] = True
             score += 30
-            details.append("EMA 5 maggiore EMA 10 (momentum)")  # ✅ NO emoji
+            details.append("Vicino EMA 10 - pullback zone")  # ✅ NO emoji
         else:
-            conditions['ema5_above_ema10'] = False
-            score += 10
-            details.append("EMA 5 minore EMA 10")  # ✅ NO emoji
+            conditions['near_ema10'] = False
     
-    distance_to_ema10 = abs(last_close - last_ema10) / last_ema10
-    if distance_to_ema10 < 0.005:
-        conditions['near_ema10'] = True
-        score += 30
-        details.append("Vicino EMA 10 - pullback zone")  # ✅ NO emoji
-    else:
-        conditions['near_ema10'] = False
-    
-# DAY TRADING (30m, 1h)
-elif timeframe in ['30m', '1h']:
-    if rules.get('price_above_ema60'):
-        if last_close > last_ema60:
-            conditions['price_above_ema60'] = True
-            score += 40
-            details.append("Prezzo maggiore EMA 60")
-        else:
-            conditions['price_above_ema60'] = False
-            score -= 30
-            details.append("Prezzo minore EMA 60")
-    
-    if rules.get('ema10_above_ema60'):
-        if last_ema10 > last_ema60:
-            conditions['ema10_above_ema60'] = True
+    # DAY TRADING (30m, 1h)
+    elif timeframe in ['30m', '1h']:
+        if rules.get('price_above_ema60'):
+            if last_close > last_ema60:
+                conditions['price_above_ema60'] = True
+                score += 40
+                details.append("Prezzo maggiore EMA 60")
+            else:
+                conditions['price_above_ema60'] = False
+                score -= 30
+                details.append("Prezzo minore EMA 60")
+        
+        if rules.get('ema10_above_ema60'):
+            if last_ema10 > last_ema60:
+                conditions['ema10_above_ema60'] = True
+                score += 30
+                details.append("EMA 10 maggiore EMA 60 (trend ok)")
+            else:
+                conditions['ema10_above_ema60'] = False
+                score += 10
+                details.append("EMA 10 minore EMA 60")
+        
+        distance_to_ema60 = abs(last_close - last_ema60) / last_ema60
+        if distance_to_ema60 < 0.01:
+            conditions['near_ema60'] = True
             score += 30
-            details.append("EMA 10 maggiore EMA 60 (trend ok)")
+            details.append("Vicino EMA 60 - bounce zone")
         else:
-            conditions['ema10_above_ema60'] = False
-            score += 10
-            details.append("EMA 10 minore EMA 60")
+            conditions['near_ema60'] = False
     
-    distance_to_ema60 = abs(last_close - last_ema60) / last_ema60
-    if distance_to_ema60 < 0.01:
-        conditions['near_ema60'] = True
-        score += 30
-        details.append("Vicino EMA 60 - bounce zone")
-    else:
-        conditions['near_ema60'] = False
-    
-# SWING (4h)
-elif timeframe in ['4h']:
-    if rules.get('price_above_ema223'):
-        if last_close > last_ema223:
-            conditions['price_above_ema223'] = True
-            score += 40
-            details.append("Prezzo maggiore EMA 223 (bull market)")
-        else:
-            conditions['price_above_ema223'] = False
-            score -= 30
-            details.append("Prezzo minore EMA 223 (bear market)")
-    
-    if rules.get('ema60_above_ema223'):
-        if last_ema60 > last_ema223:
-            conditions['ema60_above_ema223'] = True
+    # SWING (4h)
+    elif timeframe in ['4h']:
+        if rules.get('price_above_ema223'):
+            if last_close > last_ema223:
+                conditions['price_above_ema223'] = True
+                score += 40
+                details.append("Prezzo maggiore EMA 223 (bull market)")
+            else:
+                conditions['price_above_ema223'] = False
+                score -= 30
+                details.append("Prezzo minore EMA 223 (bear market)")
+        
+        if rules.get('ema60_above_ema223'):
+            if last_ema60 > last_ema223:
+                conditions['ema60_above_ema223'] = True
+                score += 30
+                details.append("EMA 60 maggiore EMA 223 (strong trend)")
+            else:
+                conditions['ema60_above_ema223'] = False
+                score += 10
+                details.append("EMA 60 minore EMA 223")
+        
+        distance_to_ema223 = abs(last_close - last_ema223) / last_ema223
+        if distance_to_ema223 < 0.02:
+            conditions['near_ema223'] = True
             score += 30
-            details.append("EMA 60 maggiore EMA 223 (strong trend)")
+            details.append("Vicino EMA 223 - major support")
         else:
-            conditions['ema60_above_ema223'] = False
-            score += 10
-            details.append("EMA 60 minore EMA 223")
-    
-    distance_to_ema223 = abs(last_close - last_ema223) / last_ema223
-    if distance_to_ema223 < 0.02:
-        conditions['near_ema223'] = True
-        score += 30
-        details.append("Vicino EMA 223 - major support")
-    else:
-        conditions['near_ema223'] = False
+            conditions['near_ema223'] = False
 
-# BREAKOUT (1m, 3m)
-elif timeframe in ['1m', '3m']:
+    # BREAKOUT (1m, 3m)
+    elif timeframe in ['1m', '3m']:
         # Check se prezzo ha appena rotto EMA 223 al rialzo
         
         # 1. Prezzo deve essere APPENA sopra EMA 223 (entro 0.5%)
