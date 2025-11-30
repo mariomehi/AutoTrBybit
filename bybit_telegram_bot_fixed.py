@@ -1757,6 +1757,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
             qty = calculate_position_size(last_close, sl_price, risk_for_symbol)
             position_exists = symbol in ACTIVE_POSITIONS
+
+            # ===== AGGIUNGI QUESTA RIGA =====
+            price_decimals = get_price_decimals(last_close)
+            # ================================
             
             # === COSTRUISCI CAPTION ===
             quality_emoji_map = {
