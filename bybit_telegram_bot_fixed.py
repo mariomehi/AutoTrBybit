@@ -1778,35 +1778,36 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             
             caption = "🔥 <b>SEGNALE BUY</b>\n\n"
             
-            # MOSTRA EMA QUALITY SEMPRE in cima - EMOJI FUORI DAI TAG
+            # MOSTRA EMA QUALITY - CORRETTO
             if ema_analysis:
                 q_emoji = quality_emoji_map.get(ema_analysis['quality'], '⚪')
-                caption += f"{q_emoji} <b>EMA Quality:</b> {ema_analysis['quality']}\n"
-                caption += f"<b>Score:</b> {ema_analysis['score']}/100\n\n"
+                # EMOJI SEMPRE FUORI dai tag
+                caption += f"{q_emoji} EMA Quality: <b>{ema_analysis['quality']}</b>\n"
+                caption += f"Score: <b>{ema_analysis['score']}/100</b>\n\n"
             
             # Pattern info
-            caption += f"📊 <b>Pattern:</b> {pattern}\n"
-            caption += f"🪙 <b>Symbol:</b> {symbol} ({timeframe})\n"
+            caption += f"📊 Pattern: <b>{pattern}</b>\n"
+            caption += f"🪙 Symbol: <b>{symbol}</b> ({timeframe})\n"
             caption += f"🕐 {timestamp_str}\n\n"
             
-            # Trading params
-            caption += f"💵 <b>Entry:</b> ${last_close:.4f}\n"
+            # Trading params CON DECIMALI DINAMICI
+            caption += f"💵 Entry: <b>${last_close:.{price_decimals}f}</b>\n"
             
             if USE_EMA_STOP_LOSS:
-                caption += f"🛑 <b>Stop Loss:</b> ${sl_price:.4f}\n"
-                caption += f"   (sotto {ema_used}"
+                caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
+                caption += f"   sotto {ema_used}"
                 if isinstance(ema_value, (int, float)) and ema_value > 0:
-                    caption += f" = ${ema_value:.4f}"
-                caption += ")\n"
+                    caption += f" = ${ema_value:.{price_decimals}f}"
+                caption += "\n"
             else:
-                caption += f"🛑 <b>Stop Loss:</b> ${sl_price:.4f} ({ema_used})\n"
+                caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b> ({ema_used})\n"
             
-            caption += f"🎯 <b>Take Profit:</b> ${tp_price:.4f}\n"
-            caption += f"📦 <b>Qty:</b> {qty:.4f}\n"
-            caption += f"💰 <b>Risk:</b> ${risk_for_symbol}\n"
+            caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
+            caption += f"📦 Qty: <b>{qty:.4f}</b>\n"
+            caption += f"💰 Risk: <b>${risk_for_symbol}</b>\n"
             
             rr = abs(tp_price - last_close) / abs(sl_price - last_close) if abs(sl_price - last_close) > 0 else 0
-            caption += f"📏 <b>R:R:</b> {rr:.2f}:1\n"
+            caption += f"📏 R:R: <b>{rr:.2f}:1</b>\n"
             
             # Volume
             if VOLUME_FILTER:
@@ -1817,10 +1818,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     vol_ratio = (current_vol / avg_vol) if avg_vol > 0 else 0
                     caption += f"📊 <b>Volume:</b> {vol_ratio:.2f}x\n"
             
-            # === DETTAGLI EMA COMPLETI ===
+            # === DETTAGLI EMA ===
             if ema_analysis:
                 caption += "\n━━━━━━━━━━━━━━━━━━━\n"
-                caption += "📈 <b>EMA Analysis:</b>\n\n"
+                caption += "📈 <b>EMA Analysis</b>\n\n"
                 caption += ema_analysis['details']
                 
             # Valori EMA CON DECIMALI DINAMICI
