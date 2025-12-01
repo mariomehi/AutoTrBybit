@@ -1702,10 +1702,29 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 return  # STOP QUI - Non cerca pattern
             
-            # LOOSE MODE: Avvisa ma continua
+            # LOOSE MODE: Blocca se score < 40
             elif EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
-                logging.warning(f'⚠️ {symbol} {timeframe} - EMA LOOSE warning (score {ema_analysis["score"]}/100). Continue pattern search.')
-                # pattern_search_allowed rimane True
+                pattern_search_allowed = False  # BLOCCA anche in loose se score < 40
+                logging.warning(f'🚫 {symbol} {timeframe} - EMA LOOSE BLOCK (score {ema_analysis["score"]}/100). Skip pattern search.')
+                
+                # Se full mode, invia comunque analisi
+                if full_mode:
+                    caption = f"📊 <b>{symbol}</b> ({timeframe})\n"
+                    caption += f"🕐 {timestamp_str}\n"
+                    caption += f"💵 Price: ${last_close:.{price_decimals}f}\n\n"
+                    caption += f"⚠️ <b>EMA Score troppo basso (Loose mode)</b>\n\n"
+                    caption += f"Score EMA: {ema_analysis['score']}/100\n"
+                    caption += f"Quality: {ema_analysis['quality']}\n\n"
+                    caption += f"Minimo richiesto in LOOSE: 40/100\n"
+                    caption += f"Attendi miglioramento condizioni."
+                    
+                    try:
+                        chart_buffer = generate_chart(df, symbol, timeframe)
+                        await context.bot.send_photo(chat_id=chat_id, photo=chart_buffer, caption=caption, parse_mode='HTML')
+                    except:
+                        await context.bot.send_message(chat_id=chat_id, text=caption, parse_mode='HTML')
+                
+                return  # STOP - Non cerca pattern
         
         # ===== STEP 3: CERCA PATTERN (solo se EMA permette) =====
         found = False
