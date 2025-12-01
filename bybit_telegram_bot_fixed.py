@@ -1112,82 +1112,62 @@ def is_bullish_flag_breakout(df: pd.DataFrame):
     STRUTTURA:
     1. Grande candela verde (pole/flagpole) - HIGH = X
     2. 2-4 candele di consolidamento che NON superano X
-       (possono essere rosse o verdi piccole)
     3. Candela verde finale che ROMPE X al rialzo (breakout)
     
     ENTRY: Al breakout di X (high della prima candela)
+    SL: Sotto il minimo del consolidamento
+    TP: X + (altezza pole * 1.5)
     
-    Esempio:
-    Candela 1: Open $100, Close $105, High $106 (X = $106)
-    Candele 2-4: Tutte con High < $106 (consolidamento)
-    Candela 5: Close > $106 (BREAKOUT!)
-    
-    Returns: True se pattern rilevato
+    Returns: (found: bool, data: dict or None)
     """
-    if len(df) < 4:  # Minimo: 1 pole + 2 consolidamento + 1 breakout
-        return False
+    if len(df) < 4:
+        return (False, None)
     
-    # Candele da analizzare (ultime 6 per avere margine)
-    last = df.iloc[-1]      # Candela corrente (potenziale breakout)
-    prev1 = df.iloc[-2]     # Consolidamento 3
-    prev2 = df.iloc[-3]     # Consolidamento 2
-    prev3 = df.iloc[-4]     # Consolidamento 1
-    pole = df.iloc[-5]      # Pole (prima candela verde grande)
+    last = df.iloc[-1]
+    prev1 = df.iloc[-2]
+    prev2 = df.iloc[-3]
+    prev3 = df.iloc[-4]
+    pole = df.iloc[-5]
     
-    # === STEP 1: POLE (candela iniziale verde e forte) ===
-    
+    # === STEP 1: POLE ===
     pole_is_bullish = pole['close'] > pole['open']
     pole_body = abs(pole['close'] - pole['open'])
     pole_range = pole['high'] - pole['low']
-    
-    # Corpo deve essere almeno 60% del range (candela decisa)
     pole_strong = (pole_body / pole_range) > 0.6 if pole_range > 0 else False
-    
-    # Il corpo deve essere significativo (almeno 0.5% del prezzo)
     pole_significant = pole_body > pole['close'] * 0.005
     
     if not (pole_is_bullish and pole_strong and pole_significant):
-        return False
+        return (False, None)
     
-    # X = High della pole
     X = pole['high']
+    pole_height = pole['close'] - pole['low']  # Altezza pole per TP
     
-    # === STEP 2: CONSOLIDAMENTO (2-4 candele che NON superano X) ===
-    
+    # === STEP 2: CONSOLIDAMENTO ===
     consolidation_candles = [prev3, prev2, prev1]
-    
-    # Tutte le candele di consolidamento NON devono superare X
-    all_below_X = all(candle['high'] <= X * 1.002 for candle in consolidation_candles)  # Tolleranza 0.2%
+    all_below_X = all(candle['high'] <= X * 1.002 for candle in consolidation_candles)
     
     if not all_below_X:
-        return False
+        return (False, None)
     
-    # Le candele di consolidamento devono essere PICCOLE rispetto alla pole
     consolidation_bodies = [abs(c['close'] - c['open']) for c in consolidation_candles]
     avg_consolidation_body = sum(consolidation_bodies) / len(consolidation_bodies)
-    
-    # Media consolidamento deve essere < 50% della pole
     consolidation_small = avg_consolidation_body < pole_body * 0.5
     
     if not consolidation_small:
-        return False
+        return (False, None)
     
-    # === STEP 3: BREAKOUT (candela corrente rompe X) ===
+    # Minimo del consolidamento (per SL)
+    consolidation_low = min(c['low'] for c in consolidation_candles)
     
+    # === STEP 3: BREAKOUT ===
     last_is_bullish = last['close'] > last['open']
-    
-    # Chiusura deve superare X (high della pole)
     breaks_X = last['close'] > X
-    
-    # Corpo della breakout deve essere decente (almeno 40% del range)
     last_body = abs(last['close'] - last['open'])
     last_range = last['high'] - last['low']
     last_strong = (last_body / last_range) > 0.4 if last_range > 0 else False
-    
-    # Il breakout deve essere significativo (almeno 0.3% sopra X)
     significant_breakout = last['close'] > X * 1.003
     
-    # === VOLUME (opzionale ma consigliato) ===
+    # === VOLUME ===
     volume_ok = True
     if 'volume' in df.columns:
         vol = df['volume']
@@ -1195,27 +1175,33 @@ def is_bullish_flag_breakout(df: pd.DataFrame):
             pole_vol = vol.iloc[-5]
             breakout_vol = vol.iloc[-1]
             avg_consolidation_vol = (vol.iloc[-4] + vol.iloc[-3] + vol.iloc[-2]) / 3
-            
-            # Volume breakout deve essere > media consolidamento
-            # E preferibilmente vicino al volume della pole
             volume_ok = (breakout_vol > avg_consolidation_vol * 1.2 and
                         breakout_vol > pole_vol * 0.6)
     
-    # === VALIDAZIONE FINALE ===
-    return (last_is_bullish and 
-            breaks_X and 
-            last_strong and 
-            significant_breakout and
-            volume_ok)
+    # === VALIDAZIONE ===
+    if (last_is_bullish and breaks_X and last_strong and 
+        significant_breakout and volume_ok):
+        
+        # RITORNA dati per entry/SL/TP custom
+        pattern_data = {
+            'X': X,  # Breakout level (entry ideale)
+            'pole_height': pole_height,  # Per calcolare TP
+            'consolidation_low': consolidation_low,  # Per SL
+            'current_price': last['close']
+        }
+        
+        return (True, pattern_data)
+    
+    return (False, None)
 
 
 def check_patterns(df: pd.DataFrame):
     """
     Controlla tutti i pattern ABILITATI
-    Returns: (found: bool, side: str, pattern_name: str)
+    Returns: (found: bool, side: str, pattern_name: str, pattern_data: dict or None)
     """
     if len(df) < 6:
-        return (False, None, None)
+        return (False, None, None, None)
     
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -1223,40 +1209,41 @@ def check_patterns(df: pd.DataFrame):
 
     # ===== PATTERN BUY =====
     
-    # Bullish Comeback (controlla per primo perché più specifico)
+    # Bullish Comeback
     if AVAILABLE_PATTERNS['bullish_comeback']['enabled']:
         if is_bullish_comeback(df):
-            return (True, 'Buy', 'Bullish Comeback')
-
-    # Compression Breakout (molto specifico, alta priorità)
+            return (True, 'Buy', 'Bullish Comeback', None)
+    
+    # Compression Breakout
     if AVAILABLE_PATTERNS['compression_breakout']['enabled']:
         if is_compression_breakout(df):
-            return (True, 'Buy', 'Compression Breakout')
-
-    # 👇 AGGIUNGI QUI - Bullish Flag Breakout (alta priorità)
+            return (True, 'Buy', 'Compression Breakout', None)
+    
+    # Bullish Flag Breakout (CON DATI CUSTOM)
     if AVAILABLE_PATTERNS['bullish_flag_breakout']['enabled']:
-        if is_bullish_flag_breakout(df):
-            return (True, 'Buy', 'Bullish Flag Breakout')
+        found, flag_data = is_bullish_flag_breakout(df)
+        if found:
+            return (True, 'Buy', 'Bullish Flag Breakout', flag_data)
     
     # Bullish Engulfing
     if AVAILABLE_PATTERNS['bullish_engulfing']['enabled']:
         if is_bullish_engulfing(prev, last):
-            return (True, 'Buy', 'Bullish Engulfing')
+            return (True, 'Buy', 'Bullish Engulfing', None)
     
     # Bearish Engulfing (SELL)
     if AVAILABLE_PATTERNS['bearish_engulfing']['enabled']:
         if is_bearish_engulfing(prev, last):
-            return (True, 'Sell', 'Bearish Engulfing')
+            return (True, 'Sell', 'Bearish Engulfing', None)
     
     # Hammer
     if AVAILABLE_PATTERNS['hammer']['enabled']:
         if is_hammer(last):
-            return (True, 'Buy', 'Hammer')
+            return (True, 'Buy', 'Hammer', None)
     
     # Shooting Star (SELL)
     if AVAILABLE_PATTERNS['shooting_star']['enabled']:
         if is_shooting_star(last):
-            return (True, 'Sell', 'Shooting Star')
+            return (True, 'Sell', 'Shooting Star', None)
     
     # Pin bar
     if AVAILABLE_PATTERNS['pin_bar_bullish']['enabled'] or AVAILABLE_PATTERNS['pin_bar_bearish']['enabled']:
@@ -1267,42 +1254,42 @@ def check_patterns(df: pd.DataFrame):
             if lower_wick > upper_wick:
                 # Pin bar bullish
                 if AVAILABLE_PATTERNS['pin_bar_bullish']['enabled']:
-                    return (True, 'Buy', 'Pin Bar Bullish')
+                    return (True, 'Buy', 'Pin Bar Bullish', None)
             else:
                 # Pin bar bearish
                 if AVAILABLE_PATTERNS['pin_bar_bearish']['enabled']:
-                    return (True, 'Sell', 'Pin Bar Bearish')
+                    return (True, 'Sell', 'Pin Bar Bearish', None)
     
     # Doji
     if AVAILABLE_PATTERNS['doji']['enabled']:
         if is_doji(last):
             # Il doji può essere sia BUY che SELL a seconda del trend
             if prev['close'] > prev['open']:
-                return (True, 'Sell', 'Doji (reversione)')
+                return (True, 'Sell', 'Doji (reversione)', None)
             else:
-                return (True, 'Buy', 'Doji (reversione)')
+                return (True, 'Buy', 'Doji (reversione)', None)
     
     # Morning Star
     if AVAILABLE_PATTERNS['morning_star']['enabled']:
         if is_morning_star(prev2, prev, last):
-            return (True, 'Buy', 'Morning Star')
+            return (True, 'Buy', 'Morning Star', None)
     
     # Evening Star (SELL)
     if AVAILABLE_PATTERNS['evening_star']['enabled']:
         if is_evening_star(prev2, prev, last):
-            return (True, 'Sell', 'Evening Star')
+            return (True, 'Sell', 'Evening Star', None)
     
     # Three White Soldiers
     if AVAILABLE_PATTERNS['three_white_soldiers']['enabled']:
         if is_three_white_soldiers(prev2, prev, last):
-            return (True, 'Buy', 'Three White Soldiers')
+            return (True, 'Buy', 'Three White Soldiers', None)
     
     # Three Black Crows (SELL)
     if AVAILABLE_PATTERNS['three_black_crows']['enabled']:
         if is_three_black_crows(prev2, prev, last):
-            return (True, 'Sell', 'Three Black Crows')
+            return (True, 'Sell', 'Three Black Crows', None)
     
-    return (False, None, None)
+    return (False, None, None, None)
 
 
 async def get_open_positions_from_bybit(symbol: str = None):
@@ -1901,9 +1888,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         found = False
         side = None
         pattern = None
+        pattern_data = None  # 👈 AGGIUNGI
         
         if pattern_search_allowed:
-            found, side, pattern = check_patterns(df)
+            found, side, pattern, pattern_data = check_patterns(df)  # 👈 MODIFICA
             
             if found:
                 logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
@@ -1950,33 +1938,56 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 return  # BLOCCA segnale
             
-            # Calcola SL
-            if USE_EMA_STOP_LOSS:
-                sl_price, ema_used, ema_value = calculate_ema_stop_loss(df, timeframe, last_close, side)
+            # === CALCOLA SL/TP CUSTOM per Bullish Flag Breakout ===
+            if pattern == 'Bullish Flag Breakout' and pattern_data:
+                # Entry al breakout level X
+                entry_price = pattern_data['X']
+                
+                # Stop Loss: Sotto il minimo del consolidamento con buffer
+                sl_price = pattern_data['consolidation_low'] * 0.998  # Buffer 0.2%
+                
+                # Take Profit: X + (1.5 × altezza pole)
+                tp_price = pattern_data['X'] + (pattern_data['pole_height'] * 1.5)
+                
+                ema_used = 'Flag Pattern'
+                ema_value = pattern_data['consolidation_low']
+                
+                logging.info(f'🚩 Flag Breakout Custom Levels:')
+                logging.info(f'   X (breakout): ${entry_price:.4f}')
+                logging.info(f'   Entry: ${entry_price:.4f}')
+                logging.info(f'   SL: ${sl_price:.4f} (consolidation low)')
+                logging.info(f'   TP: ${tp_price:.4f} (1.5x pole height)')
+            
             else:
-                if not math.isnan(last_atr) and last_atr > 0:
-                    sl_price = last_close - last_atr * ATR_MULT_SL
-                    ema_used = 'ATR'
-                    ema_value = last_atr
+                # === LOGICA STANDARD per altri pattern ===
+                entry_price = last_close
+                
+                # Calcola SL basato su EMA o ATR
+                if USE_EMA_STOP_LOSS:
+                    sl_price, ema_used, ema_value = calculate_ema_stop_loss(df, timeframe, last_close, side)
                 else:
-                    sl_price = df['low'].iloc[-1]
-                    ema_used = 'Low'
-                    ema_value = 0
+                    if not math.isnan(last_atr) and last_atr > 0:
+                        sl_price = last_close - last_atr * ATR_MULT_SL
+                        ema_used = 'ATR'
+                        ema_value = last_atr
+                    else:
+                        sl_price = df['low'].iloc[-1]
+                        ema_used = 'Low'
+                        ema_value = 0
+                
+                # Calcola TP
+                if not math.isnan(last_atr) and last_atr > 0:
+                    tp_price = last_close + last_atr * ATR_MULT_TP
+                else:
+                    tp_price = last_close * 1.02
             
-            # Calcola TP
-            if not math.isnan(last_atr) and last_atr > 0:
-                tp_price = last_close + last_atr * ATR_MULT_TP
-            else:
-                tp_price = last_close * 1.02
-            
-            # Risk e Qty
+            # Risk e Qty (usa entry_price invece di last_close)
             risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
-            qty = calculate_position_size(last_close, sl_price, risk_for_symbol)
+            qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
             position_exists = symbol in ACTIVE_POSITIONS
-
-            # ===== AGGIUNGI QUESTA RIGA =====
-            price_decimals = get_price_decimals(last_close)
-            # ================================
+            
+            # Decimali
+            price_decimals = get_price_decimals(entry_price)
             
             # === COSTRUISCI CAPTION ===
             quality_emoji_map = {
@@ -1989,35 +2000,47 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             
             caption = "🔥 <b>SEGNALE BUY</b>\n\n"
             
-            # MOSTRA EMA QUALITY - CORRETTO
+            # EMA QUALITY
             if ema_analysis:
                 q_emoji = quality_emoji_map.get(ema_analysis['quality'], '⚪')
-                # EMOJI SEMPRE FUORI dai tag
                 caption += f"{q_emoji} EMA Quality: <b>{ema_analysis['quality']}</b>\n"
                 caption += f"Score: <b>{ema_analysis['score']}/100</b>\n\n"
             
             # Pattern info
             caption += f"📊 Pattern: <b>{pattern}</b>\n"
+            
+            # Se Flag Breakout, aggiungi info X
+            if pattern == 'Bullish Flag Breakout' and pattern_data:
+                caption += f"🚩 Breakout Level X: <b>${pattern_data['X']:.{price_decimals}f}</b>\n"
+            
             caption += f"🪙 Symbol: <b>{symbol}</b> ({timeframe})\n"
             caption += f"🕐 {timestamp_str}\n\n"
             
-            # Trading params CON DECIMALI DINAMICI
-            caption += f"💵 Entry: <b>${last_close:.{price_decimals}f}</b>\n"
+            # Trading params
+            caption += f"💵 Entry: <b>${entry_price:.{price_decimals}f}</b>\n"
             
-            if USE_EMA_STOP_LOSS:
+            if pattern == 'Bullish Flag Breakout' and pattern_data:
                 caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
-                caption += f"   sotto {ema_used}"
-                if isinstance(ema_value, (int, float)) and ema_value > 0:
-                    caption += f" = ${ema_value:.{price_decimals}f}"
-                caption += "\n"
+                caption += f"   (sotto consolidamento = ${pattern_data['consolidation_low']:.{price_decimals}f})\n"
+                caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
+                caption += f"   (1.5x pole height = ${pattern_data['pole_height']:.{price_decimals}f})\n"
             else:
-                caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b> ({ema_used})\n"
+                # Standard SL/TP display
+                if USE_EMA_STOP_LOSS:
+                    caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
+                    caption += f"   sotto {ema_used}"
+                    if isinstance(ema_value, (int, float)) and ema_value > 0:
+                        caption += f" = ${ema_value:.{price_decimals}f}"
+                    caption += "\n"
+                else:
+                    caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b> ({ema_used})\n"
+                
+                caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
             
-            caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
             caption += f"📦 Qty: <b>{qty:.4f}</b>\n"
             caption += f"💰 Risk: <b>${risk_for_symbol}</b>\n"
             
-            rr = abs(tp_price - last_close) / abs(sl_price - last_close) if abs(sl_price - last_close) > 0 else 0
+            rr = abs(tp_price - entry_price) / abs(sl_price - entry_price) if abs(sl_price - entry_price) > 0 else 0
             caption += f"📏 R:R: <b>{rr:.2f}:1</b>\n"
             
             # Volume
