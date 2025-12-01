@@ -141,6 +141,13 @@ AVAILABLE_PATTERNS = {
         'side': 'Buy',
         'emoji': '💥'
     },
+    'bullish_flag_breakout': {  # 👈 NUOVO
+        'name': 'Bullish Flag Breakout',
+        'enabled': True,
+        'description': 'Breakout dopo consolidamento (flag pattern)',
+        'side': 'Buy',
+        'emoji': '🚩'
+    },
     'bullish_engulfing': {
         'name': 'Bullish Engulfing',
         'enabled': True,
@@ -1098,6 +1105,110 @@ def is_compression_breakout(df: pd.DataFrame):
     return has_confirmation
 
 
+def is_bullish_flag_breakout(df: pd.DataFrame):
+    """
+    Pattern: Bullish Flag Breakout
+    
+    STRUTTURA:
+    1. Grande candela verde (pole/flagpole) - HIGH = X
+    2. 2-4 candele di consolidamento che NON superano X
+       (possono essere rosse o verdi piccole)
+    3. Candela verde finale che ROMPE X al rialzo (breakout)
+    
+    ENTRY: Al breakout di X (high della prima candela)
+    
+    Esempio:
+    Candela 1: Open $100, Close $105, High $106 (X = $106)
+    Candele 2-4: Tutte con High < $106 (consolidamento)
+    Candela 5: Close > $106 (BREAKOUT!)
+    
+    Returns: True se pattern rilevato
+    """
+    if len(df) < 4:  # Minimo: 1 pole + 2 consolidamento + 1 breakout
+        return False
+    
+    # Candele da analizzare (ultime 6 per avere margine)
+    last = df.iloc[-1]      # Candela corrente (potenziale breakout)
+    prev1 = df.iloc[-2]     # Consolidamento 3
+    prev2 = df.iloc[-3]     # Consolidamento 2
+    prev3 = df.iloc[-4]     # Consolidamento 1
+    pole = df.iloc[-5]      # Pole (prima candela verde grande)
+    
+    # === STEP 1: POLE (candela iniziale verde e forte) ===
+    
+    pole_is_bullish = pole['close'] > pole['open']
+    pole_body = abs(pole['close'] - pole['open'])
+    pole_range = pole['high'] - pole['low']
+    
+    # Corpo deve essere almeno 60% del range (candela decisa)
+    pole_strong = (pole_body / pole_range) > 0.6 if pole_range > 0 else False
+    
+    # Il corpo deve essere significativo (almeno 0.5% del prezzo)
+    pole_significant = pole_body > pole['close'] * 0.005
+    
+    if not (pole_is_bullish and pole_strong and pole_significant):
+        return False
+    
+    # X = High della pole
+    X = pole['high']
+    
+    # === STEP 2: CONSOLIDAMENTO (2-4 candele che NON superano X) ===
+    
+    consolidation_candles = [prev3, prev2, prev1]
+    
+    # Tutte le candele di consolidamento NON devono superare X
+    all_below_X = all(candle['high'] <= X * 1.002 for candle in consolidation_candles)  # Tolleranza 0.2%
+    
+    if not all_below_X:
+        return False
+    
+    # Le candele di consolidamento devono essere PICCOLE rispetto alla pole
+    consolidation_bodies = [abs(c['close'] - c['open']) for c in consolidation_candles]
+    avg_consolidation_body = sum(consolidation_bodies) / len(consolidation_bodies)
+    
+    # Media consolidamento deve essere < 50% della pole
+    consolidation_small = avg_consolidation_body < pole_body * 0.5
+    
+    if not consolidation_small:
+        return False
+    
+    # === STEP 3: BREAKOUT (candela corrente rompe X) ===
+    
+    last_is_bullish = last['close'] > last['open']
+    
+    # Chiusura deve superare X (high della pole)
+    breaks_X = last['close'] > X
+    
+    # Corpo della breakout deve essere decente (almeno 40% del range)
+    last_body = abs(last['close'] - last['open'])
+    last_range = last['high'] - last['low']
+    last_strong = (last_body / last_range) > 0.4 if last_range > 0 else False
+    
+    # Il breakout deve essere significativo (almeno 0.3% sopra X)
+    significant_breakout = last['close'] > X * 1.003
+    
+    # === VOLUME (opzionale ma consigliato) ===
+    volume_ok = True
+    if 'volume' in df.columns:
+        vol = df['volume']
+        if len(vol) >= 6:
+            pole_vol = vol.iloc[-5]
+            breakout_vol = vol.iloc[-1]
+            avg_consolidation_vol = (vol.iloc[-4] + vol.iloc[-3] + vol.iloc[-2]) / 3
+            
+            # Volume breakout deve essere > media consolidamento
+            # E preferibilmente vicino al volume della pole
+            volume_ok = (breakout_vol > avg_consolidation_vol * 1.2 and
+                        breakout_vol > pole_vol * 0.6)
+    
+    # === VALIDAZIONE FINALE ===
+    return (last_is_bullish and 
+            breaks_X and 
+            last_strong and 
+            significant_breakout and
+            volume_ok)
+
+
 def check_patterns(df: pd.DataFrame):
     """
     Controlla tutti i pattern ABILITATI
@@ -1121,6 +1232,11 @@ def check_patterns(df: pd.DataFrame):
     if AVAILABLE_PATTERNS['compression_breakout']['enabled']:
         if is_compression_breakout(df):
             return (True, 'Buy', 'Compression Breakout')
+
+    # 👇 AGGIUNGI QUI - Bullish Flag Breakout (alta priorità)
+    if AVAILABLE_PATTERNS['bullish_flag_breakout']['enabled']:
+        if is_bullish_flag_breakout(df):
+            return (True, 'Buy', 'Bullish Flag Breakout')
     
     # Bullish Engulfing
     if AVAILABLE_PATTERNS['bullish_engulfing']['enabled']:
