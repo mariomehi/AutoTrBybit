@@ -1419,6 +1419,61 @@ def calculate_ema_stop_loss(df: pd.DataFrame, timeframe: str, entry_price: float
     return float(max(0, qty))
 
 
+def check_higher_timeframe_resistance(symbol, current_tf, current_price):
+    """
+    Controlla se ci sono resistenze EMA su timeframe superiori
+    
+    Returns:
+        {
+            'blocked': True/False,
+            'htf': '30m' / '4h',
+            'details': 'EMA 5 = $101, EMA 10 = $100.50'
+        }
+    """
+    # Mappa timeframe -> higher timeframe
+    htf_map = {
+        '5m': '30m',
+        '15m': '30m',
+        '30m': '4h',
+        '1h': '4h'
+    }
+    
+    if current_tf not in htf_map:
+        return {'blocked': False}
+    
+    htf = htf_map[current_tf]
+    
+    # Scarica dati HTF
+    df_htf = bybit_get_klines(symbol, htf, limit=100)
+    
+    # Calcola EMA HTF
+    ema5_htf = df_htf['close'].ewm(span=5, adjust=False).mean().iloc[-1]
+    ema10_htf = df_htf['close'].ewm(span=10, adjust=False).mean().iloc[-1]
+    
+    # Check resistenza
+    if current_tf in ['5m', '15m']:
+        # Per scalping: controlla EMA 5 e 10 su 30m
+        if ema5_htf < current_price or ema10_htf < current_price:
+            # EMA sopra = resistenza
+            return {
+                'blocked': True,
+                'htf': htf,
+                'details': f'EMA 5 ({htf}): ${ema5_htf:.2f}\nEMA 10 ({htf}): ${ema10_htf:.2f}'
+            }
+    
+    elif current_tf in ['30m', '1h']:
+        # Per day: controlla EMA 60 su 4h
+        ema60_htf = df_htf['close'].ewm(span=60, adjust=False).mean().iloc[-1]
+        if ema60_htf < current_price:
+            return {
+                'blocked': True,
+                'htf': htf,
+                'details': f'EMA 60 ({htf}): ${ema60_htf:.2f}'
+            }
+    
+    return {'blocked': False}
+
+
 async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float):
     """
     Piazza ordine market su Bybit (Demo o Live)
@@ -1752,6 +1807,32 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         
         if found and side == 'Buy':
             # ========== SEGNALE BUY ==========
+            # Check Higher Timeframe EMA (tappo)
+            htf_block = check_higher_timeframe_resistance(
+                symbol=symbol,
+                current_tf=timeframe,
+                current_price=last_close
+            )
+            
+            if htf_block['blocked']:
+                logging.warning(
+                    f'🚫 Pattern {pattern} su {symbol} {timeframe} '
+                    f'BLOCCATO da resistenza HTF {htf_block["htf"]}'
+                )
+                
+                # In full mode, invia warning
+                if full_mode:
+                    caption = (
+                        f"⚠️ <b>Pattern BLOCCATO da HTF</b>\n\n"
+                        f"Pattern: {pattern} su {timeframe}\n"
+                        f"Timeframe superiore: {htf_block['htf']}\n\n"
+                        f"Resistenze HTF:\n"
+                        f"{htf_block['details']}\n\n"
+                        f"💡 Aspetta breakout HTF o cerca altro setup"
+                    )
+                    # Invia notifica warning...
+                
+                return  # BLOCCA segnale
             
             # Calcola SL
             if USE_EMA_STOP_LOSS:
