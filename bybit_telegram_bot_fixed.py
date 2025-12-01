@@ -1820,6 +1820,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         last_close = df['close'].iloc[-1]
         last_time = df.index[-1]
         timestamp_str = last_time.strftime('%Y-%m-%d %H:%M UTC')
+
+        # ===== DEFINISCI price_decimals SUBITO =====
+        price_decimals = get_price_decimals(last_close)
         
         # ===== STEP 2: PRE-FILTER EMA (PRIMA DI CERCARE PATTERN) =====
         ema_analysis = None
