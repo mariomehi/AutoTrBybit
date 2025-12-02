@@ -3354,7 +3354,7 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Analizza pattern
-        found, side, pattern = check_patterns(df)
+        found, side, pattern, pattern_data = check_patterns(df)
         
         # Info candele recenti
         last = df.iloc[-1]
