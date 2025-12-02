@@ -64,6 +64,27 @@ EMA_STOP_LOSS_CONFIG = {
     '4h': 'ema60',   # Swing: EMA 60 (più conservativo)
 }
 
+# Trailing Stop Loss System
+TRAILING_STOP_ENABLED = True  # Abilita/disabilita trailing SL
+TRAILING_CONFIG = {
+    'activation_percent': 0.5,  # Attiva trailing dopo +0.5% profit
+    'ema_buffer': 0.002,  # Buffer 0.2% sotto EMA 10
+    'never_back': True,  # SL non torna mai indietro
+    'check_interval': 300,  # Check ogni 5 minuti (300 secondi)
+}
+
+# Timeframe di riferimento per EMA 10 trailing
+# Per ogni TF entry, usa questo TF per calcolare EMA 10
+TRAILING_EMA_TIMEFRAME = {
+    '1m': '5m',   # Entry su 1m → EMA 10 da 5m
+    '3m': '5m',   # Entry su 3m → EMA 10 da 5m
+    '5m': '15m',  # Entry su 5m → EMA 10 da 15m
+    '15m': '30m', # Entry su 15m → EMA 10 da 30m
+    '30m': '1h',  # Entry su 30m → EMA 10 da 1h
+    '1h': '4h',   # Entry su 1h → EMA 10 da 4h
+    '4h': '4h',   # Entry su 4h → EMA 10 da 4h stesso
+}
+
 # Buffer EMA Stop Loss (% sotto l'EMA per evitare falsi breakout)
 EMA_SL_BUFFER = 0.002  # 0.2% sotto l'EMA
 # Esempio: se EMA 10 = $100, SL = $100 * (1 - 0.002) = $99.80
@@ -253,6 +274,17 @@ FULL_NOTIFICATIONS = {}
 FULL_NOTIFICATIONS_LOCK = threading.Lock()
 
 # Active positions tracking: symbol -> order_info
+# order_info contiene:
+# - side: 'Buy' o 'Sell'
+# - qty: quantità
+# - entry_price: prezzo di entrata
+# - sl: stop loss corrente
+# - tp: take profit
+# - order_id: ID ordine Bybit
+# - timestamp: quando è stato aperto
+# - timeframe: TF su cui è stato rilevato
+# - trailing_active: se trailing è attivo
+# - highest_price: prezzo massimo raggiunto (per trailing)
 ACTIVE_POSITIONS = {}
 POSITIONS_LOCK = threading.Lock()
 
@@ -1577,7 +1609,7 @@ def check_higher_timeframe_resistance(symbol, current_tf, current_price):
     return {'blocked': False}
 
 
-async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float):
+async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float, entry_price: float, timeframe: str):  # 👈 AGGIUNGI parametri
     """
     Piazza ordine market su Bybit (Demo o Live)
     Controlla REALMENTE su Bybit se esiste già una posizione aperta
@@ -1688,10 +1720,14 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                 ACTIVE_POSITIONS[symbol] = {
                     'side': side,
                     'qty': qty,
+                    'entry_price': last_close,  # 👈 AGGIUNGI (pass come parametro)
                     'sl': sl_price,
                     'tp': tp_price,
                     'order_id': order.get('result', {}).get('orderId'),
-                    'timestamp': datetime.now(timezone.utc).isoformat()
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'timeframe': timeframe,  # 👈 AGGIUNGI (pass come parametro)
+                    'trailing_active': False,
+                    'highest_price': last_close  # 👈 AGGIUNGI
                 }
             logging.info(f'📝 Posizione salvata per {symbol}')
         
@@ -1712,6 +1748,159 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
             return {'error': 'Limite di rischio raggiunto. Riduci la posizione o aumenta il risk limit su Bybit.'}
         else:
             return {'error': f'{error_msg}'}
+            
+
+async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Job che aggiorna trailing stop loss per tutte le posizioni attive
+    Viene eseguito ogni 5 minuti
+    
+    LOGICA:
+    1. Per ogni posizione aperta
+    2. Scarica dati timeframe EMA di riferimento
+    3. Calcola EMA 10
+    4. Se prezzo > entry + activation_percent:
+       - Attiva trailing
+       - Sposta SL sotto EMA 10 (mai indietro)
+    5. Aggiorna SL su Bybit
+    """
+    if not TRAILING_STOP_ENABLED:
+        return
+    
+    with POSITIONS_LOCK:
+        positions_copy = dict(ACTIVE_POSITIONS)
+    
+    if not positions_copy:
+        logging.debug('🔇 Nessuna posizione attiva per trailing SL')
+        return
+    
+    logging.info(f'🔄 Checking trailing SL per {len(positions_copy)} posizioni...')
+    
+    for symbol, pos_info in positions_copy.items():
+        try:
+            # Solo posizioni BUY (per ora)
+            if pos_info['side'] != 'Buy':
+                continue
+            
+            # Dati posizione
+            entry_price = pos_info['entry_price']
+            current_sl = pos_info['sl']
+            timeframe_entry = pos_info['timeframe']
+            trailing_active = pos_info.get('trailing_active', False)
+            highest_price = pos_info.get('highest_price', entry_price)
+            
+            # Determina TF per EMA trailing
+            ema_tf = TRAILING_EMA_TIMEFRAME.get(timeframe_entry, timeframe_entry)
+            
+            # Scarica dati
+            df = bybit_get_klines(symbol, ema_tf, limit=50)
+            if df.empty:
+                logging.warning(f'⚠️ Nessun dato per {symbol} {ema_tf} (trailing SL)')
+                continue
+            
+            current_price = df['close'].iloc[-1]
+            
+            # Aggiorna highest price
+            if current_price > highest_price:
+                highest_price = current_price
+                with POSITIONS_LOCK:
+                    if symbol in ACTIVE_POSITIONS:
+                        ACTIVE_POSITIONS[symbol]['highest_price'] = highest_price
+            
+            # Calcola profit %
+            profit_percent = ((current_price - entry_price) / entry_price) * 100
+            
+            # Check se attivare trailing
+            if not trailing_active and profit_percent >= TRAILING_CONFIG['activation_percent']:
+                logging.info(f'✅ Trailing SL ATTIVATO per {symbol} (profit: {profit_percent:.2f}%)')
+                with POSITIONS_LOCK:
+                    if symbol in ACTIVE_POSITIONS:
+                        ACTIVE_POSITIONS[symbol]['trailing_active'] = True
+                trailing_active = True
+            
+            # Se trailing non attivo, skip
+            if not trailing_active:
+                logging.debug(f'⏳ {symbol}: Trailing non ancora attivo (profit: {profit_percent:.2f}%)')
+                continue
+            
+            # Calcola EMA 10
+            ema_10 = df['close'].ewm(span=10, adjust=False).mean().iloc[-1]
+            
+            # Nuovo SL: sotto EMA 10 con buffer
+            new_sl = ema_10 * (1 - TRAILING_CONFIG['ema_buffer'])
+            
+            # NEVER BACK: SL non torna mai indietro
+            if TRAILING_CONFIG['never_back'] and new_sl <= current_sl:
+                logging.debug(f'🔒 {symbol}: SL rimane {current_sl:.4f} (new {new_sl:.4f} è minore)')
+                continue
+            
+            # Verifica che nuovo SL non sia sopra il prezzo corrente (safety)
+            if new_sl >= current_price * 0.998:  # Almeno 0.2% sotto
+                logging.warning(f'⚠️ {symbol}: New SL {new_sl:.4f} troppo vicino a price {current_price:.4f}')
+                continue
+            
+            # Arrotonda con decimali dinamici
+            price_decimals = get_price_decimals(new_sl)
+            new_sl = round(new_sl, price_decimals)
+            
+            # Differenza significativa? (almeno 0.1% di movimento)
+            sl_move_percent = ((new_sl - current_sl) / current_sl) * 100
+            if sl_move_percent < 0.1:
+                logging.debug(f'🔹 {symbol}: SL move troppo piccolo ({sl_move_percent:.2f}%)')
+                continue
+            
+            logging.info(f'🔼 {symbol}: Aggiornamento SL da {current_sl:.{price_decimals}f} a {new_sl:.{price_decimals}f}')
+            logging.info(f'   Price: {current_price:.{price_decimals}f}, EMA 10 ({ema_tf}): {ema_10:.{price_decimals}f}')
+            
+            # Aggiorna SL su Bybit
+            if BybitHTTP is not None:
+                try:
+                    session = create_bybit_session()
+                    
+                    result = session.set_trading_stop(
+                        category='linear',
+                        symbol=symbol,
+                        positionIdx=0,  # One-way mode
+                        stopLoss=str(new_sl)
+                    )
+                    
+                    if result.get('retCode') == 0:
+                        # Aggiorna tracking locale
+                        with POSITIONS_LOCK:
+                            if symbol in ACTIVE_POSITIONS:
+                                ACTIVE_POSITIONS[symbol]['sl'] = new_sl
+                        
+                        logging.info(f'✅ {symbol}: Trailing SL aggiornato su Bybit a ${new_sl:.{price_decimals}f}')
+                    else:
+                        logging.error(f'❌ {symbol}: Errore aggiornamento SL Bybit: {result.get("retMsg")}')
+                
+                except Exception as e:
+                    logging.error(f'❌ {symbol}: Errore set_trading_stop: {e}')
+            
+        except Exception as e:
+            logging.exception(f'❌ Errore trailing SL per {symbol}: {e}')
+
+
+# ===== FUNZIONE per schedulare il job =====
+
+def schedule_trailing_stop_job(application):
+    """
+    Schedula il job di trailing stop loss ogni 5 minuti
+    """
+    if not TRAILING_STOP_ENABLED:
+        logging.info('🔕 Trailing Stop Loss disabilitato')
+        return
+    
+    interval = TRAILING_CONFIG['check_interval']
+    
+    application.job_queue.run_repeating(
+        update_trailing_stop_loss,
+        interval=interval,
+        first=60,  # Primo check dopo 1 minuto
+        name='trailing_stop_loss'
+    )
+    
+    logging.info(f'✅ Trailing Stop Loss schedulato ogni {interval}s ({interval//60} minuti)')
 
 
 # ----------------------------- CHART GENERATION -----------------------------
@@ -2089,8 +2278,17 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"\nOrdine NON eseguito per {symbol}"
             
             # Autotrade
+            # Piazza ordine se autotrade è abilitato E non esiste già posizione
             if job_ctx.get('autotrade') and qty > 0 and not position_exists:
-                order_res = await place_bybit_order(symbol, side, qty, sl_price, tp_price)
+                order_res = await place_bybit_order(
+                    symbol, 
+                    side, 
+                    qty, 
+                    sl_price, 
+                    tp_price,
+                    entry_price,  # 👈 AGGIUNGI
+                    timeframe     # 👈 AGGIUNGI
+                )
                 
                 if 'error' in order_res:
                     caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
@@ -3255,6 +3453,76 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 
+async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /trailing
+    Mostra status trailing stop loss per tutte le posizioni
+    """
+    if not TRAILING_STOP_ENABLED:
+        await update.message.reply_text(
+            '🔕 <b>Trailing Stop Loss DISABILITATO</b>\n\n'
+            'Abilita nelle configurazioni: TRAILING_STOP_ENABLED = True',
+            parse_mode='HTML'
+        )
+        return
+    
+    with POSITIONS_LOCK:
+        positions_copy = dict(ACTIVE_POSITIONS)
+    
+    if not positions_copy:
+        await update.message.reply_text(
+            '📭 <b>Nessuna posizione attiva</b>\n\n'
+            'Non ci sono posizioni con trailing stop loss.',
+            parse_mode='HTML'
+        )
+        return
+    
+    msg = f"🔄 <b>Trailing Stop Loss Status</b>\n\n"
+    msg += f"Check Interval: {TRAILING_CONFIG['check_interval']//60} minuti\n"
+    msg += f"Activation: +{TRAILING_CONFIG['activation_percent']}% profit\n\n"
+    
+    for symbol, pos in positions_copy.items():
+        if pos['side'] != 'Buy':
+            continue
+        
+        entry = pos['entry_price']
+        current_sl = pos['sl']
+        highest = pos.get('highest_price', entry)
+        trailing_active = pos.get('trailing_active', False)
+        timeframe_entry = pos['timeframe']
+        
+        # Scarica prezzo corrente
+        df = bybit_get_klines(symbol, timeframe_entry, limit=5)
+        current_price = df['close'].iloc[-1] if not df.empty else entry
+        
+        profit_percent = ((current_price - entry) / entry) * 100
+        price_decimals = get_price_decimals(current_price)
+        
+        status_emoji = "✅" if trailing_active else "⏳"
+        
+        msg += f"{status_emoji} <b>{symbol}</b> ({timeframe_entry})\n"
+        msg += f"  Entry: ${entry:.{price_decimals}f}\n"
+        msg += f"  Current: ${current_price:.{price_decimals}f}\n"
+        msg += f"  Highest: ${highest:.{price_decimals}f}\n"
+        msg += f"  SL: ${current_sl:.{price_decimals}f}\n"
+        msg += f"  Profit: {profit_percent:+.2f}%\n"
+        
+        if trailing_active:
+            msg += f"  Status: Trailing ATTIVO\n"
+        else:
+            needed = TRAILING_CONFIG['activation_percent'] - profit_percent
+            msg += f"  Status: Serve +{needed:.2f}% per attivare\n"
+        
+        msg += "\n"
+    
+    msg += "💡 <b>Info:</b>\n"
+    msg += "• SL segue EMA 10 del TF superiore\n"
+    msg += "• SL non torna mai indietro\n"
+    msg += f"• Buffer: {TRAILING_CONFIG['ema_buffer']*100}% sotto EMA"
+    
+    await update.message.reply_text(msg, parse_mode='HTML')
+    
+
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /list - mostra analisi attive con dettagli completi
@@ -3469,12 +3737,16 @@ def main():
     application.add_handler(CommandHandler('posizioni', cmd_posizioni))
     application.add_handler(CommandHandler('chiudi', cmd_chiudi))
     application.add_handler(CommandHandler('sync', cmd_sync))
+    application.add_handler(CommandHandler('trailing', cmd_trailing))
     application.add_handler(CommandHandler('patterns', cmd_patterns))
     application.add_handler(CommandHandler('pattern_on', cmd_pattern_on))
     application.add_handler(CommandHandler('pattern_off', cmd_pattern_off))
     application.add_handler(CommandHandler('pattern_info', cmd_pattern_info))
     application.add_handler(CommandHandler('ema_filter', cmd_ema_filter))
     application.add_handler(CommandHandler('ema_sl', cmd_ema_sl))
+
+    # Schedula trailing stop loss job
+    schedule_trailing_stop_job(application)
     
     # Avvia bot
     mode_emoji = "🎮" if TRADING_MODE == 'demo' else "⚠️💰"
