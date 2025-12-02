@@ -146,6 +146,25 @@ EMA_CONFIG = {
     }
 }
 
+# Auto-Discovery System
+AUTO_DISCOVERY_ENABLED = True  # Abilita/disabilita auto-discovery
+AUTO_DISCOVERY_CONFIG = {
+    'enabled': True,
+    'top_count': 10,  # Top 10 symbols
+    'timeframe': '5m',  # Timeframe da analizzare
+    'autotrade': True,  # Autotrade per auto-discovery (False = solo notifiche)
+    'update_interval': 43200,  # 12 ore in secondi (12 * 60 * 60)
+    'min_volume_usdt': 10000000,  # Min volume 24h: 10M USDT
+    'min_price_change': 5.0,  # Min variazione 24h: +5%
+    'max_price_change': 50.0,  # Max variazione 24h: +50% (evita pump & dump)
+    'exclude_symbols': ['USDCUSDT', 'TUSDUSDT', 'BUSDUSDT'],  # Stablecoins da escludere
+    'sorting': 'price_change_percent',  # 'price_change_percent' o 'volume'
+}
+
+# Storage per simboli auto-discovered
+AUTO_DISCOVERED_SYMBOLS = set()
+AUTO_DISCOVERED_LOCK = threading.Lock()
+
 # Pattern Management System
 AVAILABLE_PATTERNS = {
     'bullish_comeback': {
@@ -1748,6 +1767,272 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
             return {'error': 'Limite di rischio raggiunto. Riduci la posizione o aumenta il risk limit su Bybit.'}
         else:
             return {'error': f'{error_msg}'}
+
+
+def get_top_profitable_symbols():
+    """
+    Ottiene i top symbol più profittevoli da Bybit
+    
+    Criteri:
+    - Volume 24h > min_volume_usdt
+    - Price change 24h tra min_price_change e max_price_change
+    - Ordina per price_change_percent o volume
+    
+    Returns:
+        list: Lista di symbol (es. ['BTCUSDT', 'ETHUSDT', ...])
+    """
+    try:
+        # Ottieni ticker 24h per tutti i symbol
+        url = f'{BYBIT_PUBLIC_REST}/v5/market/tickers'
+        params = {
+            'category': 'linear'
+        }
+        
+        response = requests.get(url, params=params, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get('retCode') != 0:
+            logging.error(f'Errore API Bybit tickers: {data.get("retMsg")}')
+            return []
+        
+        tickers = data.get('result', {}).get('list', [])
+        
+        if not tickers:
+            logging.warning('Nessun ticker trovato')
+            return []
+        
+        # Filtra e processa symbols
+        candidates = []
+        
+        for ticker in tickers:
+            symbol = ticker.get('symbol', '')
+            
+            # Solo USDT perpetual
+            if not symbol.endswith('USDT'):
+                continue
+            
+            # Escludi stablecoins
+            if symbol in AUTO_DISCOVERY_CONFIG['exclude_symbols']:
+                continue
+            
+            try:
+                volume_24h = float(ticker.get('turnover24h', 0))  # Volume in USDT
+                price_change_percent = float(ticker.get('price24hPcnt', 0)) * 100  # In percentuale
+                last_price = float(ticker.get('lastPrice', 0))
+                
+                # Applica filtri
+                if volume_24h < AUTO_DISCOVERY_CONFIG['min_volume_usdt']:
+                    continue
+                
+                if price_change_percent < AUTO_DISCOVERY_CONFIG['min_price_change']:
+                    continue
+                
+                if price_change_percent > AUTO_DISCOVERY_CONFIG['max_price_change']:
+                    continue  # Evita pump estremi
+                
+                candidates.append({
+                    'symbol': symbol,
+                    'volume_24h': volume_24h,
+                    'price_change_percent': price_change_percent,
+                    'last_price': last_price
+                })
+                
+            except (ValueError, TypeError) as e:
+                logging.debug(f'Skip {symbol}: errore parsing dati ({e})')
+                continue
+        
+        if not candidates:
+            logging.warning('Nessun symbol valido dopo i filtri')
+            return []
+        
+        # Ordina per criterio scelto
+        sort_by = AUTO_DISCOVERY_CONFIG['sorting']
+        
+        if sort_by == 'volume':
+            candidates.sort(key=lambda x: x['volume_24h'], reverse=True)
+        else:  # price_change_percent (default)
+            candidates.sort(key=lambda x: x['price_change_percent'], reverse=True)
+        
+        # Prendi top N
+        top_count = AUTO_DISCOVERY_CONFIG['top_count']
+        top_symbols = [c['symbol'] for c in candidates[:top_count]]
+        
+        # Log risultati
+        logging.info(f'🔍 Top {len(top_symbols)} symbols trovati:')
+        for i, candidate in enumerate(candidates[:top_count], 1):
+            logging.info(
+                f"  {i}. {candidate['symbol']}: "
+                f"+{candidate['price_change_percent']:.2f}%, "
+                f"Vol: ${candidate['volume_24h']/1_000_000:.1f}M"
+            )
+        
+        return top_symbols
+        
+    except requests.exceptions.RequestException as e:
+        logging.error(f'Errore richiesta tickers: {e}')
+        return []
+    except Exception as e:
+        logging.exception('Errore in get_top_profitable_symbols')
+        return []
+        
+
+async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Job che automaticamente:
+    1. Ottiene top symbols profittevoli
+    2. Ferma analisi per symbols non più in top
+    3. Avvia nuove analisi per symbols in top
+    
+    Eseguito ogni 12 ore
+    """
+    if not AUTO_DISCOVERY_CONFIG['enabled']:
+        return
+    
+    job_data = context.job.data
+    chat_id = job_data['chat_id']
+    
+    logging.info('🔄 Auto-Discovery: Aggiornamento top symbols...')
+    
+    try:
+        # Ottieni top symbols
+        top_symbols = get_top_profitable_symbols()
+        
+        if not top_symbols:
+            logging.warning('⚠️ Auto-Discovery: Nessun symbol trovato')
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text='⚠️ Auto-Discovery: Impossibile ottenere top symbols da Bybit'
+            )
+            return
+        
+        timeframe = AUTO_DISCOVERY_CONFIG['timeframe']
+        autotrade = AUTO_DISCOVERY_CONFIG['autotrade']
+        
+        # Converti in set per comparazione
+        new_symbols_set = set(top_symbols)
+        
+        with AUTO_DISCOVERED_LOCK:
+            old_symbols_set = set(AUTO_DISCOVERED_SYMBOLS)
+        
+        # Symbols da rimuovere (non più in top)
+        to_remove = old_symbols_set - new_symbols_set
+        
+        # Symbols da aggiungere (nuovi in top)
+        to_add = new_symbols_set - old_symbols_set
+        
+        # === RIMUOVI ANALISI VECCHIE ===
+        removed_count = 0
+        
+        with ACTIVE_ANALYSES_LOCK:
+            chat_analyses = ACTIVE_ANALYSES.get(chat_id, {})
+            
+            for symbol in to_remove:
+                key = f'{symbol}-{timeframe}'
+                
+                if key in chat_analyses:
+                    job = chat_analyses[key]
+                    job.schedule_removal()
+                    del chat_analyses[key]
+                    removed_count += 1
+                    logging.info(f'❌ Rimosso {symbol} {timeframe} (non più in top)')
+        
+        # === AGGIUNGI NUOVE ANALISI ===
+        added_count = 0
+        
+        for symbol in to_add:
+            key = f'{symbol}-{timeframe}'
+            
+            # Verifica che non esista già
+            with ACTIVE_ANALYSES_LOCK:
+                chat_map = ACTIVE_ANALYSES.setdefault(chat_id, {})
+                
+                if key in chat_map:
+                    logging.debug(f'⏭️ Skip {symbol}: già in analisi')
+                    continue
+            
+            # Verifica dati disponibili
+            test_df = bybit_get_klines(symbol, timeframe, limit=10)
+            if test_df.empty:
+                logging.warning(f'⚠️ Skip {symbol}: nessun dato disponibile')
+                continue
+            
+            # Calcola intervallo
+            interval_seconds = INTERVAL_SECONDS.get(timeframe, 300)
+            now = datetime.now(timezone.utc)
+            epoch = int(now.timestamp())
+            to_next = interval_seconds - (epoch % interval_seconds)
+            
+            # Crea job
+            job_data_new = {
+                'chat_id': chat_id,
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'autotrade': autotrade,
+                'auto_discovered': True  # Flag per identificare auto-discovered
+            }
+            
+            job = context.job_queue.run_repeating(
+                analyze_job,
+                interval=interval_seconds,
+                first=to_next,
+                data=job_data_new,
+                name=key
+            )
+            
+            with ACTIVE_ANALYSES_LOCK:
+                chat_map[key] = job
+            
+            added_count += 1
+            logging.info(f'✅ Aggiunto {symbol} {timeframe}')
+        
+        # Aggiorna storage
+        with AUTO_DISCOVERED_LOCK:
+            AUTO_DISCOVERED_SYMBOLS.clear()
+            AUTO_DISCOVERED_SYMBOLS.update(new_symbols_set)
+        
+        # === NOTIFICA RISULTATI ===
+        msg = "🔄 <b>Auto-Discovery Aggiornato</b>\n\n"
+        
+        if added_count > 0 or removed_count > 0:
+            msg += f"📊 Top {len(top_symbols)} symbols:\n"
+            for i, sym in enumerate(top_symbols, 1):
+                status = "🆕" if sym in to_add else "✅"
+                msg += f"{status} {i}. {sym}\n"
+            
+            msg += f"\n"
+            
+            if added_count > 0:
+                msg += f"✅ Aggiunti: {added_count}\n"
+            
+            if removed_count > 0:
+                msg += f"❌ Rimossi: {removed_count}\n"
+            
+            msg += f"\n⏱️ Timeframe: {timeframe}\n"
+            msg += f"🤖 Autotrade: {'ON' if autotrade else 'OFF'}\n"
+            msg += f"🔄 Prossimo update tra 12 ore"
+        else:
+            msg += "✅ Nessun cambiamento\n\n"
+            msg += f"Top {len(top_symbols)} symbols confermati:\n"
+            for i, sym in enumerate(top_symbols, 1):
+                msg += f"{i}. {sym}\n"
+        
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=msg,
+            parse_mode='HTML'
+        )
+        
+    except Exception as e:
+        logging.exception('Errore in auto_discover_and_analyze')
+        
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f'❌ Errore Auto-Discovery:\n{str(e)}'
+            )
+        except:
+            pass
             
 
 async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
@@ -2972,6 +3257,124 @@ async def cmd_ema_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode='HTML')
 
 
+async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /autodiscover [on|off|now|status]
+    Gestisce il sistema di auto-discovery
+    """
+    chat_id = update.effective_chat.id
+    args = context.args
+    
+    if not args:
+        # Mostra status
+        status_emoji = "✅" if AUTO_DISCOVERY_CONFIG['enabled'] else "❌"
+        
+        msg = f"🔍 <b>Auto-Discovery System</b>\n\n"
+        msg += f"Status: {status_emoji} {'Attivo' if AUTO_DISCOVERY_CONFIG['enabled'] else 'Disattivo'}\n\n"
+        
+        if AUTO_DISCOVERY_CONFIG['enabled']:
+            msg += f"<b>Configurazione:</b>\n"
+            msg += f"• Top: {AUTO_DISCOVERY_CONFIG['top_count']} symbols\n"
+            msg += f"• Timeframe: {AUTO_DISCOVERY_CONFIG['timeframe']}\n"
+            msg += f"• Autotrade: {'ON' if AUTO_DISCOVERY_CONFIG['autotrade'] else 'OFF'}\n"
+            msg += f"• Update ogni: {AUTO_DISCOVERY_CONFIG['update_interval']//3600}h\n"
+            msg += f"• Min volume: ${AUTO_DISCOVERY_CONFIG['min_volume_usdt']/1_000_000:.0f}M\n"
+            msg += f"• Min change: +{AUTO_DISCOVERY_CONFIG['min_price_change']}%\n"
+            msg += f"• Max change: +{AUTO_DISCOVERY_CONFIG['max_price_change']}%\n\n"
+            
+            with AUTO_DISCOVERED_LOCK:
+                symbols = list(AUTO_DISCOVERED_SYMBOLS)
+            
+            if symbols:
+                msg += f"<b>Symbols attivi ({len(symbols)}):</b>\n"
+                for sym in sorted(symbols):
+                    msg += f"• {sym}\n"
+            else:
+                msg += "Nessun symbol ancora analizzato"
+        
+        msg += "\n\n<b>Comandi:</b>\n"
+        msg += "/autodiscover on - Attiva\n"
+        msg += "/autodiscover off - Disattiva\n"
+        msg += "/autodiscover now - Aggiorna ora\n"
+        msg += "/autodiscover status - Mostra status"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+        return
+    
+    action = args[0].lower()
+    
+    if action == 'on':
+        AUTO_DISCOVERY_CONFIG['enabled'] = True
+        
+        # Schedula il job se non esiste
+        current_jobs = context.job_queue.get_jobs_by_name('auto_discovery')
+        
+        if not current_jobs:
+            context.job_queue.run_repeating(
+                auto_discover_and_analyze,
+                interval=AUTO_DISCOVERY_CONFIG['update_interval'],
+                first=60,  # Primo run dopo 1 minuto
+                data={'chat_id': chat_id},
+                name='auto_discovery'
+            )
+            
+            await update.message.reply_text(
+                '✅ <b>Auto-Discovery ATTIVATO</b>\n\n'
+                'Primo update tra 1 minuto...\n'
+                f"Poi ogni {AUTO_DISCOVERY_CONFIG['update_interval']//3600} ore",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                '✅ <b>Auto-Discovery già attivo</b>',
+                parse_mode='HTML'
+            )
+    
+    elif action == 'off':
+        AUTO_DISCOVERY_CONFIG['enabled'] = False
+        
+        # Rimuovi tutti i job auto-discovery
+        current_jobs = context.job_queue.get_jobs_by_name('auto_discovery')
+        for job in current_jobs:
+            job.schedule_removal()
+        
+        await update.message.reply_text(
+            '❌ <b>Auto-Discovery DISATTIVATO</b>\n\n'
+            'Le analisi esistenti continueranno.\n'
+            'Usa /stop per fermarle.',
+            parse_mode='HTML'
+        )
+    
+    elif action == 'now':
+        if not AUTO_DISCOVERY_CONFIG['enabled']:
+            await update.message.reply_text(
+                '⚠️ Auto-Discovery è disattivato.\n'
+                'Usa /autodiscover on per attivarlo.'
+            )
+            return
+        
+        await update.message.reply_text('🔄 Aggiornamento in corso...')
+        
+        # Esegui manualmente
+        await auto_discover_and_analyze(
+            type('Context', (), {
+                'job': type('Job', (), {'data': {'chat_id': chat_id}})(),
+                'bot': context.bot,
+                'job_queue': context.job_queue
+            })()
+        )
+    
+    elif action == 'status':
+        # Mostra status dettagliato
+        await cmd_autodiscover(update, context)
+    
+    else:
+        await update.message.reply_text(
+            '❌ Comando non valido.\n\n'
+            'Usa: /autodiscover [on|off|now|status]'
+        )
+        
+
 async def cmd_ema_sl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /ema_sl [on|off]
@@ -3701,6 +4104,12 @@ def main():
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+
+        # Avvia Auto-Discovery se abilitato
+    if AUTO_DISCOVERY_ENABLED and AUTO_DISCOVERY_CONFIG['enabled']:
+        # Nota: Serve chat_id, quindi auto-discovery sarà attivato
+        # dal primo utente che usa /autodiscover on
+        logging.info('🔍 Auto-Discovery configurato (attiva con /autodiscover on)')
     
     # Verifica variabili d'ambiente
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == '':
@@ -3738,6 +4147,7 @@ def main():
     application.add_handler(CommandHandler('chiudi', cmd_chiudi))
     application.add_handler(CommandHandler('sync', cmd_sync))
     application.add_handler(CommandHandler('trailing', cmd_trailing))
+    application.add_handler(CommandHandler('autodiscover', cmd_autodiscover))
     application.add_handler(CommandHandler('patterns', cmd_patterns))
     application.add_handler(CommandHandler('pattern_on', cmd_pattern_on))
     application.add_handler(CommandHandler('pattern_off', cmd_pattern_off))
