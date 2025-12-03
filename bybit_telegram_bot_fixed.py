@@ -153,7 +153,7 @@ AUTO_DISCOVERY_CONFIG = {
     'top_count': 10,  # Top 10 symbols
     'timeframe': '5m',  # Timeframe da analizzare
     'autotrade': True,  # Autotrade per auto-discovery (False = solo notifiche)
-    'update_interval': 43200,  # 12 ore in secondi (12 * 60 * 60)
+    'update_interval': 21600,  # 12 ore in secondi (12 * 60 * 60)
     'min_volume_usdt': 10000000,  # Min volume 24h: 10M USDT
     'min_price_change': 5.0,  # Min variazione 24h: +5%
     'max_price_change': 50.0,  # Max variazione 24h: +50% (evita pump & dump)
@@ -1739,14 +1739,14 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                 ACTIVE_POSITIONS[symbol] = {
                     'side': side,
                     'qty': qty,
-                    'entry_price': last_close,  # 👈 AGGIUNGI (pass come parametro)
+                    'entry_price': entry_price,  # 👈 AGGIUNGI (pass come parametro)
                     'sl': sl_price,
                     'tp': tp_price,
                     'order_id': order.get('result', {}).get('orderId'),
                     'timestamp': datetime.now(timezone.utc).isoformat(),
                     'timeframe': timeframe,  # 👈 AGGIUNGI (pass come parametro)
                     'trailing_active': False,
-                    'highest_price': last_close  # 👈 AGGIUNGI
+                    'highest_price': entry_price  # 👈 AGGIUNGI
                 }
             logging.info(f'📝 Posizione salvata per {symbol}')
         
@@ -4042,17 +4042,19 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Test individuali
         tests = {
-            '🆕 Bullish Comeback': is_bullish_comeback(df),
-            'Bullish Engulfing': is_bullish_engulfing(prev, last),
-            'Bearish Engulfing': is_bearish_engulfing(prev, last),
-            'Hammer': is_hammer(last),
-            'Shooting Star': is_shooting_star(last),
-            'Pin Bar': is_pin_bar(last),
-            'Doji': is_doji(last),
-            'Morning Star': is_morning_star(prev2, prev, last),
-            'Evening Star': is_evening_star(prev2, prev, last),
-            'Three White Soldiers': is_three_white_soldiers(prev2, prev, last),
-            'Three Black Crows': is_three_black_crows(prev2, prev, last)
+            '🚩 Bullish Flag Breakout': is_bullish_flag_breakout(df)[0],  # Ritorna (bool, data)
+            '💥 Compression Breakout': is_compression_breakout(df),
+            '🔄 Bullish Comeback': is_bullish_comeback(df),
+            '🟢 Bullish Engulfing': is_bullish_engulfing(prev, last),
+            '🔴 Bearish Engulfing': is_bearish_engulfing(prev, last),
+            '🔨 Hammer': is_hammer(last),
+            '💫 Shooting Star': is_shooting_star(last),
+            '📍 Pin Bar': is_pin_bar(last),
+            '➖ Doji': is_doji(last),
+            '⭐ Morning Star': is_morning_star(prev2, prev, last),
+            '🌙 Evening Star': is_evening_star(prev2, prev, last),
+            '⬆️ Three White Soldiers': is_three_white_soldiers(prev2, prev, last),
+            '⬇️ Three Black Crows': is_three_black_crows(prev2, prev, last)
         }
         
         # Costruisci messaggio
