@@ -154,9 +154,9 @@ AUTO_DISCOVERY_CONFIG = {
     'timeframe': '5m',  # Timeframe da analizzare
     'autotrade': True,  # Autotrade per auto-discovery (False = solo notifiche)
     'update_interval': 21600,  # 12 ore in secondi (12 * 60 * 60)
-    'min_volume_usdt': 10000000,  # Min volume 24h: 10M USDT
+    'min_volume_usdt': 5000000,  # Min volume 24h: 10M USDT
     'min_price_change': 5.0,  # Min variazione 24h: +5%
-    'max_price_change': 50.0,  # Max variazione 24h: +50% (evita pump & dump)
+    'max_price_change': 80.0,  # Max variazione 24h: +50% (evita pump & dump)
     'exclude_symbols': ['USDCUSDT', 'TUSDUSDT', 'BUSDUSDT'],  # Stablecoins da escludere
     'sorting': 'price_change_percent',  # 'price_change_percent' o 'volume'
 }
