@@ -110,12 +110,14 @@ EMA_CONFIG = {
     'scalping': {
         'timeframes': ['5m', '15m'],
         'rules': {
-            # MUST: Prezzo sopra EMA 10
+            # MUST 1: Prezzo sopra EMA 10
             'price_above_ema10': True,
+            # MUST 2: Prezzo sopra EMA 60 (trend filter) 👈 NUOVO
+            'price_above_ema60': True,
             # BONUS: EMA 5 sopra EMA 10 (momentum forte)
             'ema5_above_ema10': True,
             # GOLD: Pattern vicino a EMA 10 (pullback)
-            'near_ema10': False  # Opzionale per scalping
+            'near_ema10': False  # Opzionale
         }
     },
     
@@ -479,33 +481,45 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str):
     score = 0
     details = []
     
-    # SCALPING (5m, 15m)
     if timeframe in ['5m', '15m']:
+        # MUST 1: Prezzo sopra EMA 10
         if rules.get('price_above_ema10'):
             if last_close > last_ema10:
                 conditions['price_above_ema10'] = True
-                score += 40
-                details.append("Prezzo maggiore EMA 10")  # ✅ NO emoji
+                score += 30  # 👈 RIDOTTO da 40 (per fare spazio a EMA 60)
+                details.append("Prezzo maggiore EMA 10")
             else:
                 conditions['price_above_ema10'] = False
                 score -= 30
-                details.append("Prezzo minore EMA 10")  # ✅ NO emoji
+                details.append("Prezzo minore EMA 10")
         
+        # ===== MUST 2: Prezzo sopra EMA 60 (NUOVO - FONDAMENTALE) =====
+        if last_close > last_ema60:
+            conditions['price_above_ema60'] = True
+            score += 30  # 👈 NUOVO: punti per trend rialzista
+            details.append("Prezzo maggiore EMA 60 (trend rialzista)")
+        else:
+            conditions['price_above_ema60'] = False
+            score -= 20  # 👈 Penalità se contro trend
+            details.append("Prezzo minore EMA 60 (contro trend)")
+        
+        # BONUS: EMA 5 sopra EMA 10 (momentum)
         if rules.get('ema5_above_ema10'):
             if last_ema5 > last_ema10:
                 conditions['ema5_above_ema10'] = True
-                score += 30
-                details.append("EMA 5 maggiore EMA 10 (momentum)")  # ✅ NO emoji
+                score += 20  # 👈 RIDOTTO da 30
+                details.append("EMA 5 maggiore EMA 10 (momentum)")
             else:
                 conditions['ema5_above_ema10'] = False
                 score += 10
-                details.append("EMA 5 minore EMA 10")  # ✅ NO emoji
+                details.append("EMA 5 minore EMA 10")
         
+        # GOLD: Pattern vicino a EMA 10 (pullback)
         distance_to_ema10 = abs(last_close - last_ema10) / last_ema10
         if distance_to_ema10 < 0.005:
             conditions['near_ema10'] = True
-            score += 30
-            details.append("Vicino EMA 10 - pullback zone")  # ✅ NO emoji
+            score += 20  # 👈 RIDOTTO da 30
+            details.append("Vicino EMA 10 - pullback zone")
         else:
             conditions['near_ema10'] = False
     
@@ -2898,37 +2912,50 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode_emoji = "🎮" if TRADING_MODE == 'demo' else "💰"
     mode_text = "DEMO (fondi virtuali)" if TRADING_MODE == 'demo' else "LIVE (SOLDI REALI!)"
     
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /start"""
+    bot_username = (await context.bot.get_me()).username
+    
+    # Emoji per la modalità
+    mode_emoji = "🎮" if TRADING_MODE == 'demo' else "💰"
+    mode_text = "DEMO (fondi virtuali)" if TRADING_MODE == 'demo' else "LIVE (SOLDI REALI!)"
+    
     welcome_text = (
         f"🤖 <b>Bot Pattern Detection Attivo!</b>\n"
         f"👤 Username: @{bot_username}\n"
         f"{mode_emoji} <b>Modalità: {mode_text}</b>\n\n"
         "📊 <b>Comandi Analisi:</b>\n"
-        "/analizza SYMBOL TF - Inizia analisi\n"
+        "/analizza SYMBOL TF [autotrade] - Inizia analisi\n"
         "/stop SYMBOL - Ferma analisi\n"
         "/list - Analisi attive\n"
-        "/autodiscover - Analizza auto nuovi simboli\n"
-        "/abilita SYMBOL TF - Notifiche complete (ogni candela)\n"
-        "/pausa SYMBOL TF - Solo pattern (default)\n\n"
+        "/abilita SYMBOL TF - Notifiche complete\n"
+        "/pausa SYMBOL TF - Solo pattern (default)\n"
+        "/test SYMBOL TF - Test pattern\n\n"
         "💼 <b>Comandi Trading:</b>\n"
         "/balance - Mostra saldo\n"
-        "/posizioni - Posizioni aperte (sync Bybit)\n"
-        "/orders - Ordini chiusi con P&L\n"
-        "/trailing - Trailing Stop Loss\n"
-        "/sync - Sincronizza tracking con Bybit\n"
-        "/chiudi SYMBOL - Rimuovi posizione dal tracking\n\n"
-        "🔍 <b>Comandi Debug:</b>\n"
-        "/test SYMBOL TF - Test pattern\n\n"
+        "/posizioni - Posizioni aperte\n"
+        "/orders [N] - Ultimi ordini e P&L\n"
+        "/trailing - Status trailing stop\n"
+        "/sync - Sincronizza con Bybit\n"
+        "/chiudi SYMBOL - Rimuovi dal tracking\n\n"
         "🎯 <b>Comandi Pattern:</b>\n"
-        "/patterns - Lista pattern e status\n"
+        "/patterns - Lista pattern\n"
         "/pattern_on NOME - Abilita pattern\n"
         "/pattern_off NOME - Disabilita pattern\n"
-        "/ema_filter [MODE] - Gestisci filtro EMA\n"
+        "/pattern_info NOME - Info pattern\n\n"
+        "📈 <b>Comandi EMA:</b>\n"
+        "/ema_filter [MODE] - strict/loose/off\n"
         "/ema_sl [on|off] - EMA Stop Loss\n\n"
-        "📝 Esempio: /analizza BTCUSDT 15m\n"
+        "🔍 <b>Auto-Discovery:</b>\n"
+        "/autodiscover [on|off|now|status]\n"
+        "→ Top symbols automatici\n\n"
+        "📝 <b>Esempi:</b>\n"
+        "/analizza BTCUSDT 15m\n"
+        "/analizza ETHUSDT 5m yes (con autotrade)\n\n"
         f"⏱️ Timeframes: {', '.join(ENABLED_TFS)}\n"
-        f"💰 Rischio: ${RISK_USD}\n\n"
-        "🔕 <b>DEFAULT:</b> Solo notifiche con pattern\n"
-        "⚠️ <b>NOTA:</b> Solo segnali BUY attivi"
+        f"💰 Rischio default: ${RISK_USD}\n"
+        f"🔕 <b>Default:</b> Solo notifiche con pattern\n"
+        f"⚠️ <b>NOTA:</b> Solo segnali BUY attivi"
     )
     await update.message.reply_text(welcome_text, parse_mode='HTML')
 
