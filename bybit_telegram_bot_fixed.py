@@ -1730,7 +1730,7 @@ def check_higher_timeframe_resistance(symbol, current_tf, current_price):
     return {'blocked': False}
 
 
-async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float, entry_price: float, timeframe: str):  # 👈 AGGIUNGI parametri
+async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float, entry_price: float, timeframe: str, chat_id: int):
     """
     Piazza ordine market su Bybit (Demo o Live)
     Controlla REALMENTE su Bybit se esiste già una posizione aperta
@@ -1849,6 +1849,7 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                     'timeframe': timeframe,  # 👈 AGGIUNGI (pass come parametro)
                     'trailing_active': False,
                     'highest_price': entry_price  # 👈 AGGIUNGI
+                    'chat_id': chat_id  # 👈 AGGIUNGI
                 }
             logging.info(f'📝 Posizione salvata per {symbol}')
         
@@ -2238,12 +2239,55 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             
             logging.info(f'🔼 {symbol}: Aggiornamento SL da {current_sl:.{price_decimals}f} a {new_sl:.{price_decimals}f}')
             logging.info(f'   Price: {current_price:.{price_decimals}f}, EMA 10 ({ema_tf}): {ema_10:.{price_decimals}f}')
+
+            # ===== VERIFICA POSIZIONE ESISTE SU BYBIT =====                
+
+                    if positions.get('retCode') == 0:
+                        pos_list = positions.get('result', {}).get('list', [])
+                        
+                        # Verifica se c'è una posizione con size > 0
+                        position_exists = False
+                        for pos in pos_list:
+                            if float(pos.get('size', 0)) > 0:
+                                position_exists = True
+                                break
+                        
+                        if not position_exists:
+                            logging.warning(f'⚠️ {symbol}: Posizione NON trovata su Bybit, rimuovo dal tracking')
+                            with POSITIONS_LOCK:
+                                if symbol in ACTIVE_POSITIONS:
+                                    del ACTIVE_POSITIONS[symbol]
+                            continue
             
-            # Aggiorna SL su Bybit
+            # ===== VERIFICA POSIZIONE ESISTE SU BYBIT =====
             if BybitHTTP is not None:
                 try:
                     session = create_bybit_session()
                     
+                    # 👇 AGGIUNGI: Verifica posizione esiste
+                    positions = session.get_positions(
+                        category='linear',
+                        symbol=symbol
+                    )
+                    
+                    if positions.get('retCode') == 0:
+                        pos_list = positions.get('result', {}).get('list', [])
+                        
+                        # Verifica se c'è una posizione con size > 0
+                        position_exists = False
+                        for pos in pos_list:
+                            if float(pos.get('size', 0)) > 0:
+                                position_exists = True
+                                break
+                        
+                        if not position_exists:
+                            logging.warning(f'⚠️ {symbol}: Posizione NON trovata su Bybit, rimuovo dal tracking')
+                            with POSITIONS_LOCK:
+                                if symbol in ACTIVE_POSITIONS:
+                                    del ACTIVE_POSITIONS[symbol]
+                            continue
+                            
+                    # Aggiorna SL solo se posizione esiste
                     result = session.set_trading_stop(
                         category='linear',
                         symbol=symbol,
@@ -2258,6 +2302,44 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                                 ACTIVE_POSITIONS[symbol]['sl'] = new_sl
                         
                         logging.info(f'✅ {symbol}: Trailing SL aggiornato su Bybit a ${new_sl:.{price_decimals}f}')
+
+                        # ===== INVIA NOTIFICA TELEGRAM =====
+                        # Trova il chat_id dalla posizione
+                        chat_id = pos_info.get('chat_id')  # Serve salvare chat_id
+                        
+                        if chat_id:
+                            try:
+                                # Calcola profit attuale
+                                profit_percent = ((current_price - entry_price) / entry_price) * 100
+                                profit_usd = (current_price - entry_price) * pos_info['qty']
+                                
+                                # Calcola quanto si è spostato lo SL
+                                sl_move_usd = (new_sl - current_sl) * pos_info['qty']
+                                
+                                notification = (
+                                    f"🔼 <b>Trailing Stop Aggiornato</b>\n\n"
+                                    f"🪙 <b>Symbol:</b> {symbol} ({timeframe_entry})\n"
+                                    f"💵 <b>Prezzo:</b> ${current_price:.{price_decimals}f}\n"
+                                    f"📈 <b>Profit:</b> {profit_percent:+.2f}% (${profit_usd:+.2f})\n\n"
+                                    f"🛑 <b>Stop Loss:</b>\n"
+                                    f"  Prima: ${current_sl:.{price_decimals}f}\n"
+                                    f"  Ora: ${new_sl:.{price_decimals}f}\n"
+                                    f"  Spostamento: +${sl_move_usd:.2f}\n\n"
+                                    f"📊 <b>EMA 10 ({ema_tf}):</b> ${ema_10:.{price_decimals}f}\n"
+                                    f"💡 SL protegge ora ${(new_sl - entry_price) * pos_info['qty']:.2f} di profit"
+                                )
+                                
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text=notification,
+                                    parse_mode='HTML'
+                                )
+                                
+                                logging.info(f'📱 Notifica trailing inviata per {symbol}')
+                            
+                            except Exception as e:
+                                logging.error(f'❌ Errore invio notifica trailing: {e}')
+                    
                     else:
                         logging.error(f'❌ {symbol}: Errore aggiornamento SL Bybit: {result.get("retMsg")}')
                 
@@ -2674,7 +2756,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     sl_price, 
                     tp_price,
                     entry_price,  # 👈 AGGIUNGI
-                    timeframe     # 👈 AGGIUNGI
+                    timeframe,     # 👈 AGGIUNGI
+                    chat_id  # 👈 AGGIUNGI
                 )
                 
                 if 'error' in order_res:
