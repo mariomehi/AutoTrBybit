@@ -1702,29 +1702,37 @@ def check_higher_timeframe_resistance(symbol, current_tf, current_price):
     # Scarica dati HTF
     df_htf = bybit_get_klines(symbol, htf, limit=100)
     
+    if df_htf.empty:
+        logging.warning(f'⚠️ Nessun dato HTF per {symbol} {htf}')
+        return {'blocked': False}
+    
     # Calcola EMA HTF
     ema5_htf = df_htf['close'].ewm(span=5, adjust=False).mean().iloc[-1]
     ema10_htf = df_htf['close'].ewm(span=10, adjust=False).mean().iloc[-1]
     
-    # Check resistenza
+    # ===== CORREZIONE LOGICA =====
+    # Check resistenza (EMA SOTTO il prezzo = resistenza!)
     if current_tf in ['5m', '15m']:
         # Per scalping: controlla EMA 5 e 10 su 30m
-        if ema5_htf < current_price or ema10_htf < current_price:
+        # BLOCCA se EMA 5 o 10 sono SOTTO il prezzo corrente (resistenza sopra)
+        if ema5_htf > current_price or ema10_htf > current_price:  # 👈 CORRETTO
             # EMA sopra = resistenza
             return {
                 'blocked': True,
                 'htf': htf,
-                'details': f'EMA 5 ({htf}): ${ema5_htf:.2f}\nEMA 10 ({htf}): ${ema10_htf:.2f}'
+                'details': f'EMA 5 ({htf}): ${ema5_htf:.2f}\nEMA 10 ({htf}): ${ema10_htf:.2f}\nPrice: ${current_price:.2f}'
             }
     
     elif current_tf in ['30m', '1h']:
         # Per day: controlla EMA 60 su 4h
         ema60_htf = df_htf['close'].ewm(span=60, adjust=False).mean().iloc[-1]
-        if ema60_htf < current_price:
+        
+        # BLOCCA se EMA 60 è SOPRA il prezzo
+        if ema60_htf > current_price:  # 👈 CORRETTO
             return {
                 'blocked': True,
                 'htf': htf,
-                'details': f'EMA 60 ({htf}): ${ema60_htf:.2f}'
+                'details': f'EMA 60 ({htf}): ${ema60_htf:.2f}\nPrice: ${current_price:.2f}'
             }
     
     return {'blocked': False}
@@ -2570,7 +2578,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         # ===== STEP 5: COSTRUISCI MESSAGGIO =====
         
         if found and side == 'Buy':
-            # ========== SEGNALE BUY ==========
             # Check Higher Timeframe EMA (tappo)
             htf_block = check_higher_timeframe_resistance(
                 symbol=symbol,
@@ -2594,7 +2601,21 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                         f"{htf_block['details']}\n\n"
                         f"💡 Aspetta breakout HTF o cerca altro setup"
                     )
-                    # Invia notifica warning...
+                    
+                    try:
+                    chart_buffer = generate_chart(df, symbol, timeframe)
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=chart_buffer,
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+                    except:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=caption,
+                        parse_mode='HTML'
+                    )
                 
                 return  # BLOCCA segnale
             
