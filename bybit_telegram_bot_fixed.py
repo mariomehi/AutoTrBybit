@@ -2241,23 +2241,22 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             logging.info(f'   Price: {current_price:.{price_decimals}f}, EMA 10 ({ema_tf}): {ema_10:.{price_decimals}f}')
 
             # ===== VERIFICA POSIZIONE ESISTE SU BYBIT =====                
-
-                    if positions.get('retCode') == 0:
-                        pos_list = positions.get('result', {}).get('list', [])
-                        
-                        # Verifica se c'è una posizione con size > 0
-                        position_exists = False
-                        for pos in pos_list:
-                            if float(pos.get('size', 0)) > 0:
-                                position_exists = True
-                                break
-                        
-                        if not position_exists:
-                            logging.warning(f'⚠️ {symbol}: Posizione NON trovata su Bybit, rimuovo dal tracking')
-                            with POSITIONS_LOCK:
-                                if symbol in ACTIVE_POSITIONS:
-                                    del ACTIVE_POSITIONS[symbol]
-                            continue
+            if positions.get('retCode') == 0:
+                pos_list = positions.get('result', {}).get('list', [])
+                
+                # Verifica se c'è una posizione con size > 0
+                position_exists = False
+                for pos in pos_list:
+                    if float(pos.get('size', 0)) > 0:
+                        position_exists = True
+                        break
+                
+                if not position_exists:
+                    logging.warning(f'⚠️ {symbol}: Posizione NON trovata su Bybit, rimuovo dal tracking')
+                    with POSITIONS_LOCK:
+                        if symbol in ACTIVE_POSITIONS:
+                            del ACTIVE_POSITIONS[symbol]
+                    continue
             
             # ===== VERIFICA POSIZIONE ESISTE SU BYBIT =====
             if BybitHTTP is not None:
