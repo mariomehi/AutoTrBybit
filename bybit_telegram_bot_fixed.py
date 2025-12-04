@@ -2603,19 +2603,19 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     )
                     
                     try:
-                    chart_buffer = generate_chart(df, symbol, timeframe)
-                    await context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=chart_buffer,
-                        caption=caption,
-                        parse_mode='HTML'
-                    )
+                        chart_buffer = generate_chart(df, symbol, timeframe)
+                        await context.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=chart_buffer,
+                            caption=caption,
+                            parse_mode='HTML'
+                        )
                     except:
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=caption,
-                        parse_mode='HTML'
-                    )
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=caption,
+                            parse_mode='HTML'
+                        )
                 
                 return  # BLOCCA segnale
             
