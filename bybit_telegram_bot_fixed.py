@@ -188,6 +188,13 @@ AVAILABLE_PATTERNS = {
         'side': 'Buy',
         'emoji': '🚩'
     },
+    'morning_star_ema_breakout': {  # 👈 NUOVO
+        'name': 'Morning Star + EMA Breakout',
+        'enabled': True,
+        'description': 'Morning Star con rottura EMA 5,10 al rialzo',
+        'side': 'Buy',
+        'emoji': '⭐💥'
+    },
     'bullish_engulfing': {
         'name': 'Bullish Engulfing',
         'enabled': True,
@@ -788,6 +795,96 @@ def is_morning_star(a, b, c):
             c_recovers)
 
 
+def is_morning_star_ema_breakout(df: pd.DataFrame):
+    """
+    Pattern: Morning Star + EMA Breakout
+    
+    STRUTTURA:
+    1. Morning Star classico (3 candele)
+    2. EMA 5 e 10 erano SOPRA il prezzo (resistenza)
+    3. Ultima candela verde ROMPE EMA 5 e 10 al rialzo
+    4. Chiude SOPRA entrambe le EMA
+    
+    Setup ad ALTISSIMA probabilità - Combina:
+    - Inversione candlestick (Morning Star)
+    - Breakout EMA (conferma trend change)
+    
+    Returns: True se pattern rilevato
+    """
+    if len(df) < 10:  # Serve storico per EMA
+        return False
+    
+    # Candele
+    a = df.iloc[-3]  # Prima: ribassista
+    b = df.iloc[-2]  # Seconda: piccola
+    c = df.iloc[-1]  # Terza: rialzista (breakout)
+    
+    # === STEP 1: Verifica Morning Star classico ===
+    if not is_morning_star(a, b, c):
+        return False
+    
+    # === STEP 2: Calcola EMA 5 e 10 ===
+    ema_5 = df['close'].ewm(span=5, adjust=False).mean()
+    ema_10 = df['close'].ewm(span=10, adjust=False).mean()
+    
+    # Valori EMA attuali (candela c)
+    ema5_now = ema_5.iloc[-1]
+    ema10_now = ema_10.iloc[-1]
+    
+    # Valori EMA sulla candela ribassista (a)
+    ema5_prev = ema_5.iloc[-3]
+    ema10_prev = ema_10.iloc[-3]
+    
+    # === STEP 3: EMA erano SOPRA (resistenza) ===
+    # Durante la candela ribassista, EMA 5 e 10 erano sopra il prezzo
+    ema_were_resistance = (
+        ema5_prev > a['close'] and 
+        ema10_prev > a['close']
+    )
+    
+    if not ema_were_resistance:
+        return False
+    
+    # === STEP 4: Candela verde ROMPE EMA al rialzo ===
+    # La candela c deve:
+    # - Aprire sotto o vicino alle EMA
+    # - Chiudere SOPRA entrambe le EMA
+    
+    breaks_ema5 = c['close'] > ema5_now
+    breaks_ema10 = c['close'] > ema10_now
+    
+    if not (breaks_ema5 and breaks_ema10):
+        return False
+    
+    # === STEP 5: Breakout significativo ===
+    # La candela deve chiudere almeno 0.3% sopra le EMA
+    # (evita breakout deboli)
+    
+    significant_break = (
+        c['close'] > ema5_now * 1.003 and
+        c['close'] > ema10_now * 1.003
+    )
+    
+    if not significant_break:
+        return False
+    
+    # === STEP 6: Volume (opzionale ma consigliato) ===
+    if 'volume' in df.columns:
+        vol = df['volume']
+        if len(vol) >= 21:
+            avg_vol = vol.iloc[-21:-1].mean()
+            current_vol = vol.iloc[-1]
+            
+            # Volume candela verde deve essere > media
+            volume_ok = current_vol > avg_vol * 1.2
+            
+            if not volume_ok:
+                return False
+    
+    # === PATTERN CONFERMATO ===
+    return True
+
+
 def is_evening_star(a, b, c):
     """
     Pattern: Evening Star (3 candele - bearish reversal)
@@ -1275,6 +1372,11 @@ def check_patterns(df: pd.DataFrame):
         found, flag_data = is_bullish_flag_breakout(df)
         if found:
             return (True, 'Buy', 'Bullish Flag Breakout', flag_data)
+
+    # 👇 AGGIUNGI QUI - Morning Star + EMA Breakout (alta priorità!)
+    if AVAILABLE_PATTERNS['morning_star_ema_breakout']['enabled']:
+        if is_morning_star_ema_breakout(df):
+            return (True, 'Buy', 'Morning Star + EMA Breakout', None)
     
     # Bullish Engulfing
     if AVAILABLE_PATTERNS['bullish_engulfing']['enabled']:
@@ -2701,12 +2803,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/analizza SYMBOL TF - Inizia analisi\n"
         "/stop SYMBOL - Ferma analisi\n"
         "/list - Analisi attive\n"
+        "/autodiscover - Analizza auto nuovi simboli\n"
         "/abilita SYMBOL TF - Notifiche complete (ogni candela)\n"
         "/pausa SYMBOL TF - Solo pattern (default)\n\n"
         "💼 <b>Comandi Trading:</b>\n"
         "/balance - Mostra saldo\n"
         "/posizioni - Posizioni aperte (sync Bybit)\n"
         "/orders - Ordini chiusi con P&L\n"
+        "/trailing - Trailing Stop Loss\n"
         "/sync - Sincronizza tracking con Bybit\n"
         "/chiudi SYMBOL - Rimuovi posizione dal tracking\n\n"
         "🔍 <b>Comandi Debug:</b>\n"
@@ -4043,6 +4147,7 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Test individuali
         tests = {
             '🚩 Bullish Flag Breakout': is_bullish_flag_breakout(df)[0],  # Ritorna (bool, data)
+            '⭐ Morning Star': morning_star_ema_breakout(df),
             '💥 Compression Breakout': is_compression_breakout(df),
             '🔄 Bullish Comeback': is_bullish_comeback(df),
             '🟢 Bullish Engulfing': is_bullish_engulfing(prev, last),
