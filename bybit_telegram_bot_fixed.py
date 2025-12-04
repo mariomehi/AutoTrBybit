@@ -1848,7 +1848,7 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                     'timestamp': datetime.now(timezone.utc).isoformat(),
                     'timeframe': timeframe,  # 👈 AGGIUNGI (pass come parametro)
                     'trailing_active': False,
-                    'highest_price': entry_price  # 👈 AGGIUNGI
+                    'highest_price': entry_price,  # 👈 AGGIUNGI
                     'chat_id': chat_id  # 👈 AGGIUNGI
                 }
             logging.info(f'📝 Posizione salvata per {symbol}')
