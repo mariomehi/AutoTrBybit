@@ -2816,7 +2816,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     # Prezzo ancora sotto setup high, aspetta
                     logging.info(f'⏳ {symbol}: Liquidity Sweep rilevato ma price ({entry_price:.4f}) < setup high ({setup_high:.4f})')
                     logging.info(f'   Aspetta breakout per entry')
-                continue  # Skip questo ciclo, aspetta prossima candela
+                    #continue  # Skip questo ciclo, aspetta prossima candela
                 
                 # Entry confermato (price > setup high)
                 sl_price = pattern_data['sl']
