@@ -1172,29 +1172,41 @@ def is_morning_star_ema_breakout(df: pd.DataFrame):
 
 def is_liquidity_sweep_reversal(df: pd.DataFrame):
     """
-    Pattern: Liquidity Sweep + Reversal
+    Pattern: Liquidity Sweep + Reversal (FIXED VERSION)
+    
+    FIXES vs versione precedente:
+    ✅ Timing corretto (rileva su breakout, non su setup)
+    ✅ Volume obbligatorio (2x+ su recovery)
+    ✅ Recovery strength (80%+ recupero)
+    ✅ Breakout confirmation (price > recovery high)
+    ✅ Pattern data utilizzabile per SL/TP
     
     TIMING CORRETTO:
-    - Candela -3 a -10: Range con previous low
-    - Candela -2: SWEEP sotto previous low
-    - Candela -1: SETUP - chiude sopra previous low (pattern rilevato QUI)
-    - Candela CORRENTE: Aspetta breakout high candela -1 per entry
+    - Candela -3: SWEEP sotto previous low
+    - Candela -2: RECOVERY verde
+    - Candela -1: CONFERMA breakout (pattern rilevato QUI)
     
-    Entry: Market order quando price > high candela setup
+    Entry: Al breakout del recovery high
     SL: Sotto sweep low
+    TP: 2R (alta probabilità)
     
     Returns: (found: bool, data: dict or None)
     """
     if len(df) < 20:
         return (False, None)
     
-    # Candele
-    sweep_candle = df.iloc[-2]  # Candela che fa sweep
-    setup_candle = df.iloc[-1]  # Candela setup (aspettiamo breakout)
+    # Candele CORRETTE
+    sweep_candle = df.iloc[-3]    # Sweep
+    recovery_candle = df.iloc[-2]  # Recovery
+    current = df.iloc[-1]          # Conferma breakout
     
     # === STEP 1: Identifica PREVIOUS LOW ===
     lookback = 15
-    recent_lows = df['low'].iloc[-lookback:-2]
+    recent_lows = df['low'].iloc[-lookback:-3]
+    
+    if len(recent_lows) < 5:
+        return (False, None)
+    
     previous_low = recent_lows.min()
     
     # Previous low deve essere supporto valido (toccato almeno 2 volte)
@@ -1202,7 +1214,7 @@ def is_liquidity_sweep_reversal(df: pd.DataFrame):
     if touches < 2:
         return (False, None)
     
-    # === STEP 2: SWEEP - Candela -2 rompe previous low ===
+    # === STEP 2: SWEEP - Rompe previous low ===
     sweep_low = sweep_candle['low']
     
     # Deve rompere previous low
@@ -1215,8 +1227,11 @@ def is_liquidity_sweep_reversal(df: pd.DataFrame):
     sweep_range = sweep_candle['high'] - sweep_candle['low']
     lower_wick = min(sweep_candle['open'], sweep_candle['close']) - sweep_candle['low']
     
+    if sweep_range == 0:
+        return (False, None)
+    
     # Ombra deve essere almeno 50% del range
-    has_long_wick = lower_wick >= sweep_range * 0.5 if sweep_range > 0 else False
+    has_long_wick = lower_wick >= sweep_range * 0.5
     if not has_long_wick:
         return (False, None)
     
@@ -1225,54 +1240,101 @@ def is_liquidity_sweep_reversal(df: pd.DataFrame):
     if not closes_above:
         return (False, None)
     
-    # === STEP 5: SETUP CANDLE - Candela -1 deve confermare ===
-    setup_is_bullish = setup_candle['close'] > setup_candle['open']
+    # === STEP 5: RECOVERY CANDLE ===
+    recovery_is_bullish = recovery_candle['close'] > recovery_candle['open']
     
-    # Setup deve chiudere SOPRA high dello sweep (conferma forza)
-    # O almeno vicino (tolleranza 0.3%)
-    confirms_strength = setup_candle['close'] >= sweep_candle['high'] * 0.997
-    
-    if not (setup_is_bullish and confirms_strength):
+    if not recovery_is_bullish:
         return (False, None)
     
-    # === STEP 6: EMA 60 CHECK ===
+    # Recovery deve avere corpo significativo
+    recovery_body = abs(recovery_candle['close'] - recovery_candle['open'])
+    recovery_range = recovery_candle['high'] - recovery_candle['low']
+    
+    if recovery_range == 0:
+        return (False, None)
+    
+    recovery_body_pct = recovery_body / recovery_range
+    
+    # Corpo minimo 40% del range
+    if recovery_body_pct < 0.40:
+        return (False, None)
+    
+    # === STEP 6: RECOVERY STRENGTH (CRITICO) ===
+    # Recovery deve recuperare almeno 80% del drop
+    sweep_drop = abs(sweep_candle['open'] - sweep_candle['close'])
+    recovery_gain = recovery_candle['close'] - recovery_candle['open']
+    
+    if sweep_drop > 0:
+        recovery_pct = recovery_gain / sweep_drop
+    else:
+        recovery_pct = 1.0
+    
+    if recovery_pct < 0.80:
+        return (False, None)
+    
+    # === STEP 7: VOLUME SPIKE su recovery (MUST HAVE) ===
+    if 'volume' not in df.columns or len(df['volume']) < 20:
+        return (False, None)
+    
+    vol = df['volume']
+    avg_vol = vol.iloc[-20:-2].mean()
+    recovery_vol = vol.iloc[-2]
+    
+    if avg_vol == 0:
+        return (False, None)
+    
+    vol_ratio = recovery_vol / avg_vol
+    
+    # Volume recovery DEVE essere > 2x
+    if vol_ratio < 2.0:
+        return (False, None)
+    
+    # === STEP 8: CURRENT CANDLE conferma breakout ===
+    # Current deve essere rialzista o almeno neutra
+    current_not_bearish = current['close'] >= current['open'] * 0.995
+    
+    # Current deve rompere recovery high (breakout confermato)
+    breaks_recovery_high = current['close'] > recovery_candle['high']
+    
+    if not (current_not_bearish and breaks_recovery_high):
+        return (False, None)
+    
+    # === STEP 9: EMA 60 CHECK ===
     ema_60 = df['close'].ewm(span=60, adjust=False).mean()
     ema_60_value = ema_60.iloc[-1]
     
-    # Setup candle deve essere sopra EMA 60 (trend rialzista)
-    price_above_ema60 = setup_candle['close'] > ema_60_value
+    # Current deve essere sopra EMA 60 (trend rialzista)
+    price_above_ema60 = current['close'] > ema_60_value
     if not price_above_ema60:
         return (False, None)
     
-    # === STEP 7: VOLUME ===
-    volume_ok = True
-    if 'volume' in df.columns:
-        vol = df['volume']
-        if len(vol) >= 21:
-            avg_vol = vol.iloc[-21:-2].mean()
-            sweep_vol = vol.iloc[-2]
-            setup_vol = vol.iloc[-1]
-            
-            # Volume sweep O setup deve essere elevato
-            volume_ok = (sweep_vol > avg_vol * 1.3 or setup_vol > avg_vol * 1.2)
+    # === STEP 10: EMA 10 CHECK (momentum) ===
+    ema_10 = df['close'].ewm(span=10, adjust=False).mean()
+    ema_10_value = ema_10.iloc[-1]
     
-    if not volume_ok:
+    # Current deve essere sopra EMA 10
+    price_above_ema10 = current['close'] > ema_10_value
+    if not price_above_ema10:
         return (False, None)
     
-    # === STEP 8: Distanza da EMA 60 ===
-    distance_to_ema60 = abs(setup_candle['close'] - ema_60_value) / ema_60_value
+    # === STEP 11: Distanza da EMA 60 ===
+    distance_to_ema60 = abs(current['close'] - ema_60_value) / ema_60_value
     near_ema60 = distance_to_ema60 < 0.01
     
     # === PATTERN CONFERMATO ===
-    # Entry: Al breakout del high della setup candle
     pattern_data = {
         'previous_low': previous_low,
         'sweep_low': sweep_low,
-        'setup_high': setup_candle['high'],  # Questo è il breakout level
-        'entry': setup_candle['high'] * 1.001,  # Entry con buffer 0.1%
-        'sl': sweep_low * 0.998,
+        'recovery_high': recovery_candle['high'],
+        'breakout_price': current['close'],
+        'recovery_pct': recovery_pct * 100,
+        'volume_ratio': vol_ratio,
+        'ema10': ema_10_value,
         'ema60': ema_60_value,
-        'near_ema60': near_ema60
+        'near_ema60': near_ema60,
+        # Per SL/TP custom
+        'suggested_entry': recovery_candle['high'] * 1.001,
+        'suggested_sl': sweep_low * 0.998
     }
     
     return (True, pattern_data)
@@ -3053,34 +3115,45 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
 
             # Liquidity Sweep + Reversal
             if pattern == 'Liquidity Sweep + Reversal' and pattern_data:
-                # Entry: Current price (pattern già confermato)
-                # La setup candle è già chiusa, entriamo al prezzo corrente
-                entry_price = last_close  # 👈 Entry al prezzo corrente
+                # === LIQUIDITY SWEEP: Entry Logic Corretta ===
                 
-                # Verifica che siamo sopra il setup high (conferma)
-                setup_high = pattern_data['setup_high']
+                # Entry al breakout del recovery high
+                entry_price = pattern_data.get('suggested_entry', last_close)
                 
-                if entry_price < setup_high:
-                    # Prezzo ancora sotto setup high, aspetta
-                    logging.info(f'⏳ {symbol}: Liquidity Sweep rilevato ma price ({entry_price:.4f}) < setup high ({setup_high:.4f})')
-                    logging.info(f'   Aspetta breakout per entry')
-                    #continue  # Skip questo ciclo, aspetta prossima candela
+                # SL sotto sweep low (con buffer 0.2%)
+                sl_price = pattern_data.get('suggested_sl', last_close * 0.98)
                 
-                # Entry confermato (price > setup high)
-                sl_price = pattern_data['sl']
-                
-                # TP: 2R
+                # TP: 2R (pattern ad alta probabilità)
                 risk = entry_price - sl_price
                 tp_price = entry_price + (risk * 2.0)
                 
                 ema_used = 'Sweep Low'
                 ema_value = pattern_data['sweep_low']
                 
-                logging.info(f'💎 Liquidity Sweep Entry:')
-                logging.info(f'   Setup High: ${setup_high:.4f}')
-                logging.info(f'   Entry: ${entry_price:.4f} (breakout confirmed)')
-                logging.info(f'   SL: ${sl_price:.4f}')
-                logging.info(f'   TP: ${tp_price:.4f} (2R)')
+                # Verifica che entry ha senso (non troppo lontano dal prezzo corrente)
+                entry_distance = abs(entry_price - last_close) / last_close
+                
+                if entry_distance > 0.005:  # Max 0.5% di distanza
+                    logging.warning(f'⚠️ {symbol}: Entry price troppo lontano da current price')
+                    logging.warning(f'   Entry: ${entry_price:.4f}, Current: ${last_close:.4f}')
+                    # Usa prezzo corrente come fallback
+                    entry_price = last_close
+                
+                # Calcola decimali dinamici
+                price_decimals = get_price_decimals(entry_price)
+                
+                # Log dettagliato
+                logging.info(f'💎 Liquidity Sweep Entry Setup:')
+                logging.info(f'   Previous Low: ${pattern_data["previous_low"]:.{price_decimals}f}')
+                logging.info(f'   Sweep Low: ${pattern_data["sweep_low"]:.{price_decimals}f}')
+                logging.info(f'   Recovery High: ${pattern_data["recovery_high"]:.{price_decimals}f}')
+                logging.info(f'   Breakout Price: ${pattern_data["breakout_price"]:.{price_decimals}f}')
+                logging.info(f'   Entry: ${entry_price:.{price_decimals}f}')
+                logging.info(f'   SL: ${sl_price:.{price_decimals}f}')
+                logging.info(f'   TP: ${tp_price:.{price_decimals}f} (2R)')
+                logging.info(f'   Recovery: {pattern_data["recovery_pct"]:.1f}%')
+                logging.info(f'   Volume: {pattern_data["volume_ratio"]:.1f}x')
+
 
             
             # === CALCOLA SL/TP CUSTOM per Bullish Flag Breakout ===
@@ -4751,6 +4824,122 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode='HTML')
 
 
+async def cmd_test_sweep(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /test_sweep SYMBOL TIMEFRAME
+    Testa specificamente il pattern Liquidity Sweep
+    """
+    args = context.args
+    
+    if len(args) < 2:
+        await update.message.reply_text(
+            '❌ Uso: /test_sweep SYMBOL TIMEFRAME\n'
+            'Esempio: /test_sweep BTCUSDT 5m'
+        )
+        return
+    
+    symbol = args[0].upper()
+    timeframe = args[1].lower()
+    
+    await update.message.reply_text(f'🔍 Testing Liquidity Sweep su {symbol} {timeframe}...')
+    
+    try:
+        # Ottieni dati
+        df = bybit_get_klines(symbol, timeframe, limit=100)
+        if df.empty:
+            await update.message.reply_text(f'❌ Nessun dato per {symbol}')
+            return
+        
+        # Test pattern
+        found, data = is_liquidity_sweep_reversal(df)
+        
+        # Costruisci report
+        msg = f"💎 <b>Liquidity Sweep Test: {symbol} {timeframe}</b>\n\n"
+        
+        if found:
+            msg += "🎯 <b>PATTERN TROVATO!</b>\n\n"
+            
+            price_decimals = get_price_decimals(data['breakout_price'])
+            
+            msg += f"📉 <b>Sweep Phase:</b>\n"
+            msg += f"  Previous Low: ${data['previous_low']:.{price_decimals}f}\n"
+            msg += f"  Sweep Low: ${data['sweep_low']:.{price_decimals}f}\n"
+            msg += f"  Distance: {((data['previous_low'] - data['sweep_low']) / data['previous_low'] * 100):.2f}%\n\n"
+            
+            msg += f"📈 <b>Recovery Phase:</b>\n"
+            msg += f"  Recovery: <b>{data['recovery_pct']:.1f}%</b>\n"
+            msg += f"  Volume: <b>{data['volume_ratio']:.1f}x</b>\n"
+            msg += f"  Recovery High: ${data['recovery_high']:.{price_decimals}f}\n\n"
+            
+            msg += f"💥 <b>Breakout Phase:</b>\n"
+            msg += f"  Breakout Price: ${data['breakout_price']:.{price_decimals}f}\n"
+            msg += f"  EMA 10: ${data['ema10']:.{price_decimals}f}\n"
+            msg += f"  EMA 60: ${data['ema60']:.{price_decimals}f}\n\n"
+            
+            msg += f"🎯 <b>Trade Setup:</b>\n"
+            msg += f"  Entry: ${data['suggested_entry']:.{price_decimals}f}\n"
+            msg += f"  SL: ${data['suggested_sl']:.{price_decimals}f}\n"
+            
+            # Calcola TP suggerito
+            risk = data['suggested_entry'] - data['suggested_sl']
+            tp = data['suggested_entry'] + (risk * 2.0)
+            msg += f"  TP (2R): ${tp:.{price_decimals}f}\n\n"
+            
+            msg += "🟢 <b>Pattern VALIDO per entry</b>"
+            
+        else:
+            msg += "❌ <b>Pattern NON trovato</b>\n\n"
+            
+            # Debug: verifica dove fallisce
+            msg += "<b>Checklist:</b>\n"
+            
+            # Check 1: Previous low
+            lookback = 15
+            recent_lows = df['low'].iloc[-lookback:-3]
+            if len(recent_lows) >= 5:
+                previous_low = recent_lows.min()
+                touches = (recent_lows <= previous_low * 1.002).sum()
+                msg += f"{'✅' if touches >= 2 else '❌'} Previous low valido (touches: {touches})\n"
+            else:
+                msg += "❌ Dati insufficienti\n"
+            
+            # Check 2: Sweep
+            if len(df) >= 3:
+                sweep = df.iloc[-3]
+                if len(recent_lows) >= 5:
+                    breaks = sweep['low'] < previous_low
+                    msg += f"{'✅' if breaks else '❌'} Sweep rompe previous low\n"
+            
+            # Check 3: Recovery
+            if len(df) >= 2:
+                recovery = df.iloc[-2]
+                is_green = recovery['close'] > recovery['open']
+                msg += f"{'✅' if is_green else '❌'} Recovery candle verde\n"
+                
+                # Volume
+                vol = df['volume']
+                if len(vol) >= 20:
+                    avg_vol = vol.iloc[-20:-2].mean()
+                    recovery_vol = vol.iloc[-2]
+                    if avg_vol > 0:
+                        vol_ratio = recovery_vol / avg_vol
+                        msg += f"{'✅' if vol_ratio >= 2.0 else '❌'} Volume recovery: {vol_ratio:.1f}x (serve 2x+)\n"
+            
+            # Check 4: Breakout
+            if len(df) >= 2:
+                current = df.iloc[-1]
+                recovery = df.iloc[-2]
+                breaks = current['close'] > recovery['high']
+                msg += f"{'✅' if breaks else '❌'} Breakout recovery high\n"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+        
+    except Exception as e:
+        logging.exception('Errore in cmd_test_sweep')
+        await update.message.reply_text(f'❌ Errore: {str(e)}')
+
+
+
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /test SYMBOL TIMEFRAME
@@ -4919,6 +5108,7 @@ def main():
     application.add_handler(CommandHandler('ema_filter', cmd_ema_filter))
     application.add_handler(CommandHandler('ema_sl', cmd_ema_sl))
     application.add_handler(CommandHandler('test_volume', cmd_test_volume))
+    application.add_handler(CommandHandler('test_sweep', cmd_test_sweep))
 
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
