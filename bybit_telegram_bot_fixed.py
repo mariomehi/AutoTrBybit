@@ -958,116 +958,104 @@ def is_morning_star_ema_breakout(df: pd.DataFrame):
 def is_liquidity_sweep_reversal(df: pd.DataFrame):
     """
     Pattern: Liquidity Sweep + Reversal
-    Pattern istituzionale - Smart Money Concept
     
-    LOGICA:
-    1. Identifica previous low recente (supporto)
-    2. Prezzo "sweep" sotto il previous low (caccia stop loss retail)
-    3. Candela con ombra lunga sotto (sweep)
-    4. Chiude SOPRA il previous low (reversal forte)
-    5. Candela successiva continua al rialzo (conferma)
+    TIMING CORRETTO:
+    - Candela -3 a -10: Range con previous low
+    - Candela -2: SWEEP sotto previous low
+    - Candela -1: SETUP - chiude sopra previous low (pattern rilevato QUI)
+    - Candela CORRENTE: Aspetta breakout high candela -1 per entry
     
-    EMA REQUIREMENTS (DIVERSI dai pattern classici):
-    - MUST: Price > EMA 60 (trend principale rialzista)
-    - TOLLERATO: Price può essere < EMA 5,10 durante sweep
-    - BONUS: Sweep near EMA 60 (strong bounce)
-    
-    Entry: Al breakout del high della reversal candle
-    SL: Sotto il sweep low
-    TP: 2R o previous high
+    Entry: Market order quando price > high candela setup
+    SL: Sotto sweep low
     
     Returns: (found: bool, data: dict or None)
     """
-    if len(df) < 20:  # Serve storico per identificare previous low
+    if len(df) < 20:
         return (False, None)
     
     # Candele
-    sweep_candle = df.iloc[-2]  # Candela che fa lo sweep
-    reversal_candle = df.iloc[-1]  # Candela di reversal (corrente)
+    sweep_candle = df.iloc[-2]  # Candela che fa sweep
+    setup_candle = df.iloc[-1]  # Candela setup (aspettiamo breakout)
     
-    # === STEP 1: Identifica PREVIOUS LOW (ultimi 10-15 candele) ===
+    # === STEP 1: Identifica PREVIOUS LOW ===
     lookback = 15
-    recent_lows = df['low'].iloc[-lookback:-2]  # Escludi ultime 2 candele
+    recent_lows = df['low'].iloc[-lookback:-2]
     previous_low = recent_lows.min()
     
-    # Previous low deve essere un low "significativo" (toccato almeno 2 volte)
-    touches = (recent_lows <= previous_low * 1.002).sum()  # Tolleranza 0.2%
-    
+    # Previous low deve essere supporto valido (toccato almeno 2 volte)
+    touches = (recent_lows <= previous_low * 1.002).sum()
     if touches < 2:
-        return (False, None)  # Non è un supporto valido
+        return (False, None)
     
-    # === STEP 2: SWEEP - Prezzo va sotto previous low ===
+    # === STEP 2: SWEEP - Candela -2 rompe previous low ===
     sweep_low = sweep_candle['low']
     
-    # Sweep deve rompere previous low
+    # Deve rompere previous low
     breaks_previous_low = sweep_low < previous_low
-    
     if not breaks_previous_low:
         return (False, None)
     
-    # === STEP 3: OMBRA LUNGA SOTTO (wick sweep) ===
+    # === STEP 3: OMBRA LUNGA SOTTO ===
     sweep_body = abs(sweep_candle['close'] - sweep_candle['open'])
     sweep_range = sweep_candle['high'] - sweep_candle['low']
     lower_wick = min(sweep_candle['open'], sweep_candle['close']) - sweep_candle['low']
     
-    # Ombra inferiore deve essere significativa (almeno 60% del range)
-    has_long_wick = lower_wick >= sweep_range * 0.6 if sweep_range > 0 else False
-    
+    # Ombra deve essere almeno 50% del range
+    has_long_wick = lower_wick >= sweep_range * 0.5 if sweep_range > 0 else False
     if not has_long_wick:
         return (False, None)
     
     # === STEP 4: CHIUDE SOPRA previous low (REVERSAL) ===
-    closes_above_previous_low = sweep_candle['close'] > previous_low
-    
-    if not closes_above_previous_low:
+    closes_above = sweep_candle['close'] > previous_low
+    if not closes_above:
         return (False, None)
     
-    # === STEP 5: CONFERMA - Candela corrente continua al rialzo ===
-    reversal_is_bullish = reversal_candle['close'] > reversal_candle['open']
+    # === STEP 5: SETUP CANDLE - Candela -1 deve confermare ===
+    setup_is_bullish = setup_candle['close'] > setup_candle['open']
     
-    # Candela reversal deve chiudere sopra high della sweep candle
-    confirms_reversal = reversal_candle['close'] > sweep_candle['high']
+    # Setup deve chiudere SOPRA high dello sweep (conferma forza)
+    # O almeno vicino (tolleranza 0.3%)
+    confirms_strength = setup_candle['close'] >= sweep_candle['high'] * 0.997
     
-    if not (reversal_is_bullish and confirms_reversal):
+    if not (setup_is_bullish and confirms_strength):
         return (False, None)
     
-    # === STEP 6: EMA CHECK (DIVERSO dai pattern classici) ===
+    # === STEP 6: EMA 60 CHECK ===
     ema_60 = df['close'].ewm(span=60, adjust=False).mean()
     ema_60_value = ema_60.iloc[-1]
     
-    # MUST: Prezzo reversal > EMA 60 (trend principale rialzista)
-    # NOTA: Durante lo sweep, prezzo può essere sotto EMA 5,10 (è normale!)
-    price_above_ema60 = reversal_candle['close'] > ema_60_value
-    
+    # Setup candle deve essere sopra EMA 60 (trend rialzista)
+    price_above_ema60 = setup_candle['close'] > ema_60_value
     if not price_above_ema60:
-        return (False, None)  # Sweep in downtrend = skip
+        return (False, None)
     
-    # === STEP 7: VOLUME (opzionale ma consigliato) ===
+    # === STEP 7: VOLUME ===
     volume_ok = True
     if 'volume' in df.columns:
         vol = df['volume']
         if len(vol) >= 21:
             avg_vol = vol.iloc[-21:-2].mean()
             sweep_vol = vol.iloc[-2]
-            reversal_vol = vol.iloc[-1]
+            setup_vol = vol.iloc[-1]
             
-            # Volume dello sweep O reversal deve essere > media
-            volume_ok = (sweep_vol > avg_vol * 1.3 or reversal_vol > avg_vol * 1.3)
+            # Volume sweep O setup deve essere elevato
+            volume_ok = (sweep_vol > avg_vol * 1.3 or setup_vol > avg_vol * 1.2)
     
     if not volume_ok:
         return (False, None)
     
-    # === STEP 8: Calcola distanza da EMA 60 (BONUS per score) ===
-    distance_to_ema60 = abs(reversal_candle['close'] - ema_60_value) / ema_60_value
-    near_ema60 = distance_to_ema60 < 0.01  # Entro 1% da EMA 60
+    # === STEP 8: Distanza da EMA 60 ===
+    distance_to_ema60 = abs(setup_candle['close'] - ema_60_value) / ema_60_value
+    near_ema60 = distance_to_ema60 < 0.01
     
     # === PATTERN CONFERMATO ===
+    # Entry: Al breakout del high della setup candle
     pattern_data = {
         'previous_low': previous_low,
         'sweep_low': sweep_low,
-        'reversal_high': reversal_candle['high'],
-        'entry': reversal_candle['high'],  # Entry al breakout high reversal
-        'sl': sweep_low * 0.998,  # SL sotto sweep low con buffer
+        'setup_high': setup_candle['high'],  # Questo è il breakout level
+        'entry': setup_candle['high'] * 1.001,  # Entry con buffer 0.1%
+        'sl': sweep_low * 0.998,
         'ema60': ema_60_value,
         'near_ema60': near_ema60
     }
@@ -2815,26 +2803,34 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 return  # BLOCCA segnale
 
-
-            # Liquidity Sweep + Reversal (logica custom)
+            # Liquidity Sweep + Reversal
             if pattern == 'Liquidity Sweep + Reversal' and pattern_data:
-                # Entry al breakout del reversal high
-                entry_price = pattern_data['entry']
+                # Entry: Current price (pattern già confermato)
+                # La setup candle è già chiusa, entriamo al prezzo corrente
+                entry_price = last_close  # 👈 Entry al prezzo corrente
                 
-                # Stop Loss: Sotto il sweep low (con buffer)
+                # Verifica che siamo sopra il setup high (conferma)
+                setup_high = pattern_data['setup_high']
+                
+                if entry_price < setup_high:
+                    # Prezzo ancora sotto setup high, aspetta
+                    logging.info(f'⏳ {symbol}: Liquidity Sweep rilevato ma price ({entry_price:.4f}) < setup high ({setup_high:.4f})')
+                    logging.info(f'   Aspetta breakout per entry')
+                    continue  # Skip questo ciclo, aspetta prossima candela
+                
+                # Entry confermato (price > setup high)
                 sl_price = pattern_data['sl']
                 
-                # Take Profit: 2R o calcolo risk-reward
+                # TP: 2R
                 risk = entry_price - sl_price
-                tp_price = entry_price + (risk * 2.0)  # 2R
+                tp_price = entry_price + (risk * 2.0)
                 
                 ema_used = 'Sweep Low'
                 ema_value = pattern_data['sweep_low']
                 
-                logging.info(f'💎 Liquidity Sweep Pattern:')
-                logging.info(f'   Previous Low: ${pattern_data["previous_low"]:.4f}')
-                logging.info(f'   Sweep Low: ${pattern_data["sweep_low"]:.4f}')
-                logging.info(f'   Entry: ${entry_price:.4f}')
+                logging.info(f'💎 Liquidity Sweep Entry:')
+                logging.info(f'   Setup High: ${setup_high:.4f}')
+                logging.info(f'   Entry: ${entry_price:.4f} (breakout confirmed)')
                 logging.info(f'   SL: ${sl_price:.4f}')
                 logging.info(f'   TP: ${tp_price:.4f} (2R)')
 
@@ -2953,12 +2949,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     vol_ratio = (current_vol / avg_vol) if avg_vol > 0 else 0
                     caption += f"📊 <b>Volume:</b> {vol_ratio:.2f}x\n"
             
-
-            if found and pattern == 'Liquidity Sweep + Reversal' and EMA_FILTER_ENABLED:
-                ema_analysis = analyze_ema_conditions(df, timeframe, pattern)  # 👈 PASSA pattern_name
-                caption += "\n━━━━━━━━━━━━━━━━━━━\n"
-                caption += "📈 <b>EMA Analysis</b>\n\n"
-                caption += ema_analysis['details']
+            if ema_analysis:
+                if found and pattern == 'Liquidity Sweep + Reversal' and EMA_FILTER_ENABLED:
+                    ema_analysis = analyze_ema_conditions(df, timeframe, pattern)  # 👈 PASSA pattern_name
+                    caption += "\n━━━━━━━━━━━━━━━━━━━\n"
+                    caption += "📈 <b>EMA Analysis</b>\n\n"
+                    caption += ema_analysis['details']
                 
             # Valori EMA CON DECIMALI DINAMICI
                 if 'ema_values' in ema_analysis:
