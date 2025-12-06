@@ -169,6 +169,13 @@ AUTO_DISCOVERED_LOCK = threading.Lock()
 
 # Pattern Management System
 AVAILABLE_PATTERNS = {
+        'liquidity_sweep_reversal': {  # 👈 NUOVO (alta priorità!)
+        'name': 'Liquidity Sweep + Reversal',
+        'enabled': True,
+        'description': 'Smart Money: sweep low + reversal (istituzionale)',
+        'side': 'Buy',
+        'emoji': '💎'
+    },
     'bullish_comeback': {
         'name': 'Bullish Comeback',
         'enabled': True,
@@ -480,6 +487,39 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str):
     conditions = {}
     score = 0
     details = []
+
+
+    # === CASO SPECIALE: Liquidity Sweep Pattern ===
+    # Per questo pattern, le regole EMA sono diverse
+    if pattern_name == 'Liquidity Sweep + Reversal':
+        # MUST: Solo EMA 60 (trend principale)
+        if last_close > last_ema60:
+            score = 80  # Score fisso GOOD
+            details.append("Price > EMA 60 (trend rialzista)")
+            details.append("Pattern istituzionale: sweep tollerato sotto EMA 5,10")
+            
+            # BONUS: Vicino a EMA 60
+            distance_to_ema60 = abs(last_close - last_ema60) / last_ema60
+            if distance_to_ema60 < 0.01:
+                score = 100  # GOLD se vicino a EMA 60
+                details.append("Near EMA 60 - strong bounce zone")
+            
+            return {
+                'score': score,
+                'quality': 'GOLD' if score == 100 else 'GOOD',
+                'conditions': {'price_above_ema60': True},
+                'details': '\n'.join(details),
+                'passed': True
+            }
+        else:
+            # Sweep in downtrend = BAD
+            return {
+                'score': 0,
+                'quality': 'BAD',
+                'conditions': {'price_above_ema60': False},
+                'details': 'Sweep in downtrend - SKIP',
+                'passed': False
+            }
     
     if timeframe in ['5m', '15m']:
         # MUST 1: Prezzo sopra EMA 10
@@ -897,6 +937,126 @@ def is_morning_star_ema_breakout(df: pd.DataFrame):
     
     # === PATTERN CONFERMATO ===
     return True
+
+
+def is_liquidity_sweep_reversal(df: pd.DataFrame):
+    """
+    Pattern: Liquidity Sweep + Reversal
+    Pattern istituzionale - Smart Money Concept
+    
+    LOGICA:
+    1. Identifica previous low recente (supporto)
+    2. Prezzo "sweep" sotto il previous low (caccia stop loss retail)
+    3. Candela con ombra lunga sotto (sweep)
+    4. Chiude SOPRA il previous low (reversal forte)
+    5. Candela successiva continua al rialzo (conferma)
+    
+    EMA REQUIREMENTS (DIVERSI dai pattern classici):
+    - MUST: Price > EMA 60 (trend principale rialzista)
+    - TOLLERATO: Price può essere < EMA 5,10 durante sweep
+    - BONUS: Sweep near EMA 60 (strong bounce)
+    
+    Entry: Al breakout del high della reversal candle
+    SL: Sotto il sweep low
+    TP: 2R o previous high
+    
+    Returns: (found: bool, data: dict or None)
+    """
+    if len(df) < 20:  # Serve storico per identificare previous low
+        return (False, None)
+    
+    # Candele
+    sweep_candle = df.iloc[-2]  # Candela che fa lo sweep
+    reversal_candle = df.iloc[-1]  # Candela di reversal (corrente)
+    
+    # === STEP 1: Identifica PREVIOUS LOW (ultimi 10-15 candele) ===
+    lookback = 15
+    recent_lows = df['low'].iloc[-lookback:-2]  # Escludi ultime 2 candele
+    previous_low = recent_lows.min()
+    
+    # Previous low deve essere un low "significativo" (toccato almeno 2 volte)
+    touches = (recent_lows <= previous_low * 1.002).sum()  # Tolleranza 0.2%
+    
+    if touches < 2:
+        return (False, None)  # Non è un supporto valido
+    
+    # === STEP 2: SWEEP - Prezzo va sotto previous low ===
+    sweep_low = sweep_candle['low']
+    
+    # Sweep deve rompere previous low
+    breaks_previous_low = sweep_low < previous_low
+    
+    if not breaks_previous_low:
+        return (False, None)
+    
+    # === STEP 3: OMBRA LUNGA SOTTO (wick sweep) ===
+    sweep_body = abs(sweep_candle['close'] - sweep_candle['open'])
+    sweep_range = sweep_candle['high'] - sweep_candle['low']
+    lower_wick = min(sweep_candle['open'], sweep_candle['close']) - sweep_candle['low']
+    
+    # Ombra inferiore deve essere significativa (almeno 60% del range)
+    has_long_wick = lower_wick >= sweep_range * 0.6 if sweep_range > 0 else False
+    
+    if not has_long_wick:
+        return (False, None)
+    
+    # === STEP 4: CHIUDE SOPRA previous low (REVERSAL) ===
+    closes_above_previous_low = sweep_candle['close'] > previous_low
+    
+    if not closes_above_previous_low:
+        return (False, None)
+    
+    # === STEP 5: CONFERMA - Candela corrente continua al rialzo ===
+    reversal_is_bullish = reversal_candle['close'] > reversal_candle['open']
+    
+    # Candela reversal deve chiudere sopra high della sweep candle
+    confirms_reversal = reversal_candle['close'] > sweep_candle['high']
+    
+    if not (reversal_is_bullish and confirms_reversal):
+        return (False, None)
+    
+    # === STEP 6: EMA CHECK (DIVERSO dai pattern classici) ===
+    ema_60 = df['close'].ewm(span=60, adjust=False).mean()
+    ema_60_value = ema_60.iloc[-1]
+    
+    # MUST: Prezzo reversal > EMA 60 (trend principale rialzista)
+    # NOTA: Durante lo sweep, prezzo può essere sotto EMA 5,10 (è normale!)
+    price_above_ema60 = reversal_candle['close'] > ema_60_value
+    
+    if not price_above_ema60:
+        return (False, None)  # Sweep in downtrend = skip
+    
+    # === STEP 7: VOLUME (opzionale ma consigliato) ===
+    volume_ok = True
+    if 'volume' in df.columns:
+        vol = df['volume']
+        if len(vol) >= 21:
+            avg_vol = vol.iloc[-21:-2].mean()
+            sweep_vol = vol.iloc[-2]
+            reversal_vol = vol.iloc[-1]
+            
+            # Volume dello sweep O reversal deve essere > media
+            volume_ok = (sweep_vol > avg_vol * 1.3 or reversal_vol > avg_vol * 1.3)
+    
+    if not volume_ok:
+        return (False, None)
+    
+    # === STEP 8: Calcola distanza da EMA 60 (BONUS per score) ===
+    distance_to_ema60 = abs(reversal_candle['close'] - ema_60_value) / ema_60_value
+    near_ema60 = distance_to_ema60 < 0.01  # Entro 1% da EMA 60
+    
+    # === PATTERN CONFERMATO ===
+    pattern_data = {
+        'previous_low': previous_low,
+        'sweep_low': sweep_low,
+        'reversal_high': reversal_candle['high'],
+        'entry': reversal_candle['high'],  # Entry al breakout high reversal
+        'sl': sweep_low * 0.998,  # SL sotto sweep low con buffer
+        'ema60': ema_60_value,
+        'near_ema60': near_ema60
+    }
+    
+    return (True, pattern_data)
 
 
 def is_evening_star(a, b, c):
@@ -1370,7 +1530,13 @@ def check_patterns(df: pd.DataFrame):
     prev2 = df.iloc[-3]
 
     # ===== PATTERN BUY =====
-    
+
+    # 👇 LIQUIDITY SWEEP (massima priorità - pattern istituzionale)
+    if AVAILABLE_PATTERNS['liquidity_sweep_reversal']['enabled']:
+        found, sweep_data = is_liquidity_sweep_reversal(df)
+        if found:
+            return (True, 'Buy', 'Liquidity Sweep + Reversal', sweep_data)
+
     # Bullish Comeback
     if AVAILABLE_PATTERNS['bullish_comeback']['enabled']:
         if is_bullish_comeback(df):
@@ -2632,6 +2798,30 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                         )
                 
                 return  # BLOCCA segnale
+
+
+            # Liquidity Sweep + Reversal (logica custom)
+            if pattern == 'Liquidity Sweep + Reversal' and pattern_data:
+                # Entry al breakout del reversal high
+                entry_price = pattern_data['entry']
+                
+                # Stop Loss: Sotto il sweep low (con buffer)
+                sl_price = pattern_data['sl']
+                
+                # Take Profit: 2R o calcolo risk-reward
+                risk = entry_price - sl_price
+                tp_price = entry_price + (risk * 2.0)  # 2R
+                
+                ema_used = 'Sweep Low'
+                ema_value = pattern_data['sweep_low']
+                
+                logging.info(f'💎 Liquidity Sweep Pattern:')
+                logging.info(f'   Previous Low: ${pattern_data["previous_low"]:.4f}')
+                logging.info(f'   Sweep Low: ${pattern_data["sweep_low"]:.4f}')
+                logging.info(f'   Entry: ${entry_price:.4f}')
+                logging.info(f'   SL: ${sl_price:.4f}')
+                logging.info(f'   TP: ${tp_price:.4f} (2R)')
+
             
             # === CALCOLA SL/TP CUSTOM per Bullish Flag Breakout ===
             if pattern == 'Bullish Flag Breakout' and pattern_data:
