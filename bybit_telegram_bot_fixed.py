@@ -155,7 +155,7 @@ AUTO_DISCOVERY_CONFIG = {
     'top_count': 10,  # Top 10 symbols
     'timeframe': '5m',  # Timeframe da analizzare
     'autotrade': True,  # Autotrade per auto-discovery (False = solo notifiche)
-    'update_interval': 21600,  # 12 ore in secondi (12 * 60 * 60)
+    'update_interval': 14400,  # 12 ore in secondi (12 * 60 * 60)
     'min_volume_usdt': 5000000,  # Min volume 24h: 10M USDT
     'min_price_change': 5.0,  # Min variazione 24h: +5%
     'max_price_change': 80.0,  # Max variazione 24h: +50% (evita pump & dump)
@@ -440,7 +440,7 @@ def get_price_decimals(price: float) -> int:
         return 6
 
 
-def analyze_ema_conditions(df: pd.DataFrame, timeframe: str):
+def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str = None):
     """
     Analizza le condizioni EMA per il timeframe specificato
     
@@ -487,39 +487,6 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str):
     conditions = {}
     score = 0
     details = []
-
-
-    # === CASO SPECIALE: Liquidity Sweep Pattern ===
-    # Per questo pattern, le regole EMA sono diverse
-    if pattern_name == 'Liquidity Sweep + Reversal':
-        # MUST: Solo EMA 60 (trend principale)
-        if last_close > last_ema60:
-            score = 80  # Score fisso GOOD
-            details.append("Price > EMA 60 (trend rialzista)")
-            details.append("Pattern istituzionale: sweep tollerato sotto EMA 5,10")
-            
-            # BONUS: Vicino a EMA 60
-            distance_to_ema60 = abs(last_close - last_ema60) / last_ema60
-            if distance_to_ema60 < 0.01:
-                score = 100  # GOLD se vicino a EMA 60
-                details.append("Near EMA 60 - strong bounce zone")
-            
-            return {
-                'score': score,
-                'quality': 'GOLD' if score == 100 else 'GOOD',
-                'conditions': {'price_above_ema60': True},
-                'details': '\n'.join(details),
-                'passed': True
-            }
-        else:
-            # Sweep in downtrend = BAD
-            return {
-                'score': 0,
-                'quality': 'BAD',
-                'conditions': {'price_above_ema60': False},
-                'details': 'Sweep in downtrend - SKIP',
-                'passed': False
-            }
     
     if timeframe in ['5m', '15m']:
         # MUST 1: Prezzo sopra EMA 10
@@ -683,6 +650,55 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str):
                 details.append("Vicino EMA 223 (bounce zone!)")
             else:
                 conditions['near_ema223'] = False
+
+
+    # === CASO SPECIALE: Liquidity Sweep Pattern ===
+    # Per questo pattern, le regole EMA sono diverse
+    if pattern_name == 'Liquidity Sweep + Reversal':
+        # MUST: Solo EMA 60 (trend principale)
+        if last_close > last_ema60:
+            score = 80  # Score fisso GOOD
+            details = []  # Reset details per logica custom
+            details.append("Pattern istituzionale: Liquidity Sweep")
+            details.append("Prezzo maggiore EMA 60 (trend rialzista)")
+            details.append("Sweep sotto EMA 5,10 tollerato")
+            
+            # BONUS: Vicino a EMA 60
+            distance_to_ema60 = abs(last_close - last_ema60) / last_ema60
+            if distance_to_ema60 < 0.01:
+                score = 100  # GOLD se vicino a EMA 60
+                details.append("Vicino EMA 60 - strong bounce zone")
+            
+            return {
+                'score': score,
+                'quality': 'GOLD' if score == 100 else 'GOOD',
+                'conditions': {'price_above_ema60': True},
+                'details': '\n'.join(details),
+                'passed': True,
+                'ema_values': {
+                    'ema5': last_ema5,
+                    'ema10': last_ema10,
+                    'ema60': last_ema60,
+                    'ema223': last_ema223,
+                    'price': last_close
+                }
+            }
+        else:
+            # Sweep in downtrend = BAD
+            return {
+                'score': 0,
+                'quality': 'BAD',
+                'conditions': {'price_above_ema60': False},
+                'details': 'Liquidity Sweep in downtrend - SKIP',
+                'passed': False,
+                'ema_values': {
+                    'ema5': last_ema5,
+                    'ema10': last_ema10,
+                    'ema60': last_ema60,
+                    'ema223': last_ema223,
+                    'price': last_close
+                }
+            }
     
     # Normalizza score tra 0-100
     score = max(0, min(100, score))
@@ -2175,7 +2191,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
     2. Ferma analisi per symbols non più in top
     3. Avvia nuove analisi per symbols in top
     
-    Eseguito ogni 12 ore
+    Eseguito ogni 4 ore
     """
     if not AUTO_DISCOVERY_CONFIG['enabled']:
         return
@@ -2301,7 +2317,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             
             msg += f"\n⏱️ Timeframe: {timeframe}\n"
             msg += f"🤖 Autotrade: {'ON' if autotrade else 'OFF'}\n"
-            msg += f"🔄 Prossimo update tra 12 ore"
+            msg += f"🔄 Prossimo update tra 4 ore"
         else:
             msg += "✅ Nessun cambiamento\n\n"
             msg += f"Top {len(top_symbols)} symbols confermati:\n"
@@ -2674,7 +2690,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         pattern_search_allowed = True  # Default: cerca pattern
         
         if EMA_FILTER_ENABLED:
-            ema_analysis = analyze_ema_conditions(df, timeframe)
+            ema_analysis = analyze_ema_conditions(df, timeframe, None)
             
             logging.info(f'📊 EMA Pre-Filter {symbol} {timeframe}: Score={ema_analysis["score"]}, Quality={ema_analysis["quality"]}, Passed={ema_analysis["passed"]}')
             
@@ -2937,8 +2953,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     vol_ratio = (current_vol / avg_vol) if avg_vol > 0 else 0
                     caption += f"📊 <b>Volume:</b> {vol_ratio:.2f}x\n"
             
-            # === DETTAGLI EMA ===
-            if ema_analysis:
+
+            if found and pattern == 'Liquidity Sweep + Reversal' and EMA_FILTER_ENABLED:
+                ema_analysis = analyze_ema_conditions(df, timeframe, pattern)  # 👈 PASSA pattern_name
                 caption += "\n━━━━━━━━━━━━━━━━━━━\n"
                 caption += "📈 <b>EMA Analysis</b>\n\n"
                 caption += ema_analysis['details']
