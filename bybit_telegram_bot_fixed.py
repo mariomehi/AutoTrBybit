@@ -6026,7 +6026,7 @@ async def cmd_test_flag(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Debug info
             msg += "<b>Possibili motivi:</b>\n"
-            msg += "• Nessun pole valido (corpo <60%, height <0.8%)\n"
+            msg += "• Nessun pole valido (corpo minore 60%, height minore 0.8%)\n"
             msg += "• Flag troppo corto (<3) o lungo (>8)\n"
             msg += "• Candele flag superano X\n"
             msg += "• Volume breakout <2x consolidamento\n"
