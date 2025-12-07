@@ -407,6 +407,16 @@ def bybit_get_klines(symbol: str, interval: str, limit: int = 200):
         df['timestamp'] = pd.to_datetime(df['timestamp'].astype(float), unit='ms')
         df.set_index('timestamp', inplace=True)
         df = df[['open','high','low','close','volume']].astype(float)
+        # Debug: Verifica volume
+        if len(df) > 0:
+            vol_sum = df['volume'].sum()
+            vol_mean = df['volume'].mean()
+            vol_max = df['volume'].max()
+            
+            if vol_sum == 0:
+                logging.warning(f'⚠️ WARNING: All volumes are ZERO for {symbol} {interval}')
+            else:
+                logging.debug(f'Volume stats for {symbol}: sum={vol_sum:.2f}, mean={vol_mean:.2f}, max={vol_max:.2f}')
         
         return df
         
@@ -434,7 +444,7 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 
 def volume_confirmation(df: pd.DataFrame, min_ratio: float = 2.0) -> bool:
     """
-    Filtro Volume - CRITICO per crypto
+    Filtro Volume - CRITICO per crypto (VERSION FIXED)
     Volume deve essere significativamente sopra la media
     
     Args:
@@ -444,17 +454,51 @@ def volume_confirmation(df: pd.DataFrame, min_ratio: float = 2.0) -> bool:
     Returns:
         True se volume è sufficiente
     """
-    if 'volume' not in df.columns or len(df) < 20:
+    # Check 1: Colonna volume esiste?
+    if 'volume' not in df.columns:
+        logging.error('❌ Volume column NOT FOUND in dataframe')
+        logging.error(f'Available columns: {df.columns.tolist()}')
+        return False
+    
+    # Check 2: Dati sufficienti?
+    if len(df) < 20:
+        logging.warning(f'⚠️ Insufficient data for volume check: {len(df)} rows (need 20+)')
         return False
     
     vol = df['volume']
+    
+    # Check 3: Volume non è tutto NaN?
+    if vol.isna().all():
+        logging.error('❌ All volume values are NaN')
+        return False
+    
+    # Calcola media ultimi 20 (esclude corrente)
     avg_vol = vol.iloc[-20:-1].mean()
     current_vol = vol.iloc[-1]
     
-    if avg_vol == 0:
+    # Check 4: Valori validi?
+    if pd.isna(avg_vol) or pd.isna(current_vol):
+        logging.error(f'❌ Volume values are NaN: avg={avg_vol}, current={current_vol}')
         return False
     
-    return current_vol > avg_vol * min_ratio
+    # Check 5: Average volume > 0?
+    if avg_vol == 0:
+        logging.error(f'❌ Average volume is 0 (last 20 periods all zero)')
+        logging.error(f'Volume data: {vol.iloc[-20:].tolist()}')
+        return False
+    
+    # Calcola ratio
+    ratio = current_vol / avg_vol
+    
+    # Debug log (puoi commentare dopo fix)
+    logging.debug(f'Volume check: avg={avg_vol:.2f}, current={current_vol:.2f}, ratio={ratio:.2f}x (need {min_ratio}x)')
+    
+    result = ratio > min_ratio
+    
+    if not result:
+        logging.info(f'⚠️ Volume insufficient: {ratio:.2f}x (need {min_ratio}x+)')
+    
+    return result
 
 
 def atr_expanding(df: pd.DataFrame, expansion_threshold: float = 1.15) -> bool:
@@ -3760,54 +3804,100 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             caption += f"🕐 {timestamp_str}\n"
             caption += f"💵 Price: ${last_close:.4f}\n\n"
             
-            # === AGGIUNGI: INFO FILTRI GLOBALI ===
+            # === FIX: INFO FILTRI GLOBALI CON GESTIONE ERRORI ===
             caption += "🔍 <b>Global Filters Status:</b>\n"
             
-            # Check volume
-            vol_result = volume_confirmation(df, min_ratio=1.5)
+            # Check volume CON error handling
+            vol_ratio = 0.0
+            vol_result = False
+            
+            try:
+                # Verifica che colonna volume esista
+                if 'volume' in df.columns and len(df['volume']) >= 20:
+                    vol = df['volume']
+                    
+                    # Calcola media escludendo candela corrente
+                    avg_vol = vol.iloc[-20:-1].mean()
+                    current_vol = vol.iloc[-1]
+                    
+                    # Debug log (opzionale)
+                    logging.debug(f'Volume check: avg={avg_vol:.2f}, current={current_vol:.2f}')
+                    
+                    # Calcola ratio solo se avg_vol > 0
+                    if avg_vol > 0 and not pd.isna(avg_vol) and not pd.isna(current_vol):
+                        vol_ratio = current_vol / avg_vol
+                        vol_result = vol_ratio > 1.5
+                    else:
+                        logging.warning(f'Volume avg or current is 0/NaN: avg={avg_vol}, current={current_vol}')
+                else:
+                    logging.warning(f'Volume column missing or insufficient data: {len(df) if not df.empty else 0} rows')
+            
+            except Exception as e:
+                logging.error(f'Error calculating volume ratio: {e}')
+                vol_ratio = 0.0
+                vol_result = False
+            
+            # Mostra risultato
             if vol_result:
-                vol = df['volume']
-                avg_vol = vol.iloc[-20:-1].mean()
-                current_vol = vol.iloc[-1]
-                vol_ratio = current_vol / avg_vol if avg_vol > 0 else 0
-                caption += f"✅ Volume: {vol_ratio:.1f}x (>{1.5}x) OK\n"
+                caption += f"✅ Volume: {vol_ratio:.1f}x (>1.5x) OK\n"
             else:
-                vol = df['volume']
-                avg_vol = vol.iloc[-20:-1].mean()
-                current_vol = vol.iloc[-1]
-                vol_ratio = current_vol / avg_vol if avg_vol > 0 else 0
-                caption += f"❌ Volume: {vol_ratio:.1f}x (serve >1.5x) BLOCKED\n"
+                if vol_ratio > 0:
+                    caption += f"❌ Volume: {vol_ratio:.1f}x (serve >1.5x) BLOCKED\n"
+                else:
+                    caption += f"❌ Volume: N/A (dati insufficienti) BLOCKED\n"
             
             # Check uptrend
-            trend_result = is_uptrend_structure(df)
-            if trend_result:
-                caption += "✅ Uptrend Structure: HH+HL OK\n"
-            else:
-                caption += "❌ Uptrend Structure: NO (downtrend o sideways)\n"
+            trend_result = False
+            try:
+                trend_result = is_uptrend_structure(df)
+                if trend_result:
+                    caption += "✅ Uptrend Structure: HH+HL OK\n"
+                else:
+                    caption += "❌ Uptrend Structure: NO (downtrend o sideways)\n"
+            except Exception as e:
+                logging.error(f'Error checking uptrend: {e}')
+                caption += "❌ Uptrend Structure: ERROR\n"
             
             # Check ATR
-            atr_result = atr_expanding(df)
-            if atr_result:
-                caption += "✅ ATR Expansion: Volatilità in aumento\n"
-            else:
-                caption += "⚠️ ATR Flat: Bassa volatilità (warning)\n"
+            atr_result = False
+            try:
+                atr_result = atr_expanding(df)
+                if atr_result:
+                    caption += "✅ ATR Expansion: Volatilità in aumento\n"
+                else:
+                    caption += "⚠️ ATR Flat: Bassa volatilità (warning)\n"
+            except Exception as e:
+                logging.error(f'Error checking ATR: {e}')
+                caption += "⚠️ ATR: ERROR\n"
             
             caption += "\n"
             
             # Pattern search status
-            if pattern_search_allowed:
+            if not vol_result or not trend_result:
+                caption += "🚫 <b>Pattern search bloccata</b>\n"
+                if not vol_result:
+                    caption += "Motivo: Volume insufficiente\n"
+                if not trend_result:
+                    caption += "Motivo: No uptrend structure\n"
+            else:
                 caption += "🔔 <b>Full Mode - Nessun pattern rilevato</b>\n"
                 caption += "Filtri globali passati MA nessun pattern trovato.\n"
-            else:
-                caption += "🚫 <b>Pattern search bloccata</b>\n"
-                caption += "Filtri globali non passati (volume o trend).\n"
-        
+            
             # ATR info dettagliata
             if not math.isnan(last_atr):
-                atr_series = atr(df, period=14)
-                atr_avg = atr_series.iloc[-10:-1].mean()
-                atr_ratio = last_atr / atr_avg if atr_avg > 0 else 1
-                caption += f"\n📏 ATR(14): ${last_atr:.4f} ({atr_ratio:.2f}x avg)\n"
+                try:
+                    atr_series = atr(df, period=14)
+                    if len(atr_series) >= 10 and not atr_series.isna().all():
+                        atr_avg = atr_series.iloc[-10:-1].mean()
+                        if atr_avg > 0 and not pd.isna(atr_avg):
+                            atr_ratio = last_atr / atr_avg
+                            caption += f"\n📏 ATR(14): ${last_atr:.4f} ({atr_ratio:.2f}x avg)\n"
+                        else:
+                            caption += f"\n📏 ATR(14): ${last_atr:.4f}\n"
+                except Exception as e:
+                    logging.error(f'Error calculating ATR ratio: {e}')
+                    caption += f"\n📏 ATR(14): ${last_atr:.4f}\n"
+
             
             # ANALISI EMA MERCATO
             if ema_analysis:
@@ -3830,18 +3920,18 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:  # BAD
                     caption += "❌ Condizioni sfavorevoli. NO entry."
                 
-        # Valori EMA CON DECIMALI DINAMICI
-                if 'ema_values' in ema_analysis:
-                    ema_vals = ema_analysis['ema_values']
-                    # Usa il prezzo corrente per determinare i decimali
-                    ema_decimals = get_price_decimals(ema_vals['price'])
-                    
-                    caption += f"\n\n💡 <b>EMA Values:</b>\n"
-                    caption += f"Price: ${ema_vals['price']:.{ema_decimals}f}\n"
-                    caption += f"EMA 5: ${ema_vals['ema5']:.{ema_decimals}f}\n"
-                    caption += f"EMA 10: ${ema_vals['ema10']:.{ema_decimals}f}\n"
-                    caption += f"EMA 60: ${ema_vals['ema60']:.{ema_decimals}f}\n"
-                    caption += f"EMA 223: ${ema_vals['ema223']:.{ema_decimals}f}\n"
+            # Valori EMA CON DECIMALI DINAMICI
+            if 'ema_values' in ema_analysis:
+                ema_vals = ema_analysis['ema_values']
+                # Usa il prezzo corrente per determinare i decimali
+                ema_decimals = get_price_decimals(ema_vals['price'])
+                
+                caption += f"\n\n💡 <b>EMA Values:</b>\n"
+                caption += f"Price: ${ema_vals['price']:.{ema_decimals}f}\n"
+                caption += f"EMA 5: ${ema_vals['ema5']:.{ema_decimals}f}\n"
+                caption += f"EMA 10: ${ema_vals['ema10']:.{ema_decimals}f}\n"
+                caption += f"EMA 60: ${ema_vals['ema60']:.{ema_decimals}f}\n"
+                caption += f"EMA 223: ${ema_vals['ema223']:.{ema_decimals}f}\n"
         
         # ===== STEP 6: INVIA GRAFICO =====
         try:
@@ -5630,6 +5720,90 @@ async def cmd_test_sr(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f'❌ Errore: {str(e)}')
 
 
+async def cmd_debug_volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /debug_volume SYMBOL TIMEFRAME
+    Mostra dettagli completi sul volume per debugging
+    """
+    args = context.args
+    
+    if len(args) < 2:
+        await update.message.reply_text(
+            '❌ Uso: /debug_volume SYMBOL TIMEFRAME\n'
+            'Esempio: /debug_volume BTCUSDT 5m'
+        )
+        return
+    
+    symbol = args[0].upper()
+    timeframe = args[1].lower()
+    
+    await update.message.reply_text(f'🔍 Debug volume per {symbol} {timeframe}...')
+    
+    try:
+        # Ottieni dati
+        df = bybit_get_klines(symbol, timeframe, limit=50)
+        
+        if df.empty:
+            await update.message.reply_text(f'❌ Nessun dato per {symbol}')
+            return
+        
+        msg = f"🔍 <b>Debug Volume: {symbol} {timeframe}</b>\n\n"
+        
+        # Check colonne
+        msg += f"<b>Colonne DataFrame:</b>\n"
+        msg += f"{df.columns.tolist()}\n\n"
+        
+        # Check volume column
+        if 'volume' in df.columns:
+            msg += f"<b>✅ Volume column EXISTS</b>\n\n"
+            
+            vol = df['volume']
+            
+            # Stats
+            msg += f"<b>Volume Stats:</b>\n"
+            msg += f"Count: {len(vol)}\n"
+            msg += f"Sum: {vol.sum():.2f}\n"
+            msg += f"Mean: {vol.mean():.2f}\n"
+            msg += f"Min: {vol.min():.2f}\n"
+            msg += f"Max: {vol.max():.2f}\n"
+            msg += f"Current: {vol.iloc[-1]:.2f}\n\n"
+            
+            # Check NaN
+            nan_count = vol.isna().sum()
+            msg += f"NaN values: {nan_count}\n"
+            msg += f"Zero values: {(vol == 0).sum()}\n\n"
+            
+            # Volume ratio
+            if len(vol) >= 20:
+                avg_vol = vol.iloc[-20:-1].mean()
+                current_vol = vol.iloc[-1]
+                
+                if avg_vol > 0:
+                    ratio = current_vol / avg_vol
+                    msg += f"<b>Volume Ratio Check:</b>\n"
+                    msg += f"Avg (20 periods): {avg_vol:.2f}\n"
+                    msg += f"Current: {current_vol:.2f}\n"
+                    msg += f"Ratio: {ratio:.2f}x\n"
+                    msg += f"Threshold: 1.5x\n"
+                    msg += f"Result: {'✅ PASS' if ratio > 1.5 else '❌ FAIL'}\n\n"
+                else:
+                    msg += f"❌ Average volume is ZERO!\n\n"
+            
+            # Ultimi 10 volumi
+            msg += f"<b>Last 10 volumes:</b>\n"
+            last_10 = vol.iloc[-10:].tolist()
+            for i, v in enumerate(last_10, 1):
+                msg += f"{i}. {v:.2f}\n"
+        else:
+            msg += f"❌ <b>Volume column NOT FOUND!</b>\n"
+            msg += f"Available: {df.columns.tolist()}"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+        
+    except Exception as e:
+        logging.exception('Error in cmd_debug_volume')
+        await update.message.reply_text(f'❌ Errore: {str(e)}')
+
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /test SYMBOL TIMEFRAME
@@ -5801,6 +5975,7 @@ def main():
     application.add_handler(CommandHandler('test_sweep', cmd_test_sweep))
     application.add_handler(CommandHandler('test_sr', cmd_test_sr))
     application.add_handler(CommandHandler('test_compression', cmd_test_compression))
+    application.add_handler(CommandHandler('debug_volume', cmd_debug_volume))
 
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
