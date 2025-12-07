@@ -3760,13 +3760,54 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             caption += f"🕐 {timestamp_str}\n"
             caption += f"💵 Price: ${last_close:.4f}\n\n"
             
-            if pattern_search_allowed:
-                caption += "🔔 <b>Full Mode - Nessun pattern</b>\n"
-            else:
-                caption += "🚫 <b>Pattern search bloccata da EMA</b>\n"
+            # === AGGIUNGI: INFO FILTRI GLOBALI ===
+            caption += "🔍 <b>Global Filters Status:</b>\n"
             
+            # Check volume
+            vol_result = volume_confirmation(df, min_ratio=1.5)
+            if vol_result:
+                vol = df['volume']
+                avg_vol = vol.iloc[-20:-1].mean()
+                current_vol = vol.iloc[-1]
+                vol_ratio = current_vol / avg_vol if avg_vol > 0 else 0
+                caption += f"✅ Volume: {vol_ratio:.1f}x (>{1.5}x) OK\n"
+            else:
+                vol = df['volume']
+                avg_vol = vol.iloc[-20:-1].mean()
+                current_vol = vol.iloc[-1]
+                vol_ratio = current_vol / avg_vol if avg_vol > 0 else 0
+                caption += f"❌ Volume: {vol_ratio:.1f}x (serve >1.5x) BLOCKED\n"
+            
+            # Check uptrend
+            trend_result = is_uptrend_structure(df)
+            if trend_result:
+                caption += "✅ Uptrend Structure: HH+HL OK\n"
+            else:
+                caption += "❌ Uptrend Structure: NO (downtrend o sideways)\n"
+            
+            # Check ATR
+            atr_result = atr_expanding(df)
+            if atr_result:
+                caption += "✅ ATR Expansion: Volatilità in aumento\n"
+            else:
+                caption += "⚠️ ATR Flat: Bassa volatilità (warning)\n"
+            
+            caption += "\n"
+            
+            # Pattern search status
+            if pattern_search_allowed:
+                caption += "🔔 <b>Full Mode - Nessun pattern rilevato</b>\n"
+                caption += "Filtri globali passati MA nessun pattern trovato.\n"
+            else:
+                caption += "🚫 <b>Pattern search bloccata</b>\n"
+                caption += "Filtri globali non passati (volume o trend).\n"
+        
+            # ATR info dettagliata
             if not math.isnan(last_atr):
-                caption += f"📏 ATR(14): ${last_atr:.4f}\n"
+                atr_series = atr(df, period=14)
+                atr_avg = atr_series.iloc[-10:-1].mean()
+                atr_ratio = last_atr / atr_avg if atr_avg > 0 else 1
+                caption += f"\n📏 ATR(14): ${last_atr:.4f} ({atr_ratio:.2f}x avg)\n"
             
             # ANALISI EMA MERCATO
             if ema_analysis:
