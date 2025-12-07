@@ -70,7 +70,7 @@ TRAILING_CONFIG = {
     'activation_percent': 0.5,  # Attiva trailing dopo +0.5% profit
     'ema_buffer': 0.002,  # Buffer 0.2% sotto EMA 10
     'never_back': True,  # SL non torna mai indietro
-    'check_interval': 300,  # Check ogni 5 minuti (300 secondi)
+    'check_interval': 150,  # Check ogni 5 minuti (300 secondi)
 }
 
 # Timeframe di riferimento per EMA 10 trailing
@@ -78,7 +78,7 @@ TRAILING_CONFIG = {
 TRAILING_EMA_TIMEFRAME = {
     '1m': '5m',   # Entry su 1m → EMA 10 da 5m
     '3m': '5m',   # Entry su 3m → EMA 10 da 5m
-    '5m': '15m',  # Entry su 5m → EMA 10 da 15m
+    '5m': '5m',  # Entry su 5m → EMA 10 da 15m
     '15m': '30m', # Entry su 15m → EMA 10 da 30m
     '30m': '1h',  # Entry su 30m → EMA 10 da 1h
     '1h': '4h',   # Entry su 1h → EMA 10 da 4h
@@ -1818,17 +1818,17 @@ def check_patterns(df: pd.DataFrame):
     
     # Filtro Volume - MUST PASS
     if not volume_confirmation(df, min_ratio=1.5):
-        logging.debug('❌ Pattern search BLOCKED: Volume insufficiente')
+        logging.info('❌ Pattern search BLOCKED: Volume insufficiente')
         return (False, None, None, None)
     
     # Filtro Trend - MUST PASS
     if not is_uptrend_structure(df):
-        logging.debug('❌ Pattern search BLOCKED: No uptrend structure')
+        logging.info('❌ Pattern search BLOCKED: No uptrend structure')
         return (False, None, None, None)
     
     # Filtro ATR - WARNING (non blocking ma logged)
     if not atr_expanding(df):
-        logging.debug('⚠️ ATR not expanding - pattern may be less reliable')
+        logging.info('⚠️ ATR not expanding - pattern may be less reliable')
     
     # ===== TIER 1: HIGH PROBABILITY PATTERNS =====
     
@@ -1838,18 +1838,18 @@ def check_patterns(df: pd.DataFrame):
         if found:
             logging.info(f'✅ TIER 1 Pattern: Volume Spike Breakout (volume: {data["volume_ratio"]:.1f}x)')
             return (True, 'Buy', 'Volume Spike Breakout', data)
+
+    # 👇 LIQUIDITY SWEEP (massima priorità - pattern istituzionale)
+    if AVAILABLE_PATTERNS['liquidity_sweep_reversal']['enabled']:
+        found, sweep_data = is_liquidity_sweep_reversal(df)
+        if found:
+            return (True, 'Buy', 'Liquidity Sweep + Reversal', sweep_data)
     
     # ===== TIER 2: EXISTING PATTERNS (Lower Priority) =====
     
     last = df.iloc[-1]
     prev = df.iloc[-2]
     prev2 = df.iloc[-3]
-    
-    # 👇 LIQUIDITY SWEEP (massima priorità - pattern istituzionale)
-    if AVAILABLE_PATTERNS['liquidity_sweep_reversal']['enabled']:
-        found, sweep_data = is_liquidity_sweep_reversal(df)
-        if found:
-            return (True, 'Buy', 'Liquidity Sweep + Reversal', sweep_data)
 
     # Bullish Comeback
     if AVAILABLE_PATTERNS['bullish_comeback']['enabled']:
@@ -3058,7 +3058,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             if found:
                 logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
             else:
-                logging.debug(f'🔍 {symbol} {timeframe} - Nessun pattern rilevato')
+                logging.info(f'🔍 {symbol} {timeframe} - Nessun pattern rilevato')
         
         # Se NON pattern e NON full_mode → Skip notifica
         if not found and not full_mode:
@@ -5054,7 +5054,7 @@ def main():
     """Funzione principale"""
     # Setup logging
     logging.basicConfig(
-        level=logging.DEBUG,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
+        level=logging.INFO,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
