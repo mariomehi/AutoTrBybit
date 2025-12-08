@@ -3255,30 +3255,12 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             logging.info(f'🔼 {symbol}: Aggiornamento SL da {current_sl:.{price_decimals}f} a {new_sl:.{price_decimals}f}')
             logging.info(f'   Price: {current_price:.{price_decimals}f}, EMA 10 ({ema_tf}): {ema_10:.{price_decimals}f}')
 
-            # ===== VERIFICA POSIZIONE ESISTE SU BYBIT =====                
-            if positions.get('retCode') == 0:
-                pos_list = positions.get('result', {}).get('list', [])
-                
-                # Verifica se c'è una posizione con size > 0
-                position_exists = False
-                for pos in pos_list:
-                    if float(pos.get('size', 0)) > 0:
-                        position_exists = True
-                        break
-                
-                if not position_exists:
-                    logging.warning(f'⚠️ {symbol}: Posizione NON trovata su Bybit, rimuovo dal tracking')
-                    with POSITIONS_LOCK:
-                        if symbol in ACTIVE_POSITIONS:
-                            del ACTIVE_POSITIONS[symbol]
-                    continue
-            
             # ===== VERIFICA POSIZIONE ESISTE SU BYBIT =====
             if BybitHTTP is not None:
                 try:
                     session = create_bybit_session()
                     
-                    # 👇 AGGIUNGI: Verifica posizione esiste
+                    # 🔧 FIX: Definisci 'positions' PRIMA di usarlo
                     positions = session.get_positions(
                         category='linear',
                         symbol=symbol
@@ -3300,6 +3282,10 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                                 if symbol in ACTIVE_POSITIONS:
                                     del ACTIVE_POSITIONS[symbol]
                             continue
+                    else:
+                        # Errore API nella verifica posizione
+                        logging.error(f'❌ {symbol}: Errore verifica posizione: {positions.get("retMsg")}')
+                        continue
                             
                     # Aggiorna SL solo se posizione esiste
                     result = session.set_trading_stop(
@@ -3318,8 +3304,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                         logging.info(f'✅ {symbol}: Trailing SL aggiornato su Bybit a ${new_sl:.{price_decimals}f}')
 
                         # ===== INVIA NOTIFICA TELEGRAM =====
-                        # Trova il chat_id dalla posizione
-                        chat_id = pos_info.get('chat_id')  # Serve salvare chat_id
+                        chat_id = pos_info.get('chat_id')
                         
                         if chat_id:
                             try:
