@@ -3493,7 +3493,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         last_time = df.index[-1]
         timestamp_str = last_time.strftime('%Y-%m-%d %H:%M UTC')
 
-        # ===== DEFINISCI price_decimals SUBITO =====
+        # ===== CALCOLA DECIMALI UNA SOLA VOLTA =====
         price_decimals = get_price_decimals(last_close)
         
         # ===== STEP 2: PRE-FILTER EMA (PRIMA DI CERCARE PATTERN) =====
@@ -3503,24 +3503,34 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         if EMA_FILTER_ENABLED:
             ema_analysis = analyze_ema_conditions(df, timeframe, None)
             
-            logging.info(f'📊 EMA Pre-Filter {symbol} {timeframe}: Score={ema_analysis["score"]}, Quality={ema_analysis["quality"]}, Passed={ema_analysis["passed"]}')
+            logging.info(
+                f'📊 EMA Pre-Filter {symbol} {timeframe}: '
+                f'Score={ema_analysis["score"]}, '
+                f'Quality={ema_analysis["quality"]}, '
+                f'Passed={ema_analysis["passed"]}'
+            )
             
             # STRICT MODE: Blocca completamente se EMA non passa
             if EMA_FILTER_MODE == 'strict' and not ema_analysis['passed']:
                 pattern_search_allowed = False
-                logging.warning(f'🚫 {symbol} {timeframe} - EMA STRICT BLOCK (score {ema_analysis["score"]}/100). Skip pattern search.')
+                logging.warning(
+                    f'🚫 {symbol} {timeframe} - EMA STRICT BLOCK '
+                    f'(score {ema_analysis["score"]}/100). Skip pattern search.'
+                )
                 
                 # Se full mode, invia comunque analisi mercato
                 if full_mode:
-                    caption = f"📊 <b>{symbol}</b> ({timeframe})\n"
-                    caption += f"🕐 {timestamp_str}\n"
-                    caption += f"💵 Price: ${last_close:.4f}\n\n"
-                    caption += f"🚫 <b>ZONA NON VALIDA (EMA Strict)</b>\n\n"
-                    caption += f"Score EMA: {ema_analysis['score']}/100\n"
-                    caption += f"Quality: {ema_analysis['quality']}\n\n"
-                    caption += ema_analysis['details']
-                    caption += f"\n\n⚠️ Pattern search DISABILITATA per score EMA insufficiente.\n"
-                    caption += f"Attendi miglioramento condizioni EMA."
+                    caption = (
+                        f"📊 <b>{symbol}</b> ({timeframe})\n"
+                        f"🕐 {timestamp_str}\n"
+                        f"💵 Price: ${last_close:.{price_decimals}f}\n\n"
+                        f"🚫 <b>ZONA NON VALIDA (EMA Strict)</b>\n\n"
+                        f"Score EMA: {ema_analysis['score']}/100\n"
+                        f"Quality: {ema_analysis['quality']}\n\n"
+                        f"{ema_analysis['details']}\n\n"
+                        f"⚠️ Pattern search DISABILITATA per score EMA insufficiente.\n"
+                        f"Attendi miglioramento condizioni EMA."
+                    )
                     
                     try:
                         chart_buffer = generate_chart(df, symbol, timeframe)
@@ -3531,31 +3541,49 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                             parse_mode='HTML'
                         )
                     except:
-                        await context.bot.send_message(chat_id=chat_id, text=caption, parse_mode='HTML')
+                        await context.bot.send_message(
+                            chat_id=chat_id, 
+                            text=caption, 
+                            parse_mode='HTML'
+                        )
                 
                 return  # STOP QUI - Non cerca pattern
             
             # LOOSE MODE: Blocca se score < 40
             elif EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
-                pattern_search_allowed = False  # BLOCCA anche in loose se score < 40
-                logging.warning(f'🚫 {symbol} {timeframe} - EMA LOOSE BLOCK (score {ema_analysis["score"]}/100). Skip pattern search.')
+                pattern_search_allowed = False
+                logging.warning(
+                    f'🚫 {symbol} {timeframe} - EMA LOOSE BLOCK '
+                    f'(score {ema_analysis["score"]}/100). Skip pattern search.'
+                )
                 
                 # Se full mode, invia comunque analisi
                 if full_mode:
-                    caption = f"📊 <b>{symbol}</b> ({timeframe})\n"
-                    caption += f"🕐 {timestamp_str}\n"
-                    caption += f"💵 Price: ${last_close:.{price_decimals}f}\n\n"
-                    caption += f"⚠️ <b>EMA Score troppo basso (Loose mode)</b>\n\n"
-                    caption += f"Score EMA: {ema_analysis['score']}/100\n"
-                    caption += f"Quality: {ema_analysis['quality']}\n\n"
-                    caption += f"Minimo richiesto in LOOSE: 40/100\n"
-                    caption += f"Attendi miglioramento condizioni."
+                    caption = (
+                        f"📊 <b>{symbol}</b> ({timeframe})\n"
+                        f"🕐 {timestamp_str}\n"
+                        f"💵 Price: ${last_close:.{price_decimals}f}\n\n"
+                        f"⚠️ <b>EMA Score troppo basso (Loose mode)</b>\n\n"
+                        f"Score EMA: {ema_analysis['score']}/100\n"
+                        f"Quality: {ema_analysis['quality']}\n\n"
+                        f"Minimo richiesto in LOOSE: 40/100\n"
+                        f"Attendi miglioramento condizioni."
+                    )
                     
                     try:
                         chart_buffer = generate_chart(df, symbol, timeframe)
-                        await context.bot.send_photo(chat_id=chat_id, photo=chart_buffer, caption=caption, parse_mode='HTML')
+                        await context.bot.send_photo(
+                            chat_id=chat_id, 
+                            photo=chart_buffer, 
+                            caption=caption, 
+                            parse_mode='HTML'
+                        )
                     except:
-                        await context.bot.send_message(chat_id=chat_id, text=caption, parse_mode='HTML')
+                        await context.bot.send_message(
+                            chat_id=chat_id, 
+                            text=caption, 
+                            parse_mode='HTML'
+                        )
                 
                 return  # STOP - Non cerca pattern
         
@@ -3563,10 +3591,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         found = False
         side = None
         pattern = None
-        pattern_data = None  # 👈 AGGIUNGI
+        pattern_data = None
         
         if pattern_search_allowed:
-            found, side, pattern, pattern_data = check_patterns(df)  # 👈 MODIFICA
+            found, side, pattern, pattern_data = check_patterns(df)
             
             if found:
                 logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
@@ -3626,157 +3654,68 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 return  # BLOCCA segnale
 
-
-            # === CHECK HTF RESISTANCE per Compression Breakout ===
-            if pattern == 'Compression Breakout (Enhanced)':
-                htf_block = check_compression_htf_resistance(
-                    symbol=symbol,
-                    current_tf=timeframe,
-                    current_price=last_close
-                )
-                
-                if htf_block['blocked']:
-                    logging.warning(
-                        f'🚫 Compression Breakout su {symbol} {timeframe} '
-                        f'BLOCCATO da resistenza HTF {htf_block["htf"]}'
-                    )
-                    
-                    # In full mode, invia warning
-                    if full_mode:
-                        caption = (
-                            f"⚠️ <b>Pattern BLOCCATO da HTF</b>\n\n"
-                            f"Pattern: Compression Breakout su {timeframe}\n"
-                            f"Timeframe superiore: {htf_block['htf']}\n\n"
-                            f"Resistenze HTF:\n"
-                            f"{htf_block['details']}\n\n"
-                            f"💡 Aspetta breakout HTF o cerca altro setup"
-                        )
-                        
-                        try:
-                            chart_buffer = generate_chart(df, symbol, timeframe)
-                            await context.bot.send_photo(
-                                chat_id=chat_id,
-                                photo=chart_buffer,
-                                caption=caption,
-                                parse_mode='HTML'
-                            )
-                        except:
-                            await context.bot.send_message(
-                                chat_id=chat_id,
-                                text=caption,
-                                parse_mode='HTML'
-                            )
-                    
-                    return  # BLOCCA segnale
-
+            # ===== GESTIONE PATTERN-SPECIFIC ENTRY/SL/TP =====
+            
             # === BULLISH FLAG BREAKOUT ===
-            elif pattern == 'Bullish Flag Breakout' and pattern_data:
-                # Entry al breakout level X
+            if pattern == 'Bullish Flag Breakout' and pattern_data:
                 entry_price = pattern_data['X']
-                
-                # Stop Loss: Sotto il minimo del consolidamento con buffer
-                sl_price = pattern_data['consolidation_low'] * 0.998  # 0.2% buffer
-                
-                # Take Profit: X + (1.5 × altezza pole)
+                sl_price = pattern_data['consolidation_low'] * 0.998
                 tp_price = pattern_data['X'] + (pattern_data['pole_height'] * 1.5)
-                
                 ema_used = 'Flag Pattern'
                 ema_value = pattern_data['consolidation_low']
                 
-                # Calcola decimali dinamici
-                price_decimals = get_price_decimals(entry_price)
-                
-                # Log dettagliato
                 logging.info(f'🚩 Bullish Flag Entry Setup:')
                 logging.info(f'   X (breakout): ${entry_price:.{price_decimals}f}')
                 logging.info(f'   Pole Height: {pattern_data["pole_height_pct"]:.2f}%')
-                logging.info(f'   Flag Duration: {pattern_data["flag_duration"]} candele')
-                logging.info(f'   Consolidation Low: ${pattern_data["consolidation_low"]:.{price_decimals}f}')
                 logging.info(f'   Entry: ${entry_price:.{price_decimals}f}')
                 logging.info(f'   SL: ${sl_price:.{price_decimals}f}')
-                logging.info(f'   TP: ${tp_price:.{price_decimals}f} (1.5x pole height)')
-                logging.info(f'   Volume: {pattern_data["volume_ratio"]:.1f}x consolidamento')
-                logging.info(f'   Pole Strength: {pattern_data["pole_body_pct"]:.1f}% corpo')
+                logging.info(f'   TP: ${tp_price:.{price_decimals}f}')
             
-            # Liquidity Sweep + Reversal
-            if pattern == 'Liquidity Sweep + Reversal' and pattern_data:
-                # === LIQUIDITY SWEEP: Entry Logic Corretta ===
-                
-                # Entry al breakout del recovery high
+            # === LIQUIDITY SWEEP + REVERSAL ===
+            elif pattern == 'Liquidity Sweep + Reversal' and pattern_data:
                 entry_price = pattern_data.get('suggested_entry', last_close)
-                
-                # SL sotto sweep low (con buffer 0.2%)
                 sl_price = pattern_data.get('suggested_sl', last_close * 0.98)
-                
-                # TP: 2R (pattern ad alta probabilità)
                 risk = entry_price - sl_price
                 tp_price = entry_price + (risk * 2.0)
-                
                 ema_used = 'Sweep Low'
                 ema_value = pattern_data['sweep_low']
                 
-                # Verifica che entry ha senso (non troppo lontano dal prezzo corrente)
+                # Verifica distanza entry
                 entry_distance = abs(entry_price - last_close) / last_close
-                
-                if entry_distance > 0.005:  # Max 0.5% di distanza
-                    logging.warning(f'⚠️ {symbol}: Entry price troppo lontano da current price')
-                    logging.warning(f'   Entry: ${entry_price:.4f}, Current: ${last_close:.4f}')
-                    # Usa prezzo corrente come fallback
+                if entry_distance > 0.005:
+                    logging.warning(f'⚠️ {symbol}: Entry price troppo lontano')
                     entry_price = last_close
                 
-                # Calcola decimali dinamici
-                price_decimals = get_price_decimals(entry_price)
-                
-                # Log dettagliato
                 logging.info(f'💎 Liquidity Sweep Entry Setup:')
-                logging.info(f'   Previous Low: ${pattern_data["previous_low"]:.{price_decimals}f}')
-                logging.info(f'   Sweep Low: ${pattern_data["sweep_low"]:.{price_decimals}f}')
-                logging.info(f'   Recovery High: ${pattern_data["recovery_high"]:.{price_decimals}f}')
-                logging.info(f'   Breakout Price: ${pattern_data["breakout_price"]:.{price_decimals}f}')
                 logging.info(f'   Entry: ${entry_price:.{price_decimals}f}')
                 logging.info(f'   SL: ${sl_price:.{price_decimals}f}')
                 logging.info(f'   TP: ${tp_price:.{price_decimals}f} (2R)')
-                logging.info(f'   Recovery: {pattern_data["recovery_pct"]:.1f}%')
-                logging.info(f'   Volume: {pattern_data["volume_ratio"]:.1f}x')
-
-                # === SUPPORT/RESISTANCE BOUNCE ===
+            
+            # === SUPPORT/RESISTANCE BOUNCE ===
             elif pattern == 'Support/Resistance Bounce' and pattern_data:
-                # Entry: prezzo corrente (pattern già confermato)
                 entry_price = last_close
-                
-                # Stop Loss: sotto support level con buffer
                 support_level = pattern_data['support_level']
-                sl_price = support_level * 0.998  # 0.2% sotto support
-                
-                # Take Profit: 1.6R (R:R tipico per questo pattern)
+                sl_price = support_level * 0.998
                 risk = entry_price - sl_price
                 tp_price = entry_price + (risk * 1.6)
-                
                 ema_used = 'Support Level'
                 ema_value = support_level
                 
-                # Calcola decimali dinamici
-                price_decimals = get_price_decimals(entry_price)
-                
-                # Log dettagliato
                 logging.info(f'🎯 S/R Bounce Entry Setup:')
-                logging.info(f'   Support Level: ${support_level:.{price_decimals}f} ({pattern_data["touches"]} touches)')
-                logging.info(f'   Distance to Support: ${pattern_data["distance_to_support"]:.{price_decimals}f}')
+                logging.info(f'   Support: ${support_level:.{price_decimals}f}')
                 logging.info(f'   Entry: ${entry_price:.{price_decimals}f}')
                 logging.info(f'   SL: ${sl_price:.{price_decimals}f}')
                 logging.info(f'   TP: ${tp_price:.{price_decimals}f} (1.6R)')
-                logging.info(f'   Rejection Strength: {pattern_data["rejection_strength"]:.2f}x')
-                logging.info(f'   Volume: {pattern_data["volume_ratio"]:.1f}x')
-                logging.info(f'   EMA 10: ${pattern_data["ema10"]:.{price_decimals}f}')
-                logging.info(f'   Near EMA 60: {"Yes" if pattern_data["near_ema60"] else "No"}')
- 
+            
+            # === LOGICA STANDARD per altri pattern ===
             else:
-                # === LOGICA STANDARD per altri pattern ===
                 entry_price = last_close
                 
                 # Calcola SL basato su EMA o ATR
                 if USE_EMA_STOP_LOSS:
-                    sl_price, ema_used, ema_value = calculate_ema_stop_loss(df, timeframe, last_close, side)
+                    sl_price, ema_used, ema_value = calculate_ema_stop_loss(
+                        df, timeframe, last_close, side
+                    )
                 else:
                     if not math.isnan(last_atr) and last_atr > 0:
                         sl_price = last_close - last_atr * ATR_MULT_SL
@@ -3793,15 +3732,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     tp_price = last_close * 1.02
             
-            # Risk e Qty (usa entry_price invece di last_close)
+            # ===== CALCOLO POSITION SIZE E CHECK =====
             risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
             qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
             position_exists = symbol in ACTIVE_POSITIONS
             
-            # Decimali
-            price_decimals = get_price_decimals(entry_price)
-            
-            # === COSTRUISCI CAPTION ===
+            # ===== COSTRUISCI CAPTION =====
             quality_emoji_map = {
                 'GOLD': '🌟',
                 'GOOD': '✅',
@@ -3821,7 +3757,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Pattern info
             caption += f"📊 Pattern: <b>{pattern}</b>\n"
             
-            # Se Flag Breakout, aggiungi info X
+            # Info specifiche pattern
             if pattern == 'Bullish Flag Breakout' and pattern_data:
                 caption += f"🚩 Breakout Level X: <b>${pattern_data['X']:.{price_decimals}f}</b>\n"
             
@@ -3831,13 +3767,13 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Trading params
             caption += f"💵 Entry: <b>${entry_price:.{price_decimals}f}</b>\n"
             
+            # SL/TP display specifico per pattern
             if pattern == 'Bullish Flag Breakout' and pattern_data:
                 caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
-                caption += f"   (sotto consolidamento = ${pattern_data['consolidation_low']:.{price_decimals}f})\n"
+                caption += f"   (sotto consolidamento)\n"
                 caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
-                caption += f"   (1.5x pole height = ${pattern_data['pole_height']:.{price_decimals}f})\n"
+                caption += f"   (1.5x pole height)\n"
             else:
-                # Standard SL/TP display
                 if USE_EMA_STOP_LOSS:
                     caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
                     caption += f"   sotto {ema_used}"
@@ -3864,17 +3800,19 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     vol_ratio = (current_vol / avg_vol) if avg_vol > 0 else 0
                     caption += f"📊 <b>Volume:</b> {vol_ratio:.2f}x\n"
             
+            # EMA Analysis dettagliata
             if ema_analysis:
-                if found and pattern == 'Liquidity Sweep + Reversal' and EMA_FILTER_ENABLED:
-                    ema_analysis = analyze_ema_conditions(df, timeframe, pattern)  # 👈 PASSA pattern_name
-                    caption += "\n━━━━━━━━━━━━━━━━━━━\n"
-                    caption += "📈 <b>EMA Analysis</b>\n\n"
-                    caption += ema_analysis['details']
+                # Logica speciale per Liquidity Sweep
+                if pattern == 'Liquidity Sweep + Reversal':
+                    ema_analysis = analyze_ema_conditions(df, timeframe, pattern)
                 
-            # Valori EMA CON DECIMALI DINAMICI
+                caption += "\n━━━━━━━━━━━━━━━━━━━\n"
+                caption += "📈 <b>EMA Analysis</b>\n\n"
+                caption += ema_analysis['details']
+                
+                # Valori EMA CON DECIMALI DINAMICI
                 if 'ema_values' in ema_analysis:
                     ema_vals = ema_analysis['ema_values']
-                    # Usa il prezzo corrente per determinare i decimali
                     ema_decimals = get_price_decimals(ema_vals['price'])
                     
                     caption += f"\n\n💡 <b>EMA Values:</b>\n"
@@ -3899,7 +3837,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"\nOrdine NON eseguito per {symbol}"
             
             # Autotrade
-            # Piazza ordine se autotrade è abilitato E non esiste già posizione
             if job_ctx.get('autotrade') and qty > 0 and not position_exists:
                 order_res = await place_bybit_order(
                     symbol, 
@@ -3907,9 +3844,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     qty, 
                     sl_price, 
                     tp_price,
-                    entry_price,  # 👈 AGGIUNGI
-                    timeframe,     # 👈 AGGIUNGI
-                    chat_id  # 👈 AGGIUNGI
+                    entry_price,
+                    timeframe,
+                    chat_id
                 )
                 
                 if 'error' in order_res:
@@ -3918,7 +3855,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"\n\n✅ <b>Ordine su Bybit {TRADING_MODE.upper()}</b>"
         
         elif found and side == 'Sell':
-            # ========== SEGNALE SELL (se abilitato) ==========
+            # SEGNALE SELL (se abilitato)
             caption = f"🔴 <b>SEGNALE SELL</b>\n\n"
             caption += f"📊 Pattern: {pattern}\n"
             caption += f"🪙 {symbol} ({timeframe})\n\n"
@@ -3926,12 +3863,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             caption += "(Solo pattern BUY sono attivi)"
         
         else:
-            # ========== NESSUN PATTERN (full mode) ==========
+            # NESSUN PATTERN (full mode)
             caption = f"📊 <b>{symbol}</b> ({timeframe})\n"
             caption += f"🕐 {timestamp_str}\n"
-            caption += f"💵 Price: ${last_close:.4f}\n\n"
+            caption += f"💵 Price: ${last_close:.{price_decimals}f}\n\n"
             
-            # === FIX: INFO FILTRI GLOBALI CON GESTIONE ERRORI ===
+            # INFO FILTRI GLOBALI CON GESTIONE ERRORI
             caption += "🔍 <b>Global Filters Status:</b>\n"
             
             # Check volume CON error handling
@@ -3939,32 +3876,17 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             vol_result = False
             
             try:
-                # Verifica che colonna volume esista
                 if 'volume' in df.columns and len(df['volume']) >= 20:
                     vol = df['volume']
-                    
-                    # Calcola media escludendo candela corrente
                     avg_vol = vol.iloc[-20:-1].mean()
                     current_vol = vol.iloc[-1]
                     
-                    # Debug log (opzionale)
-                    logging.debug(f'Volume check: avg={avg_vol:.2f}, current={current_vol:.2f}')
-                    
-                    # Calcola ratio solo se avg_vol > 0
                     if avg_vol > 0 and not pd.isna(avg_vol) and not pd.isna(current_vol):
                         vol_ratio = current_vol / avg_vol
                         vol_result = vol_ratio > 1.5
-                    else:
-                        logging.warning(f'Volume avg or current is 0/NaN: avg={avg_vol}, current={current_vol}')
-                else:
-                    logging.warning(f'Volume column missing or insufficient data: {len(df) if not df.empty else 0} rows')
-            
             except Exception as e:
                 logging.error(f'Error calculating volume ratio: {e}')
-                vol_ratio = 0.0
-                vol_result = False
             
-            # Mostra risultato
             if vol_result:
                 caption += f"✅ Volume: {vol_ratio:.1f}x (>1.5x) OK\n"
             else:
@@ -3974,25 +3896,23 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"❌ Volume: N/A (dati insufficienti) BLOCKED\n"
             
             # Check uptrend
-            trend_result = False
             try:
                 trend_result = is_uptrend_structure(df)
                 if trend_result:
                     caption += "✅ Uptrend Structure: HH+HL OK\n"
                 else:
-                    caption += "❌ Uptrend Structure: NO (downtrend o sideways)\n"
+                    caption += "❌ Uptrend Structure: NO\n"
             except Exception as e:
                 logging.error(f'Error checking uptrend: {e}')
                 caption += "❌ Uptrend Structure: ERROR\n"
             
             # Check ATR
-            atr_result = False
             try:
                 atr_result = atr_expanding(df)
                 if atr_result:
                     caption += "✅ ATR Expansion: Volatilità in aumento\n"
                 else:
-                    caption += "⚠️ ATR Flat: Bassa volatilità (warning)\n"
+                    caption += "⚠️ ATR Flat: Bassa volatilità\n"
             except Exception as e:
                 logging.error(f'Error checking ATR: {e}')
                 caption += "⚠️ ATR: ERROR\n"
@@ -4002,29 +3922,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Pattern search status
             if not vol_result or not trend_result:
                 caption += "🚫 <b>Pattern search bloccata</b>\n"
-                if not vol_result:
-                    caption += "Motivo: Volume insufficiente\n"
-                if not trend_result:
-                    caption += "Motivo: No uptrend structure\n"
             else:
                 caption += "🔔 <b>Full Mode - Nessun pattern rilevato</b>\n"
-                caption += "Filtri globali passati MA nessun pattern trovato.\n"
-            
-            # ATR info dettagliata
-            if not math.isnan(last_atr):
-                try:
-                    atr_series = atr(df, period=14)
-                    if len(atr_series) >= 10 and not atr_series.isna().all():
-                        atr_avg = atr_series.iloc[-10:-1].mean()
-                        if atr_avg > 0 and not pd.isna(atr_avg):
-                            atr_ratio = last_atr / atr_avg
-                            caption += f"\n📏 ATR(14): ${last_atr:.4f} ({atr_ratio:.2f}x avg)\n"
-                        else:
-                            caption += f"\n📏 ATR(14): ${last_atr:.4f}\n"
-                except Exception as e:
-                    logging.error(f'Error calculating ATR ratio: {e}')
-                    caption += f"\n📏 ATR(14): ${last_atr:.4f}\n"
-
             
             # ANALISI EMA MERCATO
             if ema_analysis:
@@ -4044,21 +3943,20 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += "⚠️ Accettabile ma non ottimale."
                 elif ema_analysis['quality'] == 'WEAK':
                     caption += "🔶 Condizioni deboli. Meglio aspettare."
-                else:  # BAD
+                else:
                     caption += "❌ Condizioni sfavorevoli. NO entry."
                 
-            # Valori EMA CON DECIMALI DINAMICI
-            if 'ema_values' in ema_analysis:
-                ema_vals = ema_analysis['ema_values']
-                # Usa il prezzo corrente per determinare i decimali
-                ema_decimals = get_price_decimals(ema_vals['price'])
-                
-                caption += f"\n\n💡 <b>EMA Values:</b>\n"
-                caption += f"Price: ${ema_vals['price']:.{ema_decimals}f}\n"
-                caption += f"EMA 5: ${ema_vals['ema5']:.{ema_decimals}f}\n"
-                caption += f"EMA 10: ${ema_vals['ema10']:.{ema_decimals}f}\n"
-                caption += f"EMA 60: ${ema_vals['ema60']:.{ema_decimals}f}\n"
-                caption += f"EMA 223: ${ema_vals['ema223']:.{ema_decimals}f}\n"
+                # Valori EMA
+                if 'ema_values' in ema_analysis:
+                    ema_vals = ema_analysis['ema_values']
+                    ema_decimals = get_price_decimals(ema_vals['price'])
+                    
+                    caption += f"\n\n💡 <b>EMA Values:</b>\n"
+                    caption += f"Price: ${ema_vals['price']:.{ema_decimals}f}\n"
+                    caption += f"EMA 5: ${ema_vals['ema5']:.{ema_decimals}f}\n"
+                    caption += f"EMA 10: ${ema_vals['ema10']:.{ema_decimals}f}\n"
+                    caption += f"EMA 60: ${ema_vals['ema60']:.{ema_decimals}f}\n"
+                    caption += f"EMA 223: ${ema_vals['ema223']:.{ema_decimals}f}\n"
         
         # ===== STEP 6: INVIA GRAFICO =====
         try:
