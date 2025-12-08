@@ -3991,56 +3991,56 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 logging.info(f'   TP: ${tp_price:.{price_decimals}f} (1.6R)')
 
             if pattern == 'Breakout + Retest' and pattern_data:
-            """
-            ENTRY LOGIC per Breakout + Retest
-            
-            Entry: Al bounce dal retest (prezzo corrente)
-            SL: Sotto retest low (con buffer 0.2%)
-            TP: Resistance + (2 × range consolidamento)
-            
-            R:R tipico: 1:2.5-3
-            """
-            
-            entry_price = pattern_data['suggested_entry']
-            sl_price = pattern_data['suggested_sl']
-            tp_price = pattern_data['suggested_tp']
-            
-            ema_used = 'Retest Zone'
-            ema_value = pattern_data['resistance']
-            
-            # Calcola decimali
-            price_decimals = get_price_decimals(entry_price)
-            
-            # Log dettagliato
-            logging.info(f'🔄 Breakout + Retest Entry Setup:')
-            logging.info(f'   Resistance (support): ${pattern_data["resistance"]:.{price_decimals}f}')
-            logging.info(f'   Range: {pattern_data["range_pct"]:.2f}%')
-            logging.info(f'   Breakout: ${pattern_data["breakout_price"]:.{price_decimals}f}')
-            logging.info(f'   Retest Low: ${pattern_data["retest_low"]:.{price_decimals}f}')
-            logging.info(f'   Entry: ${entry_price:.{price_decimals}f}')
-            logging.info(f'   SL: ${sl_price:.{price_decimals}f}')
-            logging.info(f'   TP: ${tp_price:.{price_decimals}f}')
-            logging.info(f'   Volume bounce: {pattern_data["retest_vol_ratio"]:.1f}x')
-            logging.info(f'   Rejection: {pattern_data["retest_rejection_pct"]:.1f}%')
-            
-            # Nel caption aggiungi info specifiche
-            caption += f"🔄 <b>Breakout + Retest</b>\n"
-            caption += f"📊 Range: {pattern_data['range_pct']:.2f}%\n"
-            caption += f"💥 Breakout: ${pattern_data['breakout_price']:.{price_decimals}f}\n"
-            caption += f"🔄 Retest Zone: ${pattern_data['resistance']:.{price_decimals}f}\n"
-            caption += f"📍 Retest Low: ${pattern_data['retest_low']:.{price_decimals}f}\n\n"
-            
-            caption += f"💵 Entry: <b>${entry_price:.{price_decimals}f}</b>\n"
-            caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
-            caption += f"   (sotto retest low)\n"
-            caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
-            caption += f"   (2R projection)\n\n"
-            
-            caption += f"📊 <b>Quality Metrics:</b>\n"
-            caption += f"• Breakout volume: {pattern_data['breakout_vol_ratio']:.1f}x\n"
-            caption += f"• Retest rejection: {pattern_data['retest_rejection_pct']:.1f}%\n"
-            caption += f"• Pullback: {pattern_data['pullback_duration']} candele\n"
-            caption += f"• R touches: {pattern_data['touches_resistance']}\n"
+                """
+                ENTRY LOGIC per Breakout + Retest
+                
+                Entry: Al bounce dal retest (prezzo corrente)
+                SL: Sotto retest low (con buffer 0.2%)
+                TP: Resistance + (2 × range consolidamento)
+                
+                R:R tipico: 1:2.5-3
+                """
+                
+                entry_price = pattern_data['suggested_entry']
+                sl_price = pattern_data['suggested_sl']
+                tp_price = pattern_data['suggested_tp']
+                
+                ema_used = 'Retest Zone'
+                ema_value = pattern_data['resistance']
+                
+                # Calcola decimali
+                price_decimals = get_price_decimals(entry_price)
+                
+                # Log dettagliato
+                logging.info(f'🔄 Breakout + Retest Entry Setup:')
+                logging.info(f'   Resistance (support): ${pattern_data["resistance"]:.{price_decimals}f}')
+                logging.info(f'   Range: {pattern_data["range_pct"]:.2f}%')
+                logging.info(f'   Breakout: ${pattern_data["breakout_price"]:.{price_decimals}f}')
+                logging.info(f'   Retest Low: ${pattern_data["retest_low"]:.{price_decimals}f}')
+                logging.info(f'   Entry: ${entry_price:.{price_decimals}f}')
+                logging.info(f'   SL: ${sl_price:.{price_decimals}f}')
+                logging.info(f'   TP: ${tp_price:.{price_decimals}f}')
+                logging.info(f'   Volume bounce: {pattern_data["retest_vol_ratio"]:.1f}x')
+                logging.info(f'   Rejection: {pattern_data["retest_rejection_pct"]:.1f}%')
+                
+                # Nel caption aggiungi info specifiche
+                caption += f"🔄 <b>Breakout + Retest</b>\n"
+                caption += f"📊 Range: {pattern_data['range_pct']:.2f}%\n"
+                caption += f"💥 Breakout: ${pattern_data['breakout_price']:.{price_decimals}f}\n"
+                caption += f"🔄 Retest Zone: ${pattern_data['resistance']:.{price_decimals}f}\n"
+                caption += f"📍 Retest Low: ${pattern_data['retest_low']:.{price_decimals}f}\n\n"
+                
+                caption += f"💵 Entry: <b>${entry_price:.{price_decimals}f}</b>\n"
+                caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
+                caption += f"   (sotto retest low)\n"
+                caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
+                caption += f"   (2R projection)\n\n"
+                
+                caption += f"📊 <b>Quality Metrics:</b>\n"
+                caption += f"• Breakout volume: {pattern_data['breakout_vol_ratio']:.1f}x\n"
+                caption += f"• Retest rejection: {pattern_data['retest_rejection_pct']:.1f}%\n"
+                caption += f"• Pullback: {pattern_data['pullback_duration']} candele\n"
+                caption += f"• R touches: {pattern_data['touches_resistance']}\n"
             
             # === LOGICA STANDARD per altri pattern ===
             else:
