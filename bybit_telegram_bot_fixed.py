@@ -4320,7 +4320,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         pattern_data = None
         
         if pattern_search_allowed:
-            found, side, pattern, pattern_data = check_patterns(df. symbol=symbol)
+            found, side, pattern, pattern_data = check_patterns(df, symbol=symbol)
             
             if found:
                 logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
