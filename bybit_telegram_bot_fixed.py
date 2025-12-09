@@ -2938,7 +2938,7 @@ def is_bullish_flag_breakout(df: pd.DataFrame):
     return (False, None)
 
 
-def check_patterns(df: pd.DataFrame):
+def check_patterns(df: pd.DataFrame, symbol: str = None):
     """
     Controlla pattern con volume check adaptive
     
