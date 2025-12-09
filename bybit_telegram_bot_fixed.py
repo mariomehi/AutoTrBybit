@@ -53,6 +53,17 @@ ATR_MULT_TP = 2.0
 RISK_USD = 10.0
 ENABLED_TFS = ['1m','3m','5m','15m','30m','1h','4h']
 
+# Flag globale: abilita/disabilita volume filter
+VOLUME_FILTER_ENABLED = True  # Default: abilitato
+# Modalità volume filter
+VOLUME_FILTER_MODE = 'pattern-only'  # 'strict', 'adaptive', 'pattern-only'
+# Threshold per diversi modi
+VOLUME_THRESHOLDS = {
+    'strict': 2.0,      # Volume > 2x media (originale)
+    'adaptive': 1.3,    # Volume > 1.3x media (rilassato)
+    'pattern-only': 0   # No check globale, solo nei pattern
+}
+
 # EMA-based Stop Loss System
 USE_EMA_STOP_LOSS = True  # Usa EMA invece di ATR per stop loss
 EMA_STOP_LOSS_CONFIG = {
@@ -456,61 +467,106 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.rolling(period).mean()
 
 
-def volume_confirmation(df: pd.DataFrame, min_ratio: float = 2.0) -> bool:
+def volume_confirmation(
+    df: pd.DataFrame, 
+    min_ratio: float = 1.5,
+    symbol: str = None,
+    is_auto_discovered: bool = False
+    ) -> bool:
     """
-    Filtro Volume - CRITICO per crypto (VERSION FIXED)
-    Volume deve essere significativamente sopra la media
+    Volume Confirmation - ADAPTIVE VERSION
+    
+    LOGICA:
+    1. Se symbol è auto-discovered → CHECK RILASSATO (o skip)
+       (già filtrato per volume 24h alto)
+    
+    2. Se symbol è manuale → CHECK STRETTO
+       (potrebbe essere low volume)
+    
+    3. Se mode = 'pattern-only' → SKIP (ogni pattern decide)
     
     Args:
         df: DataFrame OHLCV
-        min_ratio: Volume corrente >= min_ratio × media 20 periodi
+        min_ratio: Ratio minimo (default 1.5x)
+        symbol: Symbol name (per check auto-discovery)
+        is_auto_discovered: Flag esplicito
     
     Returns:
-        True se volume è sufficiente
+        bool: True se volume OK
     """
-    # Check 1: Colonna volume esiste?
+    # === MODE 1: PATTERN-ONLY (no global check) ===
+    if VOLUME_FILTER_MODE == 'pattern-only':
+        logging.debug(f'Volume check: SKIPPED (pattern-only mode)')
+        return True
+    
+    # === MODE 2: ADAPTIVE (rilassato per auto-discovered) ===
+    if VOLUME_FILTER_MODE == 'adaptive':
+        # Check se symbol è auto-discovered
+        with AUTO_DISCOVERED_LOCK:
+            is_auto = symbol in AUTO_DISCOVERED_SYMBOLS if symbol else False
+        
+        if is_auto or is_auto_discovered:
+            # Symbol ad alto volume 24h → check rilassato
+            min_ratio = 1.2  # Abbassa threshold
+            logging.debug(f'{symbol}: Auto-discovered, threshold rilassato (1.2x)')
+    
+    # === MODE 3: STRICT (check normale) ===
+    # Usa min_ratio passato come parametro
+    
+    # === VOLUME CALCULATION ===
     if 'volume' not in df.columns:
-        logging.error('❌ Volume column NOT FOUND in dataframe')
-        logging.error(f'Available columns: {df.columns.tolist()}')
+        logging.error('❌ Volume column NOT FOUND')
         return False
     
-    # Check 2: Dati sufficienti?
     if len(df) < 20:
-        logging.warning(f'⚠️ Insufficient data for volume check: {len(df)} rows (need 20+)')
+        logging.warning(f'⚠️ Insufficient data: {len(df)} rows')
         return False
     
     vol = df['volume']
     
-    # Check 3: Volume non è tutto NaN?
+    # Check NaN
     if vol.isna().all():
         logging.error('❌ All volume values are NaN')
         return False
     
-    # Calcola media ultimi 20 (esclude corrente)
+    # Calcola media (esclude corrente)
     avg_vol = vol.iloc[-20:-1].mean()
     current_vol = vol.iloc[-1]
     
-    # Check 4: Valori validi?
+    # Validation
     if pd.isna(avg_vol) or pd.isna(current_vol):
-        logging.error(f'❌ Volume values are NaN: avg={avg_vol}, current={current_vol}')
+        logging.error(f'❌ Volume NaN: avg={avg_vol}, current={current_vol}')
         return False
     
-    # Check 5: Average volume > 0?
+    # === FALLBACK: Se avg_vol = 0 MA symbol è auto-discovered ===
     if avg_vol == 0:
-        logging.error(f'❌ Average volume is 0 (last 20 periods all zero)')
-        logging.error(f'Volume data: {vol.iloc[-20:].tolist()}')
-        return False
+        with AUTO_DISCOVERED_LOCK:
+            is_auto = symbol in AUTO_DISCOVERED_SYMBOLS if symbol else False
+        
+        if is_auto or is_auto_discovered:
+            # Symbol top gainer → probabilmente dati incompleti, PERMETTI
+            logging.warning(
+                f'⚠️ {symbol}: avg_vol=0 MA è auto-discovered → ALLOW'
+            )
+            return True
+        else:
+            # Symbol manuale con avg_vol=0 → BLOCCA
+            logging.error(f'❌ {symbol}: avg_vol=0 → BLOCK')
+            return False
     
     # Calcola ratio
     ratio = current_vol / avg_vol
     
-    # Debug log (puoi commentare dopo fix)
-    logging.debug(f'Volume check: avg={avg_vol:.2f}, current={current_vol:.2f}, ratio={ratio:.2f}x (need {min_ratio}x)')
-    
     result = ratio > min_ratio
     
-    if not result:
-        logging.info(f'⚠️ Volume insufficient: {ratio:.2f}x (need {min_ratio}x+)')
+    if result:
+        logging.debug(
+            f'✅ Volume OK: {ratio:.2f}x (threshold {min_ratio}x)'
+        )
+    else:
+        logging.info(
+            f'⚠️ Volume insufficient: {ratio:.2f}x (need {min_ratio}x+)'
+        )
     
     return result
 
@@ -2884,26 +2940,32 @@ def is_bullish_flag_breakout(df: pd.DataFrame):
 
 def check_patterns(df: pd.DataFrame):
     """
-    Controlla tutti i pattern ABILITATI
+    Controlla pattern con volume check adaptive
     
-    VERSIONE 2.0 con filtri globali e priorità
-    
-    PRIORITY ORDER:
-    1. Global filters (volume, trend, ATR)
-    2. Volume Spike Breakout (TIER 1 - highest win rate)
-    3. Altri pattern esistenti
-    
-    Returns: (found: bool, side: str, pattern_name: str, pattern_data: dict or None)
+    Args:
+        df: DataFrame OHLCV
+        symbol: Symbol name (per auto-discovery check)
     """
     if len(df) < 6:
         return (False, None, None, None)
     
-    # ===== STEP 0: FILTRI GLOBALI (CRITICAL) =====
-    
-    # Filtro Volume - MUST PASS
-    if not volume_confirmation(df, min_ratio=1.5):
-        logging.info('❌ Pattern search BLOCKED: Volume insufficiente')
-        return (False, None, None, None)
+    # === FILTRO VOLUME (ADAPTIVE) ===
+    if VOLUME_FILTER_ENABLED:
+        # Check se auto-discovered
+        with AUTO_DISCOVERED_LOCK:
+            is_auto = symbol in AUTO_DISCOVERED_SYMBOLS if symbol else False
+        
+        # Passa symbol e flag a volume_confirmation
+        vol_ok = volume_confirmation(
+            df, 
+            min_ratio=VOLUME_THRESHOLDS.get(VOLUME_FILTER_MODE, 1.5),
+            symbol=symbol,
+            is_auto_discovered=is_auto
+        )
+        
+        if not vol_ok:
+            logging.info(f'❌ {symbol}: Pattern search BLOCKED by volume filter')
+            return (False, None, None, None)
     
     # Filtro Trend - MUST PASS
     if not is_uptrend_structure(df):
@@ -4134,6 +4196,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     timeframe = job_ctx['timeframe']
     key = f'{symbol}-{timeframe}'
 
+    # Check se auto-discovered
+    is_auto = job_ctx.get('auto_discovered', False)
+
     # Verifica se le notifiche complete sono attive
     with FULL_NOTIFICATIONS_LOCK:
         full_mode = chat_id in FULL_NOTIFICATIONS and key in FULL_NOTIFICATIONS[chat_id]
@@ -4255,7 +4320,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         pattern_data = None
         
         if pattern_search_allowed:
-            found, side, pattern, pattern_data = check_patterns(df)
+            found, side, pattern, pattern_data = check_patterns(df. symbol=symbol)
             
             if found:
                 logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
