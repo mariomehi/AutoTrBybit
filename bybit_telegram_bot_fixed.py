@@ -109,7 +109,7 @@ TRAILING_CONFIG = {
 TRAILING_EMA_TIMEFRAME = {
     '1m': '5m',   # Entry su 1m → EMA 10 da 5m
     '3m': '5m',   # Entry su 3m → EMA 10 da 5m
-    '5m': '5m',  # Entry su 5m → EMA 10 da 15m
+    '5m': '3m',  # Entry su 5m → EMA 10 da 15m
     '15m': '30m', # Entry su 15m → EMA 10 da 30m
     '30m': '1h',  # Entry su 30m → EMA 10 da 1h
     '1h': '4h',   # Entry su 1h → EMA 10 da 4h
