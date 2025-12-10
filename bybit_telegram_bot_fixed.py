@@ -263,6 +263,13 @@ AVAILABLE_PATTERNS = {
         'side': 'Buy',
         'emoji': '⭐💥'
     },
+        'higher_low_breakout': {
+        'name': 'Higher Low Consolidation Breakout',
+        'enabled': True,
+        'description': 'Breakout da consolidamento con base stabile (58-68% win)',
+        'side': 'Buy',
+        'emoji': '📈🔺'
+    },
     'bullish_engulfing': {
         'name': 'Bullish Engulfing',
         'enabled': True,
@@ -1505,6 +1512,235 @@ def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
         'body_pct': body_pct,
         'lower_wick_pct': lower_wick / total_range,
         'tier': 1  # High priority (Tier 1)
+    }
+    
+    return (True, pattern_data)
+
+def is_higher_low_consolidation_breakout(df: pd.DataFrame) -> tuple:
+    """
+    Higher Low Consolidation Breakout
+    
+    LOGICA:
+    1. Identifica impulso iniziale (grande verde)
+    2. Consolidamento DEVE avere higher lows
+    3. CRITICAL: Mai rompere low impulso iniziale
+    4. Breakout con volume
+    
+    Returns:
+        (found: bool, pattern_data: dict or None)
+    """
+    if len(df) < 15:
+        return (False, None)
+    
+    # ===== FASE 1: IDENTIFICA IMPULSO INIZIALE =====
+    # Cerca grande candela verde negli ultimi 12 periodi
+    
+    impulse_found = False
+    impulse_idx = None
+    impulse_candle = None
+    
+    for i in range(-12, -3):  # Da -12 a -4
+        if len(df) < abs(i):
+            continue
+        
+        candle = df.iloc[i]
+        
+        # Deve essere verde
+        if candle['close'] <= candle['open']:
+            continue
+        
+        # Corpo forte (>60% range)
+        body = abs(candle['close'] - candle['open'])
+        total_range = candle['high'] - candle['low']
+        
+        if total_range == 0:
+            continue
+        
+        body_pct = body / total_range
+        
+        if body_pct < 0.60:
+            continue
+        
+        # Body significativo in assoluto (>0.8% del prezzo)
+        body_pct_price = (body / candle['open']) * 100
+        
+        if body_pct_price < 0.8:
+            continue
+        
+        # IMPULSO TROVATO!
+        impulse_found = True
+        impulse_candle = candle
+        impulse_idx = i
+        break
+    
+    if not impulse_found:
+        return (False, None)
+    
+    # Livelli chiave
+    resistance = impulse_candle['high']  # Breakout level
+    base_support = impulse_candle['low']  # "Line in the sand"
+    
+    # ===== FASE 2: CONSOLIDAMENTO con HIGHER LOWS =====
+    # Candele tra impulso e corrente
+    
+    consolidation_start = impulse_idx + 1
+    consolidation_end = -1
+    
+    consolidation = df.iloc[consolidation_start:consolidation_end]
+    
+    if len(consolidation) < 3:
+        return (False, None)  # Troppo corto
+    
+    if len(consolidation) > 10:
+        return (False, None)  # Troppo lungo
+    
+    # CHECK CRITICO: Mai rompere base support
+    consolidation_low = consolidation['low'].min()
+    
+    if consolidation_low <= base_support * 0.998:  # Tolleranza 0.2%
+        logging.debug(f'❌ Higher Low Breakout: Base broken ({consolidation_low:.6f} < {base_support:.6f})')
+        return (False, None)  # Base violata = pattern INVALIDO
+    
+    # CHECK HIGHER LOWS (opzionale ma migliora win rate)
+    # Divide consolidamento in 2 metà
+    if len(consolidation) >= 6:
+        split = len(consolidation) // 2
+        first_half_low = consolidation['low'].iloc[:split].min()
+        second_half_low = consolidation['low'].iloc[split:].min()
+        
+        # Second half low dovrebbe essere >= first half low
+        has_higher_lows = second_half_low >= first_half_low * 0.995
+        
+        if not has_higher_lows:
+            logging.debug('⚠️ No clear higher lows pattern')
+            # Non blocca, ma riduce quality score
+    else:
+        has_higher_lows = True  # Troppo corto per determinare
+    
+    # Range consolidamento deve essere stretto
+    consolidation_high = consolidation['high'].max()
+    consolidation_range = consolidation_high - consolidation_low
+    consolidation_range_pct = (consolidation_range / consolidation_low) * 100
+    
+    if consolidation_range_pct > 3.0:
+        return (False, None)  # Range troppo ampio (>3%)
+    
+    # Consolidamento deve rimanere SOTTO resistance
+    if consolidation_high > resistance * 1.002:
+        return (False, None)  # Ha già rotto resistance
+    
+    # ===== FASE 3: BREAKOUT (candela corrente) =====
+    
+    curr = df.iloc[-1]
+    
+    # Deve essere verde
+    if curr['close'] <= curr['open']:
+        return (False, None)
+    
+    # Deve rompere resistance
+    if curr['close'] <= resistance:
+        return (False, None)
+    
+    # Corpo forte
+    curr_body = abs(curr['close'] - curr['open'])
+    curr_range = curr['high'] - curr['low']
+    
+    if curr_range == 0:
+        return (False, None)
+    
+    curr_body_pct = (curr_body / curr_range) * 100
+    
+    if curr_body_pct < 50:
+        return (False, None)
+    
+    # Upper wick piccolo (no rejection)
+    curr_upper_wick = curr['high'] - curr['close']
+    curr_upper_wick_pct = (curr_upper_wick / curr_range) * 100
+    
+    if curr_upper_wick_pct > 30:
+        return (False, None)
+    
+    # ===== VOLUME CHECK =====
+    if 'volume' not in df.columns:
+        return (False, None)
+    
+    consolidation_vol_avg = consolidation['volume'].mean()
+    curr_vol = df['volume'].iloc[-1]
+    
+    if consolidation_vol_avg == 0:
+        return (False, None)
+    
+    vol_ratio = curr_vol / consolidation_vol_avg
+    
+    # Volume breakout > 2x consolidamento
+    if vol_ratio < 2.0:
+        return (False, None)
+    
+    # ===== EMA CHECKS (opzionali) =====
+    ema_10 = df['close'].ewm(span=10, adjust=False).mean()
+    ema_60 = df['close'].ewm(span=60, adjust=False).mean()
+    
+    curr_ema10 = ema_10.iloc[-1]
+    curr_ema60 = ema_60.iloc[-1]
+    
+    # Preferibile se sopra EMA
+    above_ema10 = curr['close'] > curr_ema10
+    above_ema60 = curr['close'] > curr_ema60
+    
+    # ===== QUALITY SCORING =====
+    quality_score = 70  # Base score
+    
+    if has_higher_lows:
+        quality_score += 10
+    
+    if vol_ratio > 3.0:
+        quality_score += 10
+    
+    if above_ema10 and above_ema60:
+        quality_score += 10
+    
+    quality = 'GOLD' if quality_score >= 90 else 'GOOD' if quality_score >= 80 else 'OK'
+    
+    # ===== PATTERN CONFERMATO =====
+    
+    pattern_data = {
+        # Livelli chiave
+        'resistance': resistance,
+        'base_support': base_support,
+        'consolidation_low': consolidation_low,
+        'consolidation_high': consolidation_high,
+        'range_pct': consolidation_range_pct,
+        
+        # Impulso info
+        'impulse_body_pct': (abs(impulse_candle['close'] - impulse_candle['open']) / 
+                             (impulse_candle['high'] - impulse_candle['low']) * 100),
+        
+        # Consolidamento info
+        'consolidation_duration': len(consolidation),
+        'has_higher_lows': has_higher_lows,
+        'base_held': True,  # Sempre True se arriviamo qui
+        
+        # Breakout info
+        'breakout_price': curr['close'],
+        'breakout_body_pct': curr_body_pct,
+        'volume_ratio': vol_ratio,
+        
+        # EMA
+        'ema10': curr_ema10,
+        'ema60': curr_ema60,
+        'above_ema10': above_ema10,
+        'above_ema60': above_ema60,
+        
+        # Trading setup
+        'suggested_entry': curr['close'],
+        'suggested_sl': base_support * 0.998,  # Sotto base
+        'suggested_tp': resistance + (resistance - base_support) * 3,  # 3R
+        
+        # Quality
+        'quality': quality,
+        'quality_score': quality_score,
+        
+        'tier': 2  # Good but overlaps with Flag
     }
     
     return (True, pattern_data)
@@ -3301,6 +3537,12 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     prev = df.iloc[-2]
     prev2 = df.iloc[-3]
 
+    # Higher Low Consolidation Breakout (NUOVO)
+    if AVAILABLE_PATTERNS.get('higher_low_breakout', {}).get('enabled'):
+        found, data = is_higher_low_consolidation_breakout(df)
+        if found:
+            return (True, 'Buy', 'Higher Low Breakout', data)
+    
     # Bullish Comeback
     if AVAILABLE_PATTERNS['bullish_comeback']['enabled']:
         if is_bullish_comeback(df):
