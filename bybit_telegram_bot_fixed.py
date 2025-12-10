@@ -5037,6 +5037,26 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 return  # BLOCCA segnale
 
             # ===== GESTIONE PATTERN-SPECIFIC ENTRY/SL/TP =====
+            if pattern == 'Volume Spike Breakout' and pattern_data:
+                entry_price = last_close  # Entry immediato
+                
+                # SL: EMA 10 o ATR
+                if USE_EMA_STOP_LOSS:
+                    sl_price, ema_used, ema_value = calculate_ema_stop_loss(
+                        df, timeframe, last_close, side
+                    )
+                else:
+                    if not math.isnan(last_atr) and last_atr > 0:
+                        sl_price = last_close - last_atr * 1.5
+                        ema_used = 'ATR'
+                        ema_value = last_atr
+                    else:
+                        sl_price = pattern_data['ema10'] * 0.998
+                        ema_used = 'EMA 10'
+                        ema_value = pattern_data['ema10']
+                
+                # TP: Standard ATR
+                tp_price = last_close + abs(last_close - sl_price) * 2.0
             
             # === BULLISH FLAG BREAKOUT ===
             if pattern == 'Bullish Flag Breakout' and pattern_data:
