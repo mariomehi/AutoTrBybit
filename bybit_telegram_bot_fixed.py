@@ -189,7 +189,7 @@ AUTO_DISCOVERY_CONFIG = {
     'update_interval': 14400,  # 12 ore in secondi (12 * 60 * 60)
     'min_volume_usdt': 5000000,  # Min volume 24h: 10M USDT
     'min_price_change': 5.0,  # Min variazione 24h: +5%
-    'max_price_change': 80.0,  # Max variazione 24h: +50% (evita pump & dump)
+    'max_price_change': 90.0,  # Max variazione 24h: +50% (evita pump & dump)
     'exclude_symbols': ['USDCUSDT', 'TUSDUSDT', 'BUSDUSDT'],  # Stablecoins da escludere
     'sorting': 'price_change_percent',  # 'price_change_percent' o 'volume'
 }
@@ -3438,38 +3438,73 @@ def is_bullish_flag_breakout(df: pd.DataFrame):
         }
         
         return (True, pattern_data)
-    
     # Nessun flag valido trovato con duration 3-8
     return (False, None)
 
-
 def check_patterns(df: pd.DataFrame, symbol: str = None):
     """
-    Controlla pattern con volume check adaptive
+    Pattern detection con filtri intelligenti
     
-    Args:
-        df: DataFrame OHLCV
-        symbol: Symbol name (per auto-discovery check)
+    PRIORITY ORDER (FIXED):
+    ────────────────────────────────────────────
+    TIER 1 (High Probability 60-72% win):
+    1. Volume Spike Breakout
+    2. Breakout + Retest
+    3. Triple Touch Breakout
+    4. Liquidity Sweep + Reversal
+    
+    TIER 2 (Good 52-62% win):
+    5. S/R Bounce
+    6. Bullish Flag Breakout
+    7. Higher Low Breakout (nuovo)
+    8. Bullish Comeback
+    9. Compression Breakout
+    10. Morning Star + EMA Breakout
+    
+    TIER 3 (Classic patterns 45-55% win):
+    11. Pattern classici (Engulfing, Hammer, ecc.)
+    ────────────────────────────────────────────
+    
+    Returns:
+        (found: bool, side: str, pattern_name: str, pattern_data: dict)
     """
     if len(df) < 6:
         return (False, None, None, None)
     
-    # === FILTRO VOLUME (già esistente) ===
-    if VOLUME_FILTER_ENABLED and VOLUME_FILTER_MODE != 'pattern-only':
-        vol_ok = volume_confirmation(df, symbol=symbol)
-        if not vol_ok:
-            return (False, None, None, None)
+    # ═══════════════════════════════════════════
+    # FILTRO 1: VOLUME (FIXED - Adaptive)
+    # ═══════════════════════════════════════════
     
-    # === TREND FILTER (NUOVO - SMART) ===
+    if VOLUME_FILTER_ENABLED:
+        # Check mode DENTRO volume_confirmation
+        vol_ok = volume_confirmation(
+            df, 
+            min_ratio=1.5,
+            symbol=symbol
+        )
+        
+        # Solo in strict mode blocca completamente
+        if not vol_ok and VOLUME_FILTER_MODE == 'strict':
+            logging.info(f'❌ {symbol}: BLOCKED by volume (strict mode)')
+            return (False, None, None, None)
+        
+        # In pattern-only o adaptive, solo warning
+        if not vol_ok:
+            logging.debug(f'⚠️ {symbol}: Low volume but pattern-only mode, continue...')
+    
+    # ═══════════════════════════════════════════
+    # FILTRO 2: TREND (FIXED - EMA-based)
+    # ═══════════════════════════════════════════
+    
     if TREND_FILTER_ENABLED:
         if TREND_FILTER_MODE == 'pattern_only':
-            # Skip global check, ogni pattern decide
-            logging.info('Trend filter: SKIPPED (pattern-only mode)')
+            # Skip global check
+            logging.debug(f'{symbol}: Trend check SKIPPED (pattern-only mode)')
         else:
-            # Check globale (ma più intelligente)
+            # Usa EMA-based invece di structure
             trend_valid, trend_reason, trend_details = is_valid_trend_for_entry(
                 df,
-                mode=TREND_FILTER_MODE,
+                mode=TREND_FILTER_MODE,  # 'ema_based' recommended
                 symbol=symbol
             )
             
@@ -3480,158 +3515,266 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             else:
                 logging.debug(f'✅ {symbol}: Trend OK - {trend_reason}')
     
-    # === ATR CHECK (warning only) ===
+    # ═══════════════════════════════════════════
+    # FILTRO 3: ATR (Warning only)
+    # ═══════════════════════════════════════════
+    
     if not atr_expanding(df):
-        logging.debug('⚠️ ATR not expanding')
+        logging.debug(f'⚠️ {symbol}: ATR not expanding (low volatility)')
     
-    # ===== TIER 1: HIGH PROBABILITY PATTERNS =====
+    # ═══════════════════════════════════════════
+    # TIER 1: HIGH PROBABILITY PATTERNS (60-72%)
+    # ═══════════════════════════════════════════
     
-    # 🥇 PRIORITY #1: Volum6e Spike Breakout
-    if AVAILABLE_PATTERNS.get('volume_spike_breakout', {}).get('enabled'):
-        found, data = is_volume_spike_breakout(df)
-        if found:
-            logging.info(f'✅ TIER 1 Pattern: Volume Spike Breakout (volume: {data["volume_ratio"]:.1f}x)')
-            # Pattern-specific trend check
-            pattern_trend_ok, reason, _ = check_pattern_specific_trend(df, 'Volume Spike Breakout')
-            if pattern_trend_ok:
+    # 🥇 #1: Volume Spike Breakout
+    if AVAILABLE_PATTERNS.get('volume_spike_breakout', {}).get('enabled', False):
+        try:
+            found, data = is_volume_spike_breakout(df)
+            if found:
+                logging.info(f'✅ TIER 1: Volume Spike Breakout')
                 return (True, 'Buy', 'Volume Spike Breakout', data)
-
-    # 🥇 BREAKOUT + RETEST (NUOVO - inserisci qui!)
-    if AVAILABLE_PATTERNS.get('breakout_retest', {}).get('enabled'):
-        found, data = is_breakout_retest(df)
-        if found:
-            logging.info(
-                f'✅ TIER 1 Pattern: Breakout + Retest '
-                f'(range: {data["range_pct"]:.2f}%, '
-                f'rejection: {data["retest_rejection_pct"]:.1f}%)'
-            )
-            return (True, 'Buy', 'Breakout + Retest', data)
-
-    # 🥇 TRIPLE TOUCH BREAKOUT (NUOVO)
-    if AVAILABLE_PATTERNS.get('triple_touch_breakout', {}).get('enabled'):
-        found, data = is_triple_touch_breakout(df)
-        if found:
-            logging.info(
-                f'✅ TIER 1 Pattern: Triple Touch Breakout '
-                f'(R: ${data["resistance"]:.4f}, '
-                f'vol: {data["volume_ratio"]:.1f}x, '
-                f'quality: {data["quality"]})'
-            )
-            return (True, 'Buy', 'Triple Touch Breakout', data)
-
-    # 👇 LIQUIDITY SWEEP (massima priorità - pattern istituzionale)
-    if AVAILABLE_PATTERNS['liquidity_sweep_reversal']['enabled']:
-        found, sweep_data = is_liquidity_sweep_reversal(df)
-        if found:
-            return (True, 'Buy', 'Liquidity Sweep + Reversal', sweep_data)
-
-    # 3. Support/Resistance Bounce
-    if AVAILABLE_PATTERNS['sr_bounce']['enabled']:
-        found, sr_data = is_support_resistance_bounce(df)
-        if found:
-            return (True, 'Buy', 'Support/Resistance Bounce', sr_data)
+        except Exception as e:
+            logging.error(f'Error in Volume Spike: {e}')
     
-    # ===== TIER 2: EXISTING PATTERNS (Lower Priority) =====
+    # 🥇 #2: Breakout + Retest
+    if AVAILABLE_PATTERNS.get('breakout_retest', {}).get('enabled', False):
+        try:
+            found, data = is_breakout_retest(df)
+            if found:
+                logging.info(
+                    f'✅ TIER 1: Breakout + Retest '
+                    f'(range: {data["range_pct"]:.2f}%, '
+                    f'rejection: {data["retest_rejection_pct"]:.1f}%)'
+                )
+                return (True, 'Buy', 'Breakout + Retest', data)
+        except NameError:
+            logging.warning('⚠️ is_breakout_retest() not implemented')
+        except Exception as e:
+            logging.error(f'Error in Breakout+Retest: {e}')
+    
+    # 🥇 #3: Triple Touch Breakout
+    if AVAILABLE_PATTERNS.get('triple_touch_breakout', {}).get('enabled', False):
+        try:
+            found, data = is_triple_touch_breakout(df)
+            if found:
+                logging.info(
+                    f'✅ TIER 1: Triple Touch Breakout '
+                    f'(R: ${data["resistance"]:.4f}, '
+                    f'vol: {data["volume_ratio"]:.1f}x, '
+                    f'quality: {data["quality"]})'
+                )
+                return (True, 'Buy', 'Triple Touch Breakout', data)
+        except NameError:
+            logging.warning('⚠️ is_triple_touch_breakout() not implemented')
+        except Exception as e:
+            logging.error(f'Error in Triple Touch: {e}')
+    
+    # 🥇 #4: Liquidity Sweep + Reversal
+    if AVAILABLE_PATTERNS.get('liquidity_sweep_reversal', {}).get('enabled', False):
+        try:
+            found, data = is_liquidity_sweep_reversal(df)
+            if found:
+                logging.info(f'✅ TIER 1: Liquidity Sweep + Reversal')
+                return (True, 'Buy', 'Liquidity Sweep + Reversal', data)
+        except Exception as e:
+            logging.error(f'Error in Liquidity Sweep: {e}')
+    
+    # ═══════════════════════════════════════════
+    # TIER 2: GOOD PATTERNS (52-62%)
+    # ═══════════════════════════════════════════
+    
+    # 🥈 #5: S/R Bounce
+    if AVAILABLE_PATTERNS.get('sr_bounce', {}).get('enabled', False):
+        try:
+            found, data = is_support_resistance_bounce(df)
+            if found:
+                logging.info(f'✅ TIER 2: S/R Bounce')
+                return (True, 'Buy', 'Support/Resistance Bounce', data)
+        except Exception as e:
+            logging.error(f'Error in S/R Bounce: {e}')
+    
+    # 🥈 #6: Bullish Flag Breakout
+    if AVAILABLE_PATTERNS.get('bullish_flag_breakout', {}).get('enabled', False):
+        try:
+            found, data = is_bullish_flag_breakout(df)
+            if found:
+                logging.info(
+                    f'✅ TIER 2: Bullish Flag '
+                    f'(vol: {data["volume_ratio"]:.1f}x)'
+                )
+                return (True, 'Buy', 'Bullish Flag Breakout', data)
+        except Exception as e:
+            logging.error(f'Error in Flag: {e}')
+    
+    # 🥈 #7: Higher Low Consolidation Breakout (NUOVO)
+    if AVAILABLE_PATTERNS.get('higher_low_breakout', {}).get('enabled', False):
+        try:
+            found, data = is_higher_low_consolidation_breakout(df)
+            if found:
+                logging.info(
+                    f'✅ TIER 2: Higher Low Breakout '
+                    f'(quality: {data["quality"]})'
+                )
+                return (True, 'Buy', 'Higher Low Breakout', data)
+        except NameError:
+            logging.debug('is_higher_low_consolidation_breakout() not implemented')
+        except Exception as e:
+            logging.error(f'Error in Higher Low: {e}')
+    
+    # 🥈 #8: Bullish Comeback
+    if AVAILABLE_PATTERNS.get('bullish_comeback', {}).get('enabled', False):
+        try:
+            if is_bullish_comeback(df):
+                logging.info(f'✅ TIER 2: Bullish Comeback')
+                return (True, 'Buy', 'Bullish Comeback', None)
+        except Exception as e:
+            logging.error(f'Error in Comeback: {e}')
+    
+    # 🥈 #9: Compression Breakout
+    if AVAILABLE_PATTERNS.get('compression_breakout', {}).get('enabled', False):
+        try:
+            if is_compression_breakout(df):
+                logging.info(f'✅ TIER 2: Compression Breakout')
+                return (True, 'Buy', 'Compression Breakout (Enhanced)', None)
+        except Exception as e:
+            logging.error(f'Error in Compression: {e}')
+    
+    # 🥈 #10: Morning Star + EMA Breakout
+    if AVAILABLE_PATTERNS.get('morning_star_ema_breakout', {}).get('enabled', False):
+        try:
+            if is_morning_star_ema_breakout(df):
+                logging.info(f'✅ TIER 2: Morning Star + EMA Breakout')
+                return (True, 'Buy', 'Morning Star + EMA Breakout', None)
+        except Exception as e:
+            logging.error(f'Error in Morning Star EMA: {e}')
+    
+    # ═══════════════════════════════════════════
+    # TIER 3: CLASSIC PATTERNS (45-55%)
+    # ═══════════════════════════════════════════
     
     last = df.iloc[-1]
     prev = df.iloc[-2]
     prev2 = df.iloc[-3]
-
-    # Higher Low Consolidation Breakout (NUOVO)
-    if AVAILABLE_PATTERNS.get('higher_low_breakout', {}).get('enabled'):
-        found, data = is_higher_low_consolidation_breakout(df)
-        if found:
-            return (True, 'Buy', 'Higher Low Breakout', data)
-    
-    # Bullish Comeback
-    if AVAILABLE_PATTERNS['bullish_comeback']['enabled']:
-        if is_bullish_comeback(df):
-            return (True, 'Buy', 'Bullish Comeback', None)
-    
-    # Compression Breakout (Enhanced)
-    if AVAILABLE_PATTERNS['compression_breakout']['enabled']:
-        if is_compression_breakout(df):
-            # === ENHANCEMENT: HTF RESISTANCE CHECK ===
-            # Nota: Serve symbol e timeframe dal contesto
-            # Questa logica va in analyze_job() quando pattern è trovato
-            # Per ora ritorna pattern trovato
-            return (True, 'Buy', 'Compression Breakout (Enhanced)', None)
-    
-    # Bullish Flag Breakout (CON DATI CUSTOM)
-    if AVAILABLE_PATTERNS['bullish_flag_breakout']['enabled']:
-        found, flag_data = is_bullish_flag_breakout(df)
-        if found:
-            return (True, 'Buy', 'Bullish Flag Breakout', flag_data)
-
-    # 👇 AGGIUNGI QUI - Morning Star + EMA Breakout (alta priorità!)
-    if AVAILABLE_PATTERNS['morning_star_ema_breakout']['enabled']:
-        if is_morning_star_ema_breakout(df):
-            return (True, 'Buy', 'Morning Star + EMA Breakout', None)
     
     # Bullish Engulfing
-    if AVAILABLE_PATTERNS['bullish_engulfing']['enabled']:
-        if is_bullish_engulfing(prev, last):
-            return (True, 'Buy', 'Bullish Engulfing', None)
-    
-    # Bearish Engulfing (SELL)
-    if AVAILABLE_PATTERNS['bearish_engulfing']['enabled']:
-        if is_bearish_engulfing(prev, last):
-            return (True, 'Sell', 'Bearish Engulfing', None)
+    if AVAILABLE_PATTERNS.get('bullish_engulfing', {}).get('enabled', False):
+        try:
+            if is_bullish_engulfing(prev, last):
+                logging.info(f'✅ TIER 3: Bullish Engulfing')
+                return (True, 'Buy', 'Bullish Engulfing', None)
+        except Exception as e:
+            logging.error(f'Error in Engulfing: {e}')
     
     # Hammer
-    if AVAILABLE_PATTERNS['hammer']['enabled']:
-        if is_hammer(last):
-            return (True, 'Buy', 'Hammer', None)
+    if AVAILABLE_PATTERNS.get('hammer', {}).get('enabled', False):
+        try:
+            if is_hammer(last):
+                logging.info(f'✅ TIER 3: Hammer')
+                return (True, 'Buy', 'Hammer', None)
+        except Exception as e:
+            logging.error(f'Error in Hammer: {e}')
     
-    # Shooting Star (SELL)
-    if AVAILABLE_PATTERNS['shooting_star']['enabled']:
-        if is_shooting_star(last):
-            return (True, 'Sell', 'Shooting Star', None)
-    
-    # Pin bar
-    if AVAILABLE_PATTERNS['pin_bar_bullish']['enabled'] or AVAILABLE_PATTERNS['pin_bar_bearish']['enabled']:
-        if is_pin_bar(last):
-            lower_wick = min(last['open'], last['close']) - last['low']
-            upper_wick = last['high'] - max(last['open'], last['close'])
-            
-            if lower_wick > upper_wick:
-                # Pin bar bullish
-                if AVAILABLE_PATTERNS['pin_bar_bullish']['enabled']:
+    # Pin Bar Bullish
+    if AVAILABLE_PATTERNS.get('pin_bar_bullish', {}).get('enabled', False):
+        try:
+            if is_pin_bar(last):
+                lower_wick = min(last['open'], last['close']) - last['low']
+                upper_wick = last['high'] - max(last['open'], last['close'])
+                
+                if lower_wick > upper_wick:
+                    logging.info(f'✅ TIER 3: Pin Bar Bullish')
                     return (True, 'Buy', 'Pin Bar Bullish', None)
-            else:
-                # Pin bar bearish
-                if AVAILABLE_PATTERNS['pin_bar_bearish']['enabled']:
-                    return (True, 'Sell', 'Pin Bar Bearish', None)
+        except Exception as e:
+            logging.error(f'Error in Pin Bar: {e}')
     
-    # Doji
-    if AVAILABLE_PATTERNS['doji']['enabled']:
-        if is_doji(last):
-            # Il doji può essere sia BUY che SELL a seconda del trend
-            if prev['close'] > prev['open']:
-                return (True, 'Sell', 'Doji (reversione)', None)
-            else:
-                return (True, 'Buy', 'Doji (reversione)', None)
-    
-    # Morning Star
-    if AVAILABLE_PATTERNS['morning_star']['enabled']:
-        if is_morning_star(prev2, prev, last):
-            return (True, 'Buy', 'Morning Star', None)
-    
-    # Evening Star (SELL)
-    if AVAILABLE_PATTERNS['evening_star']['enabled']:
-        if is_evening_star(prev2, prev, last):
-            return (True, 'Sell', 'Evening Star', None)
+    # Morning Star (classic)
+    if AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled', False):
+        try:
+            if is_morning_star(prev2, prev, last):
+                logging.info(f'✅ TIER 3: Morning Star')
+                return (True, 'Buy', 'Morning Star', None)
+        except Exception as e:
+            logging.error(f'Error in Morning Star: {e}')
     
     # Three White Soldiers
-    if AVAILABLE_PATTERNS['three_white_soldiers']['enabled']:
-        if is_three_white_soldiers(prev2, prev, last):
-            return (True, 'Buy', 'Three White Soldiers', None)
+    if AVAILABLE_PATTERNS.get('three_white_soldiers', {}).get('enabled', False):
+        try:
+            if is_three_white_soldiers(prev2, prev, last):
+                logging.info(f'✅ TIER 3: Three White Soldiers')
+                return (True, 'Buy', 'Three White Soldiers', None)
+        except Exception as e:
+            logging.error(f'Error in Three White Soldiers: {e}')
     
-    # Three Black Crows (SELL)
-    if AVAILABLE_PATTERNS['three_black_crows']['enabled']:
-        if is_three_black_crows(prev2, prev, last):
-            return (True, 'Sell', 'Three Black Crows', None)
+    # Doji
+    if AVAILABLE_PATTERNS.get('doji', {}).get('enabled', False):
+        try:
+            if is_doji(last):
+                logging.info(f'✅ TIER 3: Doji')
+                if prev['close'] > prev['open']:
+                    return (True, 'Sell', 'Doji (reversione)', None)
+                else:
+                    return (True, 'Buy', 'Doji (reversione)', None)
+        except Exception as e:
+            logging.error(f'Error in Doji: {e}')
     
+    # ═══════════════════════════════════════════
+    # PATTERN SELL (se abilitati)
+    # ═══════════════════════════════════════════
+    
+    # Bearish Engulfing
+    if AVAILABLE_PATTERNS.get('bearish_engulfing', {}).get('enabled', False):
+        try:
+            if is_bearish_engulfing(prev, last):
+                logging.info(f'✅ SELL: Bearish Engulfing')
+                return (True, 'Sell', 'Bearish Engulfing', None)
+        except Exception as e:
+            pass
+    
+    # Shooting Star
+    if AVAILABLE_PATTERNS.get('shooting_star', {}).get('enabled', False):
+        try:
+            if is_shooting_star(last):
+                logging.info(f'✅ SELL: Shooting Star')
+                return (True, 'Sell', 'Shooting Star', None)
+        except Exception as e:
+            pass
+    
+    # Pin Bar Bearish
+    if AVAILABLE_PATTERNS.get('pin_bar_bearish', {}).get('enabled', False):
+        try:
+            if is_pin_bar(last):
+                lower_wick = min(last['open'], last['close']) - last['low']
+                upper_wick = last['high'] - max(last['open'], last['close'])
+                
+                if upper_wick > lower_wick:
+                    logging.info(f'✅ SELL: Pin Bar Bearish')
+                    return (True, 'Sell', 'Pin Bar Bearish', None)
+        except Exception as e:
+            pass
+    
+    # Evening Star
+    if AVAILABLE_PATTERNS.get('evening_star', {}).get('enabled', False):
+        try:
+            if is_evening_star(prev2, prev, last):
+                logging.info(f'✅ SELL: Evening Star')
+                return (True, 'Sell', 'Evening Star', None)
+        except Exception as e:
+            pass
+    
+    # Three Black Crows
+    if AVAILABLE_PATTERNS.get('three_black_crows', {}).get('enabled', False):
+        try:
+            if is_three_black_crows(prev2, prev, last):
+                logging.info(f'✅ SELL: Three Black Crows')
+                return (True, 'Sell', 'Three Black Crows', None)
+        except Exception as e:
+            pass
+    
+    # ═══════════════════════════════════════════
+    # NESSUN PATTERN TROVATO
+    # ═══════════════════════════════════════════
+    
+    logging.debug(f'{symbol}: No pattern detected')
     return (False, None, None, None)
 
 
