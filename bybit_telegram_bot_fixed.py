@@ -3878,8 +3878,8 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 
                 return (True, 'Buy', pattern_name, data)
     
-    except Exception as e:
-        logging.error(f'Error in Bullish Engulfing Enhanced: {e}')
+        except Exception as e:
+            logging.error(f'Error in Bullish Engulfing Enhanced: {e}')
     
     # ═══════════════════════════════════════════
     # TIER 3: CLASSIC PATTERNS (45-55%)
