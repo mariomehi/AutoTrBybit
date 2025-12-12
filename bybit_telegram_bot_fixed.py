@@ -2482,7 +2482,7 @@ def is_morning_star_ema_breakout(df: pd.DataFrame):
     c = df.iloc[-1]  # Terza: rialzista (breakout)
     
     # === STEP 1: Verifica Morning Star classico ===
-    if not is_morning_star(a, b, c):
+    if not is_morning_star_enhanced(a, b, c):
         return False
     
     # === STEP 2: Calcola EMA 5 e 10 ===
@@ -8977,7 +8977,7 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tests_bool['➖ Doji'] = False
         
         try:
-            tests_bool['⭐ Morning Star'] = is_morning_star(prev2, prev, last)
+            tests_bool['⭐ Morning Star'] = is_morning_star_enhanced(prev2, prev, last)
         except Exception as e:
             tests_bool['⭐ Morning Star'] = False
         
