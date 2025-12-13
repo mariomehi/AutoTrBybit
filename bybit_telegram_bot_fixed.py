@@ -4295,8 +4295,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                     )
                     if not trend_valid:
                         logging.info(f'⚠️ Volume Spike: trend blocked - {trend_reason}')
-                        continue  # Skip to next pattern
-                
+                        #continue  # Skip to next pattern
                 logging.info(f'✅ TIER 1: Volume Spike Breakout')
                 return (True, 'Buy', 'Volume Spike Breakout', data)
         except Exception as e:
