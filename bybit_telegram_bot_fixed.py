@@ -189,7 +189,7 @@ AUTO_DISCOVERY_CONFIG = {
     'update_interval': 14400,  # 12 ore in secondi (12 * 60 * 60)
     'min_volume_usdt': 5000000,  # Min volume 24h: 10M USDT
     'min_price_change': 5.0,  # Min variazione 24h: +5%
-    'max_price_change': 90.0,  # Max variazione 24h: +50% (evita pump & dump)
+    'max_price_change': 110.0,  # Max variazione 24h: +110% (evita pump & dump)
     'exclude_symbols': ['USDCUSDT', 'TUSDUSDT', 'BUSDUSDT'],  # Stablecoins da escludere
     'sorting': 'price_change_percent',  # 'price_change_percent' o 'volume'
 }
@@ -200,155 +200,134 @@ AUTO_DISCOVERED_LOCK = threading.Lock()
 
 # Pattern Management System
 AVAILABLE_PATTERNS = {
-        'volume_spike_breakout': {
+    # ═══════════════════════════════════════════
+    # TIER 1: HIGH PROBABILITY (60-72% win)
+    # ═══════════════════════════════════════════
+    'volume_spike_breakout': {
         'name': 'Volume Spike Breakout',
-        'enabled': True,  # 👈 ABILITATO di default
-        'description': 'Breakout con volume 3x+ e momentum forte (Best per crypto)',
+        'enabled': True,  # ✅
+        'description': 'Breakout volume 3x+, EMA alignment',
         'side': 'Buy',
         'emoji': '📊💥'
     },
-        'breakout_retest': {  # 👈 NUOVO
+    'breakout_retest': {
         'name': 'Breakout + Retest',
-        'enabled': True,  # Abilita di default
-        'description': 'Breakout → Pullback → Retest con bounce (Win rate 60-70%)',
+        'enabled': True,  # ✅
+        'description': 'Consolidation → Breakout → Retest → Bounce',
         'side': 'Buy',
         'emoji': '🔄📈'
     },
-        'triple_touch_breakout': {  # 👈 NUOVO
+    'triple_touch_breakout': {
         'name': 'Triple Touch Breakout',
-        'enabled': True,
-        'description': '3 tocchi resistance (2 rejection + breakout) sopra EMA 60 (62-72% win)',
+        'enabled': True,  # ✅
+        'description': '3 tocchi resistance + breakout sopra EMA 60',
         'side': 'Buy',
         'emoji': '🎯3️⃣'
     },
-        'liquidity_sweep_reversal': {  # 👈 NUOVO (alta priorità!)
+    'liquidity_sweep_reversal': {
         'name': 'Liquidity Sweep + Reversal',
-        'enabled': True,
-        'description': 'Smart Money: sweep low + reversal (istituzionale)',
+        'enabled': True,  # ✅
+        'description': 'Smart money sweep + reversal',
         'side': 'Buy',
         'emoji': '💎'
     },
-        'sr_bounce': {
+    
+    # ═══════════════════════════════════════════
+    # TIER 2: GOOD (52-62% win)
+    # ═══════════════════════════════════════════
+    'sr_bounce': {
         'name': 'Support/Resistance Bounce',
-        'enabled': True,
-        'description': 'Rimbalzo su livello S/R con rejection',
+        'enabled': True,  # ✅
+        'description': 'Bounce su S/R con rejection',
         'side': 'Buy',
         'emoji': '🎯'
     },
     'bullish_comeback': {
         'name': 'Bullish Comeback',
-        'enabled': True,
-        'description': 'Inversione/rigetto rialzista (2 varianti)',
+        'enabled': True,  # ✅
+        'description': 'Inversione dopo tentativo ribassista',
         'side': 'Buy',
         'emoji': '🔄'
     },
-    'compression_breakout': { 
+    'compression_breakout': {
         'name': 'Compression Breakout (Enhanced)',
-        'enabled': True,
-        'description': 'Breakout con volume 1.8x+, RSI 50-70, no HTF resistance',
+        'enabled': True,  # ✅
+        'description': 'EMA compression + breakout (RSI, vol, HTF)',
         'side': 'Buy',
         'emoji': '💥'
     },
     'bullish_flag_breakout': {
         'name': 'Bullish Flag Breakout (Enhanced)',
-        'enabled': True,
-        'description': 'Breakout volume 2x+, flag 3-8 candele, pole >0.8%',
+        'enabled': True,  # ✅
+        'description': 'Pole + flag + breakout (vol 2x+)',
         'side': 'Buy',
         'emoji': '🚩'
     },
-    'morning_star_ema_breakout': {  # 👈 NUOVO
+    'morning_star_ema_breakout': {
         'name': 'Morning Star + EMA Breakout',
-        'enabled': True,
-        'description': 'Morning Star con rottura EMA 5,10 al rialzo',
+        'enabled': True,  # ✅
+        'description': 'Morning Star + rottura EMA',
         'side': 'Buy',
         'emoji': '⭐💥'
     },
-        'higher_low_breakout': {
+    'higher_low_breakout': {
         'name': 'Higher Low Consolidation Breakout',
-        'enabled': True,
-        'description': 'Breakout da consolidamento con base stabile (58-68% win)',
+        'enabled': True,  # ✅
+        'description': 'Impulso + higher lows + breakout',
         'side': 'Buy',
         'emoji': '📈🔺'
     },
+    
+    # ═══════════════════════════════════════════
+    # TIER 3: CLASSIC PATTERNS - USA ENHANCED
+    # ═══════════════════════════════════════════
     'bullish_engulfing': {
         'name': 'Bullish Engulfing',
-        'enabled': True,
-        'description': 'Candela rialzista ingloba ribassista',
+        'enabled': True,  # ✅ MA USA ENHANCED VERSION
+        'description': 'Engulfing su EMA (Enhanced)',
         'side': 'Buy',
         'emoji': '🟢'
     },
     'hammer': {
         'name': 'Hammer',
-        'enabled': False,
-        'description': 'Corpo piccolo in alto, ombra lunga sotto',
+        'enabled': False,  # ❌ DISABILITA (coperto da Pin Bar)
+        'description': 'Coperto da Pin Bar Enhanced',
         'side': 'Buy',
         'emoji': '🔨'
     },
     'pin_bar_bullish': {
         'name': 'Pin Bar Bullish',
-        'enabled': True,
-        'description': 'Ombra inferiore molto lunga',
+        'enabled': True,  # ✅ MA USA ENHANCED VERSION
+        'description': 'Pin bar su EMA (Enhanced)',
         'side': 'Buy',
         'emoji': '📍'
     },
     'morning_star': {
         'name': 'Morning Star',
-        'enabled': False,
-        'description': '3 candele: ribassista, piccola, rialzista',
+        'enabled': True,  # ✅ ABILITA + USA ENHANCED VERSION
+        'description': '3 candele reversal su EMA (Enhanced)',
         'side': 'Buy',
         'emoji': '⭐'
     },
     'three_white_soldiers': {
         'name': 'Three White Soldiers',
-        'enabled': False,
-        'description': '3 candele rialziste consecutive forti',
+        'enabled': False,  # ❌ DISABILITA (troppo raro)
+        'description': '3 candele rialziste consecutive',
         'side': 'Buy',
         'emoji': '⬆️'
     },
-    # Pattern SELL (disabilitati di default)
-    'bearish_engulfing': {
-        'name': 'Bearish Engulfing',
-        'enabled': False,
-        'description': 'Candela ribassista ingloba rialzista',
-        'side': 'Sell',
-        'emoji': '🔴'
-    },
-    'shooting_star': {
-        'name': 'Shooting Star',
-        'enabled': False,
-        'description': 'Corpo piccolo in basso, ombra lunga sopra',
-        'side': 'Sell',
-        'emoji': '💫'
-    },
-    'pin_bar_bearish': {
-        'name': 'Pin Bar Bearish',
-        'enabled': False,
-        'description': 'Ombra superiore molto lunga',
-        'side': 'Sell',
-        'emoji': '📍'
-    },
-    'evening_star': {
-        'name': 'Evening Star',
-        'enabled': False,
-        'description': '3 candele: rialzista, piccola, ribassista',
-        'side': 'Sell',
-        'emoji': '🌙'
-    },
-    'three_black_crows': {
-        'name': 'Three Black Crows',
-        'enabled': False,
-        'description': '3 candele ribassiste consecutive forti',
-        'side': 'Sell',
-        'emoji': '⬇️'
-    },
-    'doji': {
-        'name': 'Doji',
-        'enabled': False,
-        'description': 'Indecisione, corpo molto piccolo',
-        'side': 'Both',
-        'emoji': '➖'
-    }
+    
+    # ═══════════════════════════════════════════
+    # PATTERN SELL - Tutti disabilitati
+    # ═══════════════════════════════════════════
+    'bearish_engulfing': {'enabled': False},
+    'shooting_star': {'enabled': False},
+    'pin_bar_bearish': {'enabled': False},
+    'evening_star': {'enabled': False},
+    'three_black_crows': {'enabled': False},
+    'doji': {'enabled': False},
 }
+
 
 # Lock per modifiche thread-safe
 PATTERNS_LOCK = threading.Lock()
@@ -492,110 +471,6 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     
     return tr.rolling(period).mean()
-
-
-def volume_confirmation(
-    df: pd.DataFrame, 
-    min_ratio: float = 1.5,
-    symbol: str = None,
-    is_auto_discovered: bool = False
-    ) -> bool:
-    """
-    Volume Confirmation - ADAPTIVE VERSION
-    
-    LOGICA:
-    1. Se symbol è auto-discovered → CHECK RILASSATO (o skip)
-       (già filtrato per volume 24h alto)
-    
-    2. Se symbol è manuale → CHECK STRETTO
-       (potrebbe essere low volume)
-    
-    3. Se mode = 'pattern-only' → SKIP (ogni pattern decide)
-    
-    Args:
-        df: DataFrame OHLCV
-        min_ratio: Ratio minimo (default 1.5x)
-        symbol: Symbol name (per check auto-discovery)
-        is_auto_discovered: Flag esplicito
-    
-    Returns:
-        bool: True se volume OK
-    """
-    # === MODE 1: PATTERN-ONLY (no global check) ===
-    if VOLUME_FILTER_MODE == 'pattern-only':
-        logging.info(f'Volume check: SKIPPED (pattern-only mode)')
-        return True
-    
-    # === MODE 2: ADAPTIVE (rilassato per auto-discovered) ===
-    if VOLUME_FILTER_MODE == 'adaptive':
-        # Check se symbol è auto-discovered
-        with AUTO_DISCOVERED_LOCK:
-            is_auto = symbol in AUTO_DISCOVERED_SYMBOLS if symbol else False
-        
-        if is_auto or is_auto_discovered:
-            # Symbol ad alto volume 24h → check rilassato
-            min_ratio = 1.2  # Abbassa threshold
-            logging.debug(f'{symbol}: Auto-discovered, threshold rilassato (1.2x)')
-    
-    # === MODE 3: STRICT (check normale) ===
-    # Usa min_ratio passato come parametro
-    
-    # === VOLUME CALCULATION ===
-    if 'volume' not in df.columns:
-        logging.info('❌ Volume column NOT FOUND')
-        return False
-    
-    if len(df) < 20:
-        logging.info(f'⚠️ Insufficient data: {len(df)} rows')
-        return False
-    
-    vol = df['volume']
-    
-    # Check NaN
-    if vol.isna().all():
-        logging.info('❌ All volume values are NaN')
-        return False
-    
-    # Calcola media (esclude corrente)
-    avg_vol = vol.iloc[-20:-1].mean()
-    current_vol = vol.iloc[-1]
-    
-    # Validation
-    if pd.isna(avg_vol) or pd.isna(current_vol):
-        logging.info(f'❌ Volume NaN: avg={avg_vol}, current={current_vol}')
-        return False
-    
-    # === FALLBACK: Se avg_vol = 0 MA symbol è auto-discovered ===
-    if avg_vol == 0:
-        with AUTO_DISCOVERED_LOCK:
-            is_auto = symbol in AUTO_DISCOVERED_SYMBOLS if symbol else False
-        
-        if is_auto or is_auto_discovered:
-            # Symbol top gainer → probabilmente dati incompleti, PERMETTI
-            logging.warning(
-                f'⚠️ {symbol}: avg_vol=0 MA è auto-discovered → ALLOW'
-            )
-            return True
-        else:
-            # Symbol manuale con avg_vol=0 → BLOCCA
-            logging.error(f'❌ {symbol}: avg_vol=0 → BLOCK')
-            return False
-    
-    # Calcola ratio
-    ratio = current_vol / avg_vol
-    
-    result = ratio > min_ratio
-    
-    if result:
-        logging.info(
-            f'✅ Volume OK: {ratio:.2f}x (threshold {min_ratio}x)'
-        )
-    else:
-        logging.info(
-            f'⚠️ Volume insufficient: {ratio:.2f}x (need {min_ratio}x+)'
-        )
-    
-    return result
 
 def atr_expanding(df: pd.DataFrame, expansion_threshold: float = 1.15) -> bool:
     """
@@ -1239,20 +1114,10 @@ def is_volume_spike_breakout(df: pd.DataFrame) -> tuple:
     """
     🥇 Volume Spike + EMA Breakout
     
-    BEST PATTERN per Crypto Intraday
-    Win Rate: 58-62% (5m), 62-68% (15m)
-    
-    CONDIZIONI:
-    1. Volume corrente > 3x media (spike massive)
-    2. Candela verde con corpo forte (>60% range)
-    3. Close vicino al high (<15% ombra superiore)
-    4. Breakout EMA 10 al rialzo
-    5. Prezzo sopra EMA 60 (trend filter)
-    6. EMA 10 > EMA 60 (alignment)
-    7. Momentum non già esteso
-    
-    Returns:
-        (found: bool, pattern_data: dict or None)
+    Volume check dipende da VOLUME_FILTER_MODE:
+    - 'strict': Richiede 3x minimo
+    - 'adaptive': Richiede 2.5x (più permissivo)
+    - 'pattern-only': Usa soglia custom 3x
     """
     if len(df) < 60:
         return (False, None)
@@ -1261,7 +1126,7 @@ def is_volume_spike_breakout(df: pd.DataFrame) -> tuple:
     curr = df.iloc[-1]
     prev = df.iloc[-2]
     
-    # === CHECK 1: VOLUME SPIKE (3x minimo) ===
+    # === CHECK 1: VOLUME SPIKE (usa mode) ===
     vol = df['volume']
     
     if len(vol) < 20:
@@ -1275,7 +1140,13 @@ def is_volume_spike_breakout(df: pd.DataFrame) -> tuple:
     
     volume_ratio = current_vol / avg_vol
     
-    if volume_ratio < 3.0:
+    # Determina threshold da VOLUME_FILTER_MODE
+    if VOLUME_FILTER_MODE == 'adaptive':
+        min_volume_ratio = 2.5  # Più permissivo
+    else:
+        min_volume_ratio = 3.0  # Default strict
+    
+    if volume_ratio < min_volume_ratio:
         return (False, None)
     
     # === CHECK 2: CANDELA VERDE FORTE ===
@@ -4371,82 +4242,42 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     """
     Pattern detection con filtri intelligenti
     
-    PRIORITY ORDER (FIXED):
+    FILTRI APPLICATI PER PATTERN:
     ────────────────────────────────────────────
-    TIER 1 (High Probability 60-72% win):
-    1. Volume Spike Breakout
-    2. Breakout + Retest
-    3. Triple Touch Breakout
-    4. Liquidity Sweep + Reversal
+    1. Volume Filter (mode: {VOLUME_FILTER_MODE})
+       - 'strict': Blocca se volume < 1.5x
+       - 'adaptive': Rilassa per auto-discovered
+       - 'pattern-only': Ogni pattern decide
     
-    TIER 2 (Good 52-62% win):
-    5. S/R Bounce
-    6. Bullish Flag Breakout
-    7. Higher Low Breakout (nuovo)
-    8. Bullish Comeback
-    9. Compression Breakout
-    10. Morning Star + EMA Breakout
+    2. Trend Filter (mode: {TREND_FILTER_MODE})
+       - 'ema_based': Price > EMA 60 (CONSIGLIATO)
+       - 'structure': HH+HL (stretto)
+       - 'hybrid': Structure OR EMA
+       - 'pattern_only': Ogni pattern decide
     
-    TIER 3 (Classic patterns 45-55% win):
-    11. Pattern classici (Engulfing, Hammer, ecc.)
-    ────────────────────────────────────────────
+    3. EMA Filter (mode: {EMA_FILTER_MODE})
+       - 'strict': Solo score >= 60 (GOOD/GOLD)
+       - 'loose': Score >= 40 (OK/GOOD/GOLD)
+       - 'off': Nessun filtro EMA
     
-    Returns:
-        (found: bool, side: str, pattern_name: str, pattern_data: dict)
+    NOTA: I filtri globali sono stati RIMOSSI.
+    Ogni pattern applica i propri filtri internamente.
     """
     if len(df) < 6:
         return (False, None, None, None)
     
     # ═══════════════════════════════════════════
-    # FILTRO 1: VOLUME (FIXED - Adaptive)
+    # NO MORE GLOBAL FILTERS
+    # Ogni pattern gestisce internamente:
+    # - Volume check (se necessario)
+    # - Trend check (usando TREND_FILTER_MODE)
+    # - EMA check (usando EMA_FILTER_MODE)
     # ═══════════════════════════════════════════
     
-    if VOLUME_FILTER_ENABLED:
-        # Check mode DENTRO volume_confirmation
-        vol_ok = volume_confirmation(
-            df, 
-            min_ratio=1.5,
-            symbol=symbol
-        )
-        
-        # Solo in strict mode blocca completamente
-        if not vol_ok and VOLUME_FILTER_MODE == 'strict':
-            logging.info(f'❌ {symbol}: BLOCKED by volume (strict mode)')
-            return (False, None, None, None)
-        
-        # In pattern-only o adaptive, solo warning
-        if not vol_ok:
-            logging.debug(f'⚠️ {symbol}: Low volume but pattern-only mode, continue...')
-    
-    # ═══════════════════════════════════════════
-    # FILTRO 2: TREND (FIXED - EMA-based)
-    # ═══════════════════════════════════════════
-    
-    if TREND_FILTER_ENABLED:
-        if TREND_FILTER_MODE == 'pattern_only':
-            # Skip global check
-            logging.debug(f'{symbol}: Trend check SKIPPED (pattern-only mode)')
-        else:
-            # Usa EMA-based invece di structure
-            trend_valid, trend_reason, trend_details = is_valid_trend_for_entry(
-                df,
-                mode=TREND_FILTER_MODE,  # 'ema_based' recommended
-                symbol=symbol
-            )
-            
-            if not trend_valid:
-                logging.info(f'❌ {symbol}: Trend filter BLOCKED - {trend_reason}')
-                logging.debug(f'Details: {trend_details}')
-                return (False, None, None, None)
-            else:
-                logging.debug(f'✅ {symbol}: Trend OK - {trend_reason}')
-    
-    # ═══════════════════════════════════════════
-    # FILTRO 3: ATR (Warning only)
-    # ═══════════════════════════════════════════
-    
-    if not atr_expanding(df):
-        logging.debug(f'⚠️ {symbol}: ATR not expanding (low volatility)')
+    logging.debug(f'🔍 {symbol}: Checking patterns (no global filters)')
+    logging.debug(f'   Volume mode: {VOLUME_FILTER_MODE}')
+    logging.debug(f'   Trend mode: {TREND_FILTER_MODE}')
+    logging.debug(f'   EMA mode: {EMA_FILTER_MODE if EMA_FILTER_ENABLED else "OFF"}')
     
     # ═══════════════════════════════════════════
     # TIER 1: HIGH PROBABILITY PATTERNS (60-72%)
@@ -4457,32 +4288,45 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
         try:
             found, data = is_volume_spike_breakout(df)
             if found:
+                # Check trend se abilitato
+                if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                    trend_valid, trend_reason, _ = is_valid_trend_for_entry(
+                        df, mode=TREND_FILTER_MODE, symbol=symbol
+                    )
+                    if not trend_valid:
+                        logging.info(f'⚠️ Volume Spike: trend blocked - {trend_reason}')
+                        continue  # Skip to next pattern
+                
                 logging.info(f'✅ TIER 1: Volume Spike Breakout')
                 return (True, 'Buy', 'Volume Spike Breakout', data)
         except Exception as e:
             logging.error(f'Error in Volume Spike: {e}')
-    
+
     # 🥇 #2: Breakout + Retest
     if AVAILABLE_PATTERNS.get('breakout_retest', {}).get('enabled', False):
         try:
             found, data = is_breakout_retest(df)
             if found:
-                logging.info(
+                # Check trend (permetti consolidamenti)
+                if TREND_FILTER_ENABLED and TREND_FILTER_MODE == 'structure':
+                    # Structure mode troppo stretto per questo pattern
+                    logging.debug('⚠️ Breakout+Retest: structure mode may block consolidations')
+                    logging.info(
                     f'✅ TIER 1: Breakout + Retest '
                     f'(range: {data["range_pct"]:.2f}%, '
                     f'rejection: {data["retest_rejection_pct"]:.1f}%)'
-                )
                 return (True, 'Buy', 'Breakout + Retest', data)
-        except NameError:
-            logging.warning('⚠️ is_breakout_retest() not implemented')
-        except Exception as e:
-            logging.error(f'Error in Breakout+Retest: {e}')
+            except NameError:
+                logging.warning('⚠️ is_breakout_retest() not implemented')
+            except Exception as e:
+                logging.error(f'Error in Breakout+Retest: {e}')
     
     # 🥇 #3: Triple Touch Breakout
-    if AVAILABLE_PATTERNS.get('triple_touch_breakout', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('triple_touch_breakout', {}).get('enabled'):
         try:
             found, data = is_triple_touch_breakout(df)
             if found:
+                # Triple Touch ha GIÀ check EMA 60 interno (pattern_only compatible)
                 logging.info(
                     f'✅ TIER 1: Triple Touch Breakout '
                     f'(R: ${data["resistance"]:.4f}, '
@@ -4496,7 +4340,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             logging.error(f'Error in Triple Touch: {e}')
     
     # 🥇 #4: Liquidity Sweep + Reversal
-    if AVAILABLE_PATTERNS.get('liquidity_sweep_reversal', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('liquidity_sweep_reversal', {}).get('enabled'):
         try:
             found, data = is_liquidity_sweep_reversal(df)
             if found:
@@ -4510,7 +4354,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     # ═══════════════════════════════════════════
     
     # 🥈 #5: S/R Bounce
-    if AVAILABLE_PATTERNS.get('sr_bounce', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('sr_bounce', {}).get('enabled'):
         try:
             found, data = is_support_resistance_bounce(df)
             if found:
@@ -4520,7 +4364,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             logging.error(f'Error in S/R Bounce: {e}')
     
     # 🥈 #6: Bullish Flag Breakout
-    if AVAILABLE_PATTERNS.get('bullish_flag_breakout', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('bullish_flag_breakout', {}).get('enabled'):
         try:
             found, data = is_bullish_flag_breakout(df)
             if found:
@@ -4533,7 +4377,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             logging.error(f'Error in Flag: {e}')
     
     # 🥈 #7: Higher Low Consolidation Breakout (NUOVO)
-    if AVAILABLE_PATTERNS.get('higher_low_breakout', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('higher_low_breakout', {}).get('enabled'):
         try:
             found, data = is_higher_low_consolidation_breakout(df)
             if found:
@@ -4548,7 +4392,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             logging.error(f'Error in Higher Low: {e}')
     
     # 🥈 #8: Bullish Comeback
-    if AVAILABLE_PATTERNS.get('bullish_comeback', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('bullish_comeback', {}).get('enabled'):
         try:
             if is_bullish_comeback(df):
                 logging.info(f'✅ TIER 2: Bullish Comeback')
@@ -4557,7 +4401,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             logging.error(f'Error in Comeback: {e}')
     
     # 🥈 #9: Compression Breakout
-    if AVAILABLE_PATTERNS.get('compression_breakout', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('compression_breakout', {}).get('enabled'):
         try:
             if is_compression_breakout(df):
                 logging.info(f'✅ TIER 2: Compression Breakout')
@@ -4566,7 +4410,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             logging.error(f'Error in Compression: {e}')
     
     # 🥈 #10: Morning Star + EMA Breakout
-    if AVAILABLE_PATTERNS.get('morning_star_ema_breakout', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('morning_star_ema_breakout', {}).get('enabled'):
         try:
             if is_morning_star_ema_breakout(df):
                 logging.info(f'✅ TIER 2: Morning Star + EMA Breakout')
@@ -4575,7 +4419,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             logging.error(f'Error in Morning Star EMA: {e}')
 
     # 🟢 Bullish Engulfing Enhanced
-    if AVAILABLE_PATTERNS.get('bullish_engulfing', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('bullish_engulfing', {}).get('enabled'):
         try:
             last = df.iloc[-1]
             prev = df.iloc[-2]
@@ -4606,7 +4450,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     prev2 = df.iloc[-3]
         
     # 📍 Pin Bar Bullish Enhanced
-    if AVAILABLE_PATTERNS.get('pin_bar_bullish', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('pin_bar_bullish', {}).get('enabled'):
         try:
             last = df.iloc[-1]
             
@@ -4634,7 +4478,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             logging.error(f'Error in Pin Bar Enhanced: {e}')
     
     # ⭐ Morning Star Enhanced
-    if AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled'):
         try:
             found, tier, data = is_morning_star_enhanced(df)
             
@@ -4661,7 +4505,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             logging.error(f'Error in Morning Star Enhanced: {e}')
 
     # Three White Soldiers
-    if AVAILABLE_PATTERNS.get('three_white_soldiers', {}).get('enabled', False):
+    if AVAILABLE_PATTERNS.get('three_white_soldiers', {}).get('enabled'):
         try:
             if is_three_white_soldiers(prev2, prev, last):
                 logging.info(f'✅ TIER 3: Three White Soldiers')
@@ -5863,7 +5707,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             ema_analysis = analyze_ema_conditions(df, timeframe, None)
             
             logging.info(
-                f'📊 EMA Pre-Filter {symbol} {timeframe}: '
+                f'📊 EMA Analysis {symbol} {timeframe}: '
                 f'Score={ema_analysis["score"]}, '
                 f'Quality={ema_analysis["quality"]}, '
                 f'Passed={ema_analysis["passed"]}'
@@ -5947,18 +5791,13 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 return  # STOP - Non cerca pattern
         
         # ===== STEP 3: CERCA PATTERN (solo se EMA permette) =====
-        found = False
-        side = None
-        pattern = None
-        pattern_data = None
+        # I filtri globali sono DENTRO check_patterns() ora
+        found, side, pattern, pattern_data = check_patterns(df, symbol=symbol)
         
-        if pattern_search_allowed:
-            found, side, pattern, pattern_data = check_patterns(df, symbol=symbol)
-            
-            if found:
-                logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
-            else:
-                logging.info(f'🔍 {symbol} {timeframe} - Nessun pattern rilevato')
+        if found:
+            logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
+        else:
+            logging.debug(f'🔍 {symbol} {timeframe} - Nessun pattern rilevato')
         
         # Se NON pattern e NON full_mode → Skip notifica
         if not found and not full_mode:
@@ -6631,13 +6470,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             caption += f"📏 R:R: <b>{rr:.2f}:1</b>\n"
             
             # Volume
-            if VOLUME_FILTER:
-                vol = df['volume']
-                if len(vol) >= 21:
-                    avg_vol = vol.iloc[-21:-1].mean()
-                    current_vol = vol.iloc[-1]
-                    vol_ratio = (current_vol / avg_vol) if avg_vol > 0 else 0
-                    caption += f"📊 <b>Volume:</b> {vol_ratio:.2f}x\n"
+            # RIMUOVI QUESTO BLOCCO COMPLETAMENTE
+            # Il volume è già gestito nei pattern specifici se necessario
             
             # EMA Analysis dettagliata
             if ema_analysis:
@@ -6664,11 +6498,35 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Strategy
                 if USE_EMA_STOP_LOSS:
                     caption += f"\n🎯 <b>EMA Stop:</b> Exit se prezzo rompe {ema_used}"
-            
+                
+                # Info filtri applicati
+                caption += f"\n\n💡 <b>Filtri Pattern:</b>\n"
+                
+                if TREND_FILTER_ENABLED:
+                    caption += f"Trend: {TREND_FILTER_MODE.upper()}"
+                    if TREND_FILTER_MODE == 'ema_based':
+                        caption += f" (Price > EMA 60)\n"
+                    elif TREND_FILTER_MODE == 'structure':
+                        caption += f" (HH+HL)\n"
+                    else:
+                        caption += f"\n"
+                else:
+                    caption += f"Trend: OFF\n"
+                
+                if VOLUME_FILTER_ENABLED:
+                    caption += f"Volume: {VOLUME_FILTER_MODE.upper()}\n"
+                else:
+                    caption += f"Volume: OFF\n"
+                
+                if EMA_FILTER_ENABLED:
+                    caption += f"EMA: {EMA_FILTER_MODE.upper()}\n"
+                else:
+                    caption += f"EMA: OFF\n"
+
             # Warning se LOOSE mode con EMA deboli
             if ema_analysis and EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
-                caption += f"\n\n⚠️ <b>ATTENZIONE:</b> Setup con EMA non ottimali"
-                caption += f"\nConsidera ridurre position size o aspettare."
+                caption += f"\n⚠️ <b>ATTENZIONE:</b> Setup con EMA non ottimali"
+                caption += f"\nConsidera ridurre position size."
             
             # Posizione esistente
             if position_exists:
@@ -6707,62 +6565,26 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             caption += f"🕐 {timestamp_str}\n"
             caption += f"💵 Price: ${last_close:.{price_decimals}f}\n\n"
             
-            # INFO FILTRI GLOBALI CON GESTIONE ERRORI
-            caption += "🔍 <b>Global Filters Status:</b>\n"
+            # NO MORE GLOBAL FILTERS INFO
+            caption += "🔔 <b>Full Mode - Nessun pattern rilevato</b>\n\n"
             
-            # Check volume CON error handling
-            vol_ratio = 0.0
-            vol_result = False
+            # Info filtri configurati (non status)
+            caption += "💡 <b>Filter Configuration:</b>\n"
             
-            try:
-                if 'volume' in df.columns and len(df['volume']) >= 20:
-                    vol = df['volume']
-                    avg_vol = vol.iloc[-20:-1].mean()
-                    current_vol = vol.iloc[-1]
-                    
-                    if avg_vol > 0 and not pd.isna(avg_vol) and not pd.isna(current_vol):
-                        vol_ratio = current_vol / avg_vol
-                        vol_result = vol_ratio > 1.5
-            except Exception as e:
-                logging.error(f'Error calculating volume ratio: {e}')
-            
-            if vol_result:
-                caption += f"✅ Volume: {vol_ratio:.1f}x (>1.5x) OK\n"
+            if TREND_FILTER_ENABLED:
+                caption += f"Trend: {TREND_FILTER_MODE.upper()}\n"
             else:
-                if vol_ratio > 0:
-                    caption += f"❌ Volume: {vol_ratio:.1f}x (serve >1.5x) BLOCKED\n"
-                else:
-                    caption += f"❌ Volume: N/A (dati insufficienti) BLOCKED\n"
+                caption += f"Trend: OFF\n"
             
-            # Check uptrend
-            try:
-                trend_result = is_uptrend_structure(df)
-                if trend_result:
-                    caption += "✅ Uptrend Structure: HH+HL OK\n"
-                else:
-                    caption += "❌ Uptrend Structure: NO\n"
-            except Exception as e:
-                logging.error(f'Error checking uptrend: {e}')
-                caption += "❌ Uptrend Structure: ERROR\n"
-            
-            # Check ATR
-            try:
-                atr_result = atr_expanding(df)
-                if atr_result:
-                    caption += "✅ ATR Expansion: Volatilità in aumento\n"
-                else:
-                    caption += "⚠️ ATR Flat: Bassa volatilità\n"
-            except Exception as e:
-                logging.error(f'Error checking ATR: {e}')
-                caption += "⚠️ ATR: ERROR\n"
-            
-            caption += "\n"
-            
-            # Pattern search status
-            if not vol_result or not trend_result:
-                caption += "🚫 <b>Pattern search bloccata</b>\n"
+            if VOLUME_FILTER_ENABLED:
+                caption += f"Volume: {VOLUME_FILTER_MODE.upper()}\n"
             else:
-                caption += "🔔 <b>Full Mode - Nessun pattern rilevato</b>\n"
+                caption += f"Volume: OFF\n"
+            
+            if EMA_FILTER_ENABLED:
+                caption += f"EMA: {EMA_FILTER_MODE.upper()}\n"
+            else:
+                caption += f"EMA: OFF\n"
             
             # ANALISI EMA MERCATO
             if ema_analysis:
