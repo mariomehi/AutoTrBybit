@@ -4315,6 +4315,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                     f'✅ TIER 1: Breakout + Retest '
                     f'(range: {data["range_pct"]:.2f}%, '
                     f'rejection: {data["retest_rejection_pct"]:.1f}%)'
+                    )
                 return (True, 'Buy', 'Breakout + Retest', data)
             except NameError:
                 logging.warning('⚠️ is_breakout_retest() not implemented')
