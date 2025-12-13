@@ -4409,14 +4409,32 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
         except Exception as e:
             logging.error(f'Error in Compression: {e}')
     
-    # 🥈 #10: Morning Star + EMA Breakout
-    if AVAILABLE_PATTERNS.get('morning_star_ema_breakout', {}).get('enabled'):
+    # ⭐ Morning Star Enhanced
+    if AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled', False):
         try:
-            if is_morning_star_ema_breakout(df):
-                logging.info(f'✅ TIER 2: Morning Star + EMA Breakout')
-                return (True, 'Buy', 'Morning Star + EMA Breakout', None)
+            found, tier, data = is_morning_star_enhanced(df)
+            
+            if found:
+                pattern_name = f'Morning Star ({tier})'
+                
+                logging.info(
+                    f'✅ TIER 2: Morning Star {tier} '
+                    f'(score: {data["quality_score"]}, '
+                    f'recovery: {data["recovery_pct"]:.1f}%, '
+                    f'vol: {data["vol_c_ratio"]:.1f}x)'
+                )
+                
+                # Extra info se setup speciale
+                if data['b_touches_ema60']:
+                    logging.info(f'   🌟 Candela B touches EMA 60!')
+                
+                if data['gap_detected']:
+                    logging.info(f'   💥 Gap down detected ({data["gap_size"]:.2f}%)')
+                
+                return (True, 'Buy', pattern_name, data)
+        
         except Exception as e:
-            logging.error(f'Error in Morning Star EMA: {e}')
+            logging.error(f'Error in Morning Star Enhanced: {e}')
 
     # 🟢 Bullish Engulfing Enhanced
     if AVAILABLE_PATTERNS.get('bullish_engulfing', {}).get('enabled'):
