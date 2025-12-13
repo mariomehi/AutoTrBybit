@@ -101,7 +101,7 @@ TRAILING_CONFIG = {
     'activation_percent': 0.5,  # Attiva trailing dopo +0.5% profit
     'ema_buffer': 0.002,  # Buffer 0.2% sotto EMA 10
     'never_back': True,  # SL non torna mai indietro
-    'check_interval': 150,  # Check ogni 5 minuti (300 secondi)
+    'check_interval': 120,  # Check ogni 5 minuti (300 secondi)
 }
 
 # Timeframe di riferimento per EMA 10 trailing
@@ -109,7 +109,7 @@ TRAILING_CONFIG = {
 TRAILING_EMA_TIMEFRAME = {
     '1m': '5m',   # Entry su 1m → EMA 10 da 5m
     '3m': '5m',   # Entry su 3m → EMA 10 da 5m
-    '5m': '3m',  # Entry su 5m → EMA 10 da 15m
+    '5m': '2m',  # Entry su 5m → EMA 10 da 15m
     '15m': '30m', # Entry su 15m → EMA 10 da 30m
     '30m': '1h',  # Entry su 30m → EMA 10 da 1h
     '1h': '4h',   # Entry su 1h → EMA 10 da 4h
@@ -279,7 +279,7 @@ AVAILABLE_PATTERNS = {
     },
     'hammer': {
         'name': 'Hammer',
-        'enabled': True,
+        'enabled': False,
         'description': 'Corpo piccolo in alto, ombra lunga sotto',
         'side': 'Buy',
         'emoji': '🔨'
