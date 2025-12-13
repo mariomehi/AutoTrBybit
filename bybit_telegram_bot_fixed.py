@@ -4317,10 +4317,10 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                     f'rejection: {data["retest_rejection_pct"]:.1f}%)'
                     )
                 return (True, 'Buy', 'Breakout + Retest', data)
-            except NameError:
-                logging.warning('⚠️ is_breakout_retest() not implemented')
-            except Exception as e:
-                logging.error(f'Error in Breakout+Retest: {e}')
+        except NameError:
+            logging.warning('⚠️ is_breakout_retest() not implemented')
+        except Exception as e:
+            logging.error(f'Error in Breakout+Retest: {e}')
     
     # 🥇 #3: Triple Touch Breakout
     if AVAILABLE_PATTERNS.get('triple_touch_breakout', {}).get('enabled'):
