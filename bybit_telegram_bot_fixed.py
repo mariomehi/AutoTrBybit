@@ -6500,6 +6500,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += "\n━━━━━━━━━━━━━━━━━━━\n"
                 caption += "📈 <b>EMA Analysis</b>\n\n"
                 caption += ema_analysis['details']
+                caption += f"Score: <b>{ema_analysis['score']}/100</b>\n\n"
                 
                 # Valori EMA CON DECIMALI DINAMICI
                 if 'ema_values' in ema_analysis:
