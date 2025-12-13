@@ -142,13 +142,13 @@ EMA_CONFIG = {
         'timeframes': ['5m', '15m'],
         'rules': {
             # MUST 1: Prezzo sopra EMA 10
-            'price_above_ema10': True,
+            'price_above_ema10': False,
             # MUST 2: Prezzo sopra EMA 60 (trend filter) 👈 NUOVO
             'price_above_ema60': True,
             # BONUS: EMA 5 sopra EMA 10 (momentum forte)
             'ema5_above_ema10': True,
             # GOLD: Pattern vicino a EMA 10 (pullback)
-            'near_ema10': False  # Opzionale
+            'near_ema10': True  # Opzionale
         }
     },
     
