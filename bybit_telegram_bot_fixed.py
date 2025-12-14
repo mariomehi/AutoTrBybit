@@ -5631,7 +5631,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             return
         
         timeframe = AUTO_DISCOVERY_CONFIG['timeframe']
-         AUTO_DISCOVERY_CONFIG['autotrade']
+        AUTO_DISCOVERY_CONFIG['autotrade']
         
         # Converti in set per comparazione
         new_symbols_set = set(top_symbols)
