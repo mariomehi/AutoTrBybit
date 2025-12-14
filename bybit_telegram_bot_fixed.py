@@ -5223,20 +5223,22 @@ def check_higher_timeframe_resistance(symbol, current_tf, current_price):
         return {'blocked': False}
     
     # Calcola EMA HTF
-    ema5_htf = df_htf['close'].ewm(span=5, adjust=False).mean().iloc[-1]
+    #ema5_htf = df_htf['close'].ewm(span=5, adjust=False).mean().iloc[-1]
     ema10_htf = df_htf['close'].ewm(span=10, adjust=False).mean().iloc[-1]
-    
+        
     # ===== CORREZIONE LOGICA =====
     # Check resistenza (EMA SOTTO il prezzo = resistenza!)
     if current_tf in ['5m', '15m']:
         # Per scalping: controlla EMA 5 e 10 su 30m
         # BLOCCA se EMA 5 o 10 sono SOTTO il prezzo corrente (resistenza sopra)
-        if ema5_htf > current_price or ema10_htf > current_price:  # 👈 CORRETTO
+        #if ema5_htf > current_price or ema10_htf > current_price:
+        if ema10_htf > current_price:  # ← SOLO EMA 10
             # EMA sopra = resistenza
+            logging.warning(f'Ema 10 blocca ad HTF {symbol} {htf}')
             return {
                 'blocked': True,
                 'htf': htf,
-                'details': f'EMA 5 ({htf}): ${ema5_htf:.2f}\nEMA 10 ({htf}): ${ema10_htf:.2f}\nPrice: ${current_price:.2f}'
+                'details': f'EMA 10 ({htf}): ${ema10_htf:.2f}\nPrice: ${current_price:.2f}'
             }
     
     elif current_tf in ['30m', '1h']:
