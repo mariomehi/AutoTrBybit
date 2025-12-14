@@ -4457,12 +4457,15 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     # ═══════════════════════════════════════════
     # TIER 1: HIGH PROBABILITY PATTERNS (60-72%)
     # ═══════════════════════════════════════════
+    logging.debug(f'{symbol}: Testing TIER 1 patterns...')
     
     # 🥇 #1: Volume Spike Breakout
     if AVAILABLE_PATTERNS.get('volume_spike_breakout', {}).get('enabled', False):
+        logging.debug(f'{symbol}: Testing Volume Spike Breakout...')
         try:
             found, data = is_volume_spike_breakout(df)
             if found:
+                logging.info(f'✅ TIER 1: Volume Spike Breakout')
                 # Check trend se abilitato
                 if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
                     trend_valid, trend_reason, _ = is_valid_trend_for_entry(
@@ -4473,14 +4476,18 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                         #continue  # Skip to next pattern
                 logging.info(f'✅ TIER 1: Volume Spike Breakout')
                 return (True, 'Buy', 'Volume Spike Breakout', data)
+            else:
+            logging.debug(f'{symbol}: Volume Spike - not found')
         except Exception as e:
             logging.error(f'Error in Volume Spike: {e}')
 
     # 🥇 #2: Breakout + Retest
     if AVAILABLE_PATTERNS.get('breakout_retest', {}).get('enabled', False):
+        logging.debug(f'{symbol}: Testing Breakout + Retest...')
         try:
             found, data = is_breakout_retest(df)
             if found:
+                logging.info(f'✅ TIER 1: Breakout + Retest')
                 # Check trend (permetti consolidamenti)
                 if TREND_FILTER_ENABLED and TREND_FILTER_MODE == 'structure':
                     # Structure mode troppo stretto per questo pattern
@@ -4491,6 +4498,8 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                     f'rejection: {data["retest_rejection_pct"]:.1f}%)'
                     )
                 return (True, 'Buy', 'Breakout + Retest', data)
+            else:
+                logging.debug(f'{symbol}: Breakout + Retest - not found')
         except NameError:
             logging.warning('⚠️ is_breakout_retest() not implemented')
         except Exception as e:
@@ -4498,9 +4507,11 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     
     # 🥇 #3: Triple Touch Breakout
     if AVAILABLE_PATTERNS.get('triple_touch_breakout', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing Triple Touch Breakout...')
         try:
             found, data = is_triple_touch_breakout(df)
             if found:
+                logging.info(f'✅ TIER 1: Triple Touch Breakout')
                 # Triple Touch ha GIÀ check EMA 60 interno (pattern_only compatible)
                 logging.info(
                     f'✅ TIER 1: Triple Touch Breakout '
@@ -4509,6 +4520,8 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                     f'quality: {data["quality"]})'
                 )
                 return (True, 'Buy', 'Triple Touch Breakout', data)
+            else:
+                logging.debug(f'{symbol}: Triple Touch Breakout - not found')
         except NameError:
             logging.warning('⚠️ is_triple_touch_breakout() not implemented')
         except Exception as e:
@@ -4516,30 +4529,38 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     
     # 🥇 #4: Liquidity Sweep + Reversal
     if AVAILABLE_PATTERNS.get('liquidity_sweep_reversal', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing Liquidity Sweep + Reversal...')
         try:
             found, data = is_liquidity_sweep_reversal(df)
             if found:
                 logging.info(f'✅ TIER 1: Liquidity Sweep + Reversal')
                 return (True, 'Buy', 'Liquidity Sweep + Reversal', data)
+            else:
+                logging.debug(f'{symbol}: Liquidity Sweep + Reversal - not found')
         except Exception as e:
             logging.error(f'Error in Liquidity Sweep: {e}')
     
     # ═══════════════════════════════════════════
     # TIER 2: GOOD PATTERNS (52-62%)
     # ═══════════════════════════════════════════
+    logging.debug(f'{symbol}: Testing TIER 2 patterns...')
     
     # 🥈 #5: S/R Bounce
     if AVAILABLE_PATTERNS.get('sr_bounce', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing S/R Bounce...')
         try:
             found, data = is_support_resistance_bounce(df)
             if found:
                 logging.info(f'✅ TIER 2: S/R Bounce')
                 return (True, 'Buy', 'Support/Resistance Bounce', data)
+            else:
+                logging.debug(f'{symbol}: S/R Bounce - not found')
         except Exception as e:
             logging.error(f'Error in S/R Bounce: {e}')
     
     # 🥈 #6: Bullish Flag Breakout
     if AVAILABLE_PATTERNS.get('bullish_flag_breakout', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing Bullish Flag Breakout...')
         try:
             found, data = is_bullish_flag_breakout(df)
             if found:
@@ -4548,11 +4569,14 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                     f'(vol: {data["volume_ratio"]:.1f}x)'
                 )
                 return (True, 'Buy', 'Bullish Flag Breakout', data)
+            else:
+                logging.debug(f'{symbol}: Bullish Flag Breakout - not found')
         except Exception as e:
             logging.error(f'Error in Flag: {e}')
     
     # 🥈 #7: Higher Low Consolidation Breakout (NUOVO)
     if AVAILABLE_PATTERNS.get('higher_low_breakout', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing Higher Low Consolidation Breakout...')
         try:
             found, data = is_higher_low_consolidation_breakout(df)
             if found:
@@ -4561,6 +4585,8 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                     f'(quality: {data["quality"]})'
                 )
                 return (True, 'Buy', 'Higher Low Breakout', data)
+            else:
+                logging.debug(f'{symbol}: Higher Low Consolidation Breakout - not found')
         except NameError:
             logging.debug('is_higher_low_consolidation_breakout() not implemented')
         except Exception as e:
@@ -4568,75 +4594,77 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     
     # 🥈 #8: Bullish Comeback
     if AVAILABLE_PATTERNS.get('bullish_comeback', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing Bullish Comeback...')
         try:
             if is_bullish_comeback(df):
                 logging.info(f'✅ TIER 2: Bullish Comeback')
                 return (True, 'Buy', 'Bullish Comeback', None)
+            else:
+                logging.debug(f'{symbol}: Bullish Comeback - not found')
         except Exception as e:
             logging.error(f'Error in Comeback: {e}')
     
     # 🥈 #9: Compression Breakout
     if AVAILABLE_PATTERNS.get('compression_breakout', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing Compression Breakout...')
         try:
             if is_compression_breakout(df):
                 logging.info(f'✅ TIER 2: Compression Breakout')
                 return (True, 'Buy', 'Compression Breakout (Enhanced)', None)
+            else:
+                logging.debug(f'{symbol}: Compression Breakout - not found')
         except Exception as e:
             logging.error(f'Error in Compression: {e}')
     
     # ⭐ Morning Star Enhanced
     if AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled', False):
+        logging.debug(f'{symbol}: Testing Morning Star Enhanced...')
         try:
             found, tier, data = is_morning_star_enhanced(df)
-            
             if found:
                 pattern_name = f'Morning Star ({tier})'
-                
                 logging.info(
                     f'✅ TIER 2: Morning Star {tier} '
                     f'(score: {data["quality_score"]}, '
                     f'recovery: {data["recovery_pct"]:.1f}%, '
                     f'vol: {data["vol_c_ratio"]:.1f}x)'
                 )
-                
                 # Extra info se setup speciale
                 if data['b_touches_ema60']:
                     logging.info(f'   🌟 Candela B touches EMA 60!')
-                
                 if data['gap_detected']:
                     logging.info(f'   💥 Gap down detected ({data["gap_size"]:.2f}%)')
-                
                 return (True, 'Buy', pattern_name, data)
-        
+            else:
+                logging.debug(f'{symbol}: Morning Star Enhanced - not found')
         except Exception as e:
             logging.error(f'Error in Morning Star Enhanced: {e}')
 
     # 🟢 Bullish Engulfing Enhanced
     if AVAILABLE_PATTERNS.get('bullish_engulfing', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing Bullish Engulfing Enhanced...')
         try:
             last = df.iloc[-1]
             prev = df.iloc[-2]
-            
             found, tier, data = is_bullish_engulfing_enhanced(prev, last, df)
-            
             if found:
                 pattern_name = f'Bullish Engulfing ({tier})'
-                
                 logging.info(
                     f'✅ TIER 2: Bullish Engulfing {tier} '
                     f'(score: {data["quality_score"]}, '
                     f'dist EMA10: {data["distance_to_ema10"]:.2f}%, '
                     f'dist EMA60: {data["distance_to_ema60"]:.2f}%)'
                 )
-                
                 return (True, 'Buy', pattern_name, data)
-    
+            else:
+                logging.debug(f'{symbol}: Bullish Engulfing Enhanced - not found')
         except Exception as e:
             logging.error(f'Error in Bullish Engulfing Enhanced: {e}')
     
     # ═══════════════════════════════════════════
     # TIER 3: CLASSIC PATTERNS (45-55%)
     # ═══════════════════════════════════════════
+    logging.debug(f'{symbol}: Testing TIER 3 patterns...')
     
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -6191,9 +6219,22 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         found, side, pattern, pattern_data = check_patterns(df, symbol=symbol)
         
         if found:
-            logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
+            #logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
+            logging.info(f'✅ {symbol} {timeframe} - Pattern FOUND: {pattern} ({side})')
+                # Log pattern-specific data se disponibile
+            if pattern_data:
+                if 'quality_score' in pattern_data:
+                    logging.info(f'   Quality Score: {pattern_data["quality_score"]}/100')
+                if 'tier' in pattern_data:
+                    logging.info(f'   Tier: {pattern_data["tier"]}')
+                if 'volume_ratio' in pattern_data:
+                    logging.info(f'   Volume: {pattern_data["volume_ratio"]:.1f}x')
         else:
-            logging.info(f'🔍 {symbol} {timeframe} - Nessun pattern rilevato')
+            logging.info(f'❌ {symbol} {timeframe} - NO pattern detected')
+            # Log perché non ha trovato pattern (se EMA era OK)
+            if ema_analysis and ema_analysis['passed']:
+                logging.info(f'   EMA was OK ({ema_analysis["quality"]}) but no pattern matched')
+
         
         # Se NON pattern e NON full_mode → Skip notifica
         if not found and not full_mode:
@@ -10052,7 +10093,7 @@ def main():
     """Funzione principale"""
     # Setup logging
     logging.basicConfig(
-        level=logging.INFO,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
+        level=logging.DEBUG,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
