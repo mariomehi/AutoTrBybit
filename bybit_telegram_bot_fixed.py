@@ -4477,7 +4477,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.info(f'✅ TIER 1: Volume Spike Breakout')
                 return (True, 'Buy', 'Volume Spike Breakout', data)
             else:
-            logging.debug(f'{symbol}: Volume Spike - not found')
+                logging.debug(f'{symbol}: Volume Spike - not found')
         except Exception as e:
             logging.error(f'Error in Volume Spike: {e}')
 
