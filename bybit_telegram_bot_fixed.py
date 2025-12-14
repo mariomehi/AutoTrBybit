@@ -318,14 +318,50 @@ AVAILABLE_PATTERNS = {
     },
     
     # ═══════════════════════════════════════════
-    # PATTERN SELL - Tutti disabilitati
+    # PATTERN SELL - Abilitati
     # ═══════════════════════════════════════════
-    'bearish_engulfing': {'enabled': False},
-    'shooting_star': {'enabled': False},
-    'pin_bar_bearish': {'enabled': False},
-    'evening_star': {'enabled': False},
-    'three_black_crows': {'enabled': False},
-    'doji': {'enabled': False},
+    'bearish_engulfing': {
+        'name': 'Bearish Engulfing',
+        'enabled': True,  # ✅ ABILITATO
+        'description': 'Candela ribassista ingloba rialzista',
+        'side': 'Sell',
+        'emoji': '🔴'
+    },
+    'shooting_star': {
+        'name': 'Shooting Star',
+        'enabled': True,  # ✅ ABILITATO
+        'description': 'Ombra superiore lunga, corpo in basso',
+        'side': 'Sell',
+        'emoji': '💫'
+    },
+    'pin_bar_bearish': {
+        'name': 'Pin Bar Bearish',
+        'enabled': True,  # ✅ ABILITATO
+        'description': 'Pin bar con ombra superiore lunga',
+        'side': 'Sell',
+        'emoji': '📍🔻'
+    },
+    'evening_star': {
+        'name': 'Evening Star',
+        'enabled': True,  # ✅ ABILITATO
+        'description': '3 candele bearish reversal',
+        'side': 'Sell',
+        'emoji': '🌙'
+    },
+    'three_black_crows': {
+        'name': 'Three Black Crows',
+        'enabled': True,  # ✅ ABILITATO
+        'description': '3 candele ribassiste consecutive',
+        'side': 'Sell',
+        'emoji': '⬇️'
+    },
+    'doji': {
+        'name': 'Doji',
+        'enabled': False,  # ❌ Lascia disabilitato (indecisione, non direzionale)
+        'description': 'Indecisione - non direzionale',
+        'side': 'Both',
+        'emoji': '➖'
+    },
 }
 
 
@@ -544,6 +580,68 @@ def is_valid_trend_for_entry(
     # === MODE 4: HYBRID (Structure OR EMA) ===
     if mode == 'hybrid':
         return check_hybrid_trend(df)
+    
+    return (False, 'Unknown mode', {})
+
+def is_valid_trend_for_sell(
+    df: pd.DataFrame,
+    mode: str = 'ema_based',
+    symbol: str = None
+) -> tuple:
+    """
+    Trend Filter per SELL (SHORT)
+    
+    MODES:
+    - 'ema_based': Prezzo sotto EMA 60 (downtrend)
+    - 'structure': Lower Lows + Lower Highs
+    - 'pattern_only': Skip check
+    
+    Returns:
+        (valid: bool, reason: str, details: dict)
+    """
+    if mode == 'pattern_only':
+        return (True, 'Pattern-only mode', {})
+    
+    if mode == 'ema_based':
+        ema_60 = df['close'].ewm(span=60, adjust=False).mean()
+        curr_price = df['close'].iloc[-1]
+        curr_ema60 = ema_60.iloc[-1]
+        
+        # Per SHORT: prezzo SOTTO EMA 60
+        if curr_price >= curr_ema60:
+            return (False, f'Above EMA 60 (no downtrend)', {
+                'ema60': curr_ema60,
+                'price': curr_price
+            })
+        
+        return (True, 'Below EMA 60 (downtrend)', {
+            'ema60': curr_ema60,
+            'price': curr_price
+        })
+    
+    # Structure mode: Lower Lows + Lower Highs
+    if mode == 'structure':
+        if len(df) < 10:
+            return (False, 'Insufficient data', {})
+        
+        highs = df['high'].iloc[-10:]
+        lows = df['low'].iloc[-10:]
+        
+        split = 5
+        
+        recent_high = highs.iloc[-split:].max()
+        previous_high = highs.iloc[:-split].max()
+        
+        recent_low = lows.iloc[-split:].min()
+        previous_low = lows.iloc[:-split].min()
+        
+        has_ll = recent_low < previous_low
+        has_lh = recent_high < previous_high
+        
+        if has_ll and has_lh:
+            return (True, 'Lower Lows + Lower Highs', {})
+        else:
+            return (False, 'No downtrend structure', {})
     
     return (False, 'Unknown mode', {})
 
@@ -4580,17 +4678,34 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     if AVAILABLE_PATTERNS.get('bearish_engulfing', {}).get('enabled', False):
         try:
             if is_bearish_engulfing(prev, last):
-                logging.info(f'✅ SELL: Bearish Engulfing')
-                return (True, 'Sell', 'Bearish Engulfing', None)
+                # Check trend SELL
+                if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                    trend_valid, trend_reason, _ = is_valid_trend_for_sell(
+                        df, mode=TREND_FILTER_MODE, symbol=symbol
+                    )
+                    if not trend_valid:
+                        logging.info(f'⚠️ Bearish Engulfing: trend blocked - {trend_reason}')
+                    else:
+                        logging.info(f'✅ SELL: Bearish Engulfing')
+                        return (True, 'Sell', 'Bearish Engulfing', None)
+                else:
+                    logging.info(f'✅ SELL: Bearish Engulfing')
+                    return (True, 'Sell', 'Bearish Engulfing', None)
         except Exception as e:
-            pass
+            logging.error(f'Error in Bearish Engulfing: {e}')
     
     # Shooting Star
     if AVAILABLE_PATTERNS.get('shooting_star', {}).get('enabled', False):
         try:
             if is_shooting_star(last):
-                logging.info(f'✅ SELL: Shooting Star')
-                return (True, 'Sell', 'Shooting Star', None)
+                if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                    trend_valid, _, _ = is_valid_trend_for_sell(df, mode=TREND_FILTER_MODE, symbol=symbol)
+                    if trend_valid:
+                        logging.info(f'✅ SELL: Shooting Star')
+                        return (True, 'Sell', 'Shooting Star', None)
+                else:
+                    logging.info(f'✅ SELL: Shooting Star')
+                    return (True, 'Sell', 'Shooting Star', None)
         except Exception as e:
             pass
     
@@ -4602,8 +4717,14 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 upper_wick = last['high'] - max(last['open'], last['close'])
                 
                 if upper_wick > lower_wick:
-                    logging.info(f'✅ SELL: Pin Bar Bearish')
-                    return (True, 'Sell', 'Pin Bar Bearish', None)
+                    if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                        trend_valid, _, _ = is_valid_trend_for_sell(df, mode=TREND_FILTER_MODE, symbol=symbol)
+                        if trend_valid:
+                            logging.info(f'✅ SELL: Pin Bar Bearish')
+                            return (True, 'Sell', 'Pin Bar Bearish', None)
+                    else:
+                        logging.info(f'✅ SELL: Pin Bar Bearish')
+                        return (True, 'Sell', 'Pin Bar Bearish', None)
         except Exception as e:
             pass
     
@@ -4611,8 +4732,14 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     if AVAILABLE_PATTERNS.get('evening_star', {}).get('enabled', False):
         try:
             if is_evening_star(prev2, prev, last):
-                logging.info(f'✅ SELL: Evening Star')
-                return (True, 'Sell', 'Evening Star', None)
+                if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                    trend_valid, _, _ = is_valid_trend_for_sell(df, mode=TREND_FILTER_MODE, symbol=symbol)
+                    if trend_valid:
+                        logging.info(f'✅ SELL: Evening Star')
+                        return (True, 'Sell', 'Evening Star', None)
+                else:
+                    logging.info(f'✅ SELL: Evening Star')
+                    return (True, 'Sell', 'Evening Star', None)
         except Exception as e:
             pass
     
@@ -4620,8 +4747,14 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     if AVAILABLE_PATTERNS.get('three_black_crows', {}).get('enabled', False):
         try:
             if is_three_black_crows(prev2, prev, last):
-                logging.info(f'✅ SELL: Three Black Crows')
-                return (True, 'Sell', 'Three Black Crows', None)
+                if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                    trend_valid, _, _ = is_valid_trend_for_sell(df, mode=TREND_FILTER_MODE, symbol=symbol)
+                    if trend_valid:
+                        logging.info(f'✅ SELL: Three Black Crows')
+                        return (True, 'Sell', 'Three Black Crows', None)
+                else:
+                    logging.info(f'✅ SELL: Three Black Crows')
+                    return (True, 'Sell', 'Three Black Crows', None)
         except Exception as e:
             pass
     
@@ -4921,6 +5054,66 @@ def check_higher_timeframe_resistance(symbol, current_tf, current_price):
                 'blocked': True,
                 'htf': htf,
                 'details': f'EMA 60 ({htf}): ${ema60_htf:.2f}\nPrice: ${current_price:.2f}'
+            }
+    
+    return {'blocked': False}
+
+def check_higher_timeframe_support(symbol, current_tf, current_price):
+    """
+    Controlla se ci sono supporti EMA su timeframe superiori (per SHORT)
+    
+    Returns:
+        {
+            'blocked': True/False,
+            'htf': '30m' / '4h',
+            'details': 'EMA 5 = $101, EMA 10 = $100.50'
+        }
+    """
+    # Mappa timeframe -> higher timeframe
+    htf_map = {
+        '5m': '30m',
+        '15m': '30m',
+        '30m': '4h',
+        '1h': '4h'
+    }
+    
+    if current_tf not in htf_map:
+        return {'blocked': False}
+    
+    htf = htf_map[current_tf]
+    
+    # Scarica dati HTF
+    df_htf = bybit_get_klines(symbol, htf, limit=100)
+    
+    if df_htf.empty:
+        logging.warning(f'⚠️ Nessun dato HTF per {symbol} {htf}')
+        return {'blocked': False}
+    
+    # Calcola EMA HTF
+    ema5_htf = df_htf['close'].ewm(span=5, adjust=False).mean().iloc[-1]
+    ema10_htf = df_htf['close'].ewm(span=10, adjust=False).mean().iloc[-1]
+    
+    # Check supporto (EMA SOTTO il prezzo = supporto che blocca SHORT!)
+    if current_tf in ['5m', '15m']:
+        # Per scalping: controlla EMA 5 e 10 su 30m
+        # BLOCCA se EMA 5 o 10 sono SOTTO il prezzo corrente (supporto sotto)
+        if ema5_htf < current_price or ema10_htf < current_price:
+            return {
+                'blocked': True,
+                'htf': htf,
+                'details': f'EMA 5 ({htf}): ${ema5_htf:.2f}\nEMA 10 ({htf}): ${ema10_htf:.2f}\nPrice: ${current_price:.2f}\nSupporto sotto il prezzo!'
+            }
+    
+    elif current_tf in ['30m', '1h']:
+        # Per day: controlla EMA 60 su 4h
+        ema60_htf = df_htf['close'].ewm(span=60, adjust=False).mean().iloc[-1]
+        
+        # BLOCCA se EMA 60 è SOTTO il prezzo
+        if ema60_htf < current_price:
+            return {
+                'blocked': True,
+                'htf': htf,
+                'details': f'EMA 60 ({htf}): ${ema60_htf:.2f}\nPrice: ${current_price:.2f}\nSupporto sotto il prezzo!'
             }
     
     return {'blocked': False}
@@ -6687,14 +6880,196 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
                 else:
                     caption += f"\n\n✅ <b>Ordine su Bybit {TRADING_MODE.upper()}</b>"
-        
+
+        # ===== SEGNALE SELL (SHORT) =====
         elif found and side == 'Sell':
-            # SEGNALE SELL (se abilitato)
-            caption = f"🔴 <b>SEGNALE SELL</b>\n\n"
-            caption += f"📊 Pattern: {pattern}\n"
-            caption += f"🪙 {symbol} ({timeframe})\n\n"
-            caption += "⚠️ Pattern SELL rilevato ma NON tradato\n"
-            caption += "(Solo pattern BUY sono attivi)"
+            # Check Higher Timeframe EMA (supporto che diventa resistenza)
+            htf_block = check_higher_timeframe_support(
+                symbol=symbol, 
+                current_tf=timeframe, 
+                current_price=last_close
+            )
+            
+            if htf_block['blocked']:
+                logging.warning(
+                    f'🚫 Pattern {pattern} su {symbol} {timeframe} '
+                    f'BLOCCATO da supporto HTF {htf_block["htf"]}'
+                )
+                
+                if full_mode:
+                    caption = (
+                        f"⚠️ <b>Pattern BLOCCATO da HTF Support</b>\n\n"
+                        f"Pattern: {pattern} su {timeframe}\n"
+                        f"Timeframe superiore: {htf_block['htf']}\n\n"
+                        f"Supporti HTF:\n"
+                        f"{htf_block['details']}\n\n"
+                        f"💡 Aspetta rottura HTF o cerca altro setup"
+                    )
+                    
+                    try:
+                        chart_buffer = generate_chart(df, symbol, timeframe)
+                        await context.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=chart_buffer,
+                            caption=caption,
+                            parse_mode='HTML'
+                        )
+                    except:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=caption,
+                            parse_mode='HTML'
+                        )
+                
+                return  # BLOCCA segnale
+            
+            # ===== CALCOLO PARAMETRI SELL =====
+            entry_price = last_close
+            
+            # Calcola SL (sopra il prezzo per SHORT)
+            if USE_EMA_STOP_LOSS:
+                # SL sopra EMA per SHORT
+                ema_10 = df['close'].ewm(span=10, adjust=False).mean()
+                ema_60 = df['close'].ewm(span=60, adjust=False).mean()
+                
+                if timeframe in ['5m', '15m']:
+                    sl_ema = ema_10.iloc[-1]
+                    ema_used = 'EMA 10'
+                else:
+                    sl_ema = ema_60.iloc[-1]
+                    ema_used = 'EMA 60'
+                
+                sl_price = sl_ema * (1 + EMA_SL_BUFFER)  # Sopra EMA per SHORT
+                ema_value = sl_ema
+            else:
+                # ATR stop
+                if not math.isnan(last_atr) and last_atr > 0:
+                    sl_price = last_close + last_atr * ATR_MULT_SL
+                    ema_used = 'ATR'
+                    ema_value = last_atr
+                else:
+                    sl_price = df['high'].iloc[-1] * 1.002
+                    ema_used = 'High'
+                    ema_value = 0
+            
+            # TP (sotto il prezzo per SHORT)
+            if not math.isnan(last_atr) and last_atr > 0:
+                tp_price = last_close - last_atr * ATR_MULT_TP
+            else:
+                tp_price = last_close * 0.98
+            
+            # Risk calculation
+            if ema_analysis and 'score' in ema_analysis:
+                ema_score = ema_analysis['score']
+                risk_base = calculate_dynamic_risk(ema_score)
+            else:
+                risk_base = RISK_USD
+            
+            if symbol in SYMBOL_RISK_OVERRIDE:
+                risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+            else:
+                risk_for_symbol = risk_base
+            
+            qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+            
+            # Check posizione esistente
+            position_exists = symbol in ACTIVE_POSITIONS
+            
+            # ===== COSTRUISCI CAPTION SELL =====
+            quality_emoji_map = {
+                'GOLD': '🌟',
+                'GOOD': '✅',
+                'OK': '⚠️',
+                'WEAK': '🔶',
+                'BAD': '❌'
+            }
+            
+            caption = "🔴 <b>SEGNALE SELL (SHORT)</b>\n\n"
+            
+            # EMA QUALITY
+            if ema_analysis:
+                q_emoji = quality_emoji_map.get(ema_analysis['quality'], '⚪')
+                caption += f"{q_emoji} EMA Quality: <b>{ema_analysis['quality']}</b>\n"
+                caption += f"Score: <b>{ema_analysis['score']}/100</b>\n\n"
+            
+            # Pattern info
+            caption += f"📊 Pattern: <b>{pattern}</b>\n"
+            caption += f"🪙 Symbol: <b>{symbol}</b> ({timeframe})\n"
+            caption += f"🕐 {timestamp_str}\n\n"
+            
+            # Trading params
+            caption += f"💵 Entry: <b>${entry_price:.{price_decimals}f}</b>\n"
+            
+            if USE_EMA_STOP_LOSS:
+                caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
+                caption += f"   sopra {ema_used}"
+                if isinstance(ema_value, (int, float)) and ema_value > 0:
+                    caption += f" = ${ema_value:.{price_decimals}f}"
+                caption += "\n"
+            else:
+                caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b> ({ema_used})\n"
+            
+            caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
+            caption += f"📦 Qty: <b>{qty:.4f}</b>\n"
+            caption += f"💰 Risk: <b>${risk_for_symbol}</b>\n"
+            
+            rr = abs(entry_price - tp_price) / abs(sl_price - entry_price) if abs(sl_price - entry_price) > 0 else 0
+            caption += f"📏 R:R: <b>{rr:.2f}:1</b>\n"
+            
+            # EMA Analysis
+            if ema_analysis:
+                caption += "\n━━━━━━━━━━━━━━━━━━━\n"
+                caption += "📉 <b>EMA Analysis (SHORT)</b>\n\n"
+                caption += ema_analysis['details']
+                caption += f"\nScore: <b>{ema_analysis['score']}/100</b>\n\n"
+                
+                if 'ema_values' in ema_analysis:
+                    ema_vals = ema_analysis['ema_values']
+                    ema_decimals = get_price_decimals(ema_vals['price'])
+                    
+                    caption += f"\n💡 <b>EMA Values:</b>\n"
+                    caption += f"Price: ${ema_vals['price']:.{ema_decimals}f}\n"
+                    caption += f"EMA 5: ${ema_vals['ema5']:.{ema_decimals}f}\n"
+                    caption += f"EMA 10: ${ema_vals['ema10']:.{ema_decimals}f}\n"
+                    caption += f"EMA 60: ${ema_vals['ema60']:.{ema_decimals}f}\n"
+                    caption += f"EMA 223: ${ema_vals['ema223']:.{ema_decimals}f}\n"
+                
+                if USE_EMA_STOP_LOSS:
+                    caption += f"\n🎯 <b>EMA Stop:</b> Exit se prezzo rompe {ema_used}"
+                
+                # Info filtri
+                caption += f"\n\n💡 <b>Filtri Pattern:</b>\n"
+                caption += f"Trend: {TREND_FILTER_MODE.upper()}\n"
+                caption += f"Volume: {VOLUME_FILTER_MODE.upper()}\n"
+                caption += f"EMA: {EMA_FILTER_MODE.upper() if EMA_FILTER_ENABLED else 'OFF'}\n"
+            
+            # Warning se LOOSE mode
+            if ema_analysis and EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
+                caption += f"\n⚠️ <b>ATTENZIONE:</b> Setup con EMA non ottimali"
+                caption += f"\nConsidera ridurre position size."
+            
+            # Posizione esistente
+            if position_exists:
+                caption += "\n\n🚫 <b>Posizione già aperta</b>"
+                caption += f"\nOrdine NON eseguito per {symbol}"
+            
+            # Autotrade
+            if job_ctx.get('autotrade') and qty > 0 and not position_exists:
+                order_res = await place_bybit_order(
+                    symbol, 
+                    side,  # 'Sell'
+                    qty, 
+                    sl_price, 
+                    tp_price,
+                    entry_price,
+                    timeframe,
+                    chat_id
+                )
+                
+                if 'error' in order_res:
+                    caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
+                else:
+                    caption += f"\n\n✅ <b>Ordine SHORT su Bybit {TRADING_MODE.upper()}</b>"
         
         else:
             # NESSUN PATTERN (full mode)
