@@ -5815,7 +5815,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         if found:
             logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
         else:
-            logging.debug(f'🔍 {symbol} {timeframe} - Nessun pattern rilevato')
+            logging.info(f'🔍 {symbol} {timeframe} - Nessun pattern rilevato')
         
         # Se NON pattern e NON full_mode → Skip notifica
         if not found and not full_mode:
