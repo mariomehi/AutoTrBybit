@@ -96,12 +96,47 @@ EMA_STOP_LOSS_CONFIG = {
 }
 
 # Trailing Stop Loss System
-TRAILING_STOP_ENABLED = True  # Abilita/disabilita trailing SL
+TRAILING_STOP_ENABLED = True
+
+# ===== ADVANCED TRAILING CONFIG (Multi-Level) =====
+TRAILING_CONFIG_ADVANCED = {
+    'levels': [
+        # Level 1: Attiva presto con buffer largo
+        {
+            'profit_pct': 0.3,      # Attiva a +0.3% profit
+            'ema_buffer': 0.003,    # 0.3% sotto EMA (largo)
+            'label': 'Early Protection'
+        },
+        # Level 2: Standard, buffer medio
+        {
+            'profit_pct': 0.5,      # +0.5% profit
+            'ema_buffer': 0.002,    # 0.2% sotto EMA (medio)
+            'label': 'Standard Trail'
+        },
+        # Level 3: Profit buono, stringi il trailing
+        {
+            'profit_pct': 1.0,      # +1.0% profit
+            'ema_buffer': 0.001,    # 0.1% sotto EMA (stretto)
+            'label': 'Tight Trail'
+        },
+        # Level 4: Grande profit, trailing ultra-stretto
+        {
+            'profit_pct': 2.0,      # +2.0% profit
+            'ema_buffer': 0.0005,   # 0.05% sotto EMA (ultra stretto)
+            'label': 'Ultra Tight Trail'
+        },
+    ],
+    'never_back': True,         # SL non torna mai indietro
+    'check_interval': 60,       # Check ogni 60 secondi (più frequente)
+    'min_move_pct': 0.1,        # SL deve muoversi almeno 0.1% per aggiornare
+}
+
+# ===== BACKWARD COMPATIBILITY (per codice esistente) =====
 TRAILING_CONFIG = {
-    'activation_percent': 0.5,  # Attiva trailing dopo +0.5% profit
-    'ema_buffer': 0.002,  # Buffer 0.2% sotto EMA 10
-    'never_back': True,  # SL non torna mai indietro
-    'check_interval': 120,  # Check ogni 5 minuti (300 secondi)
+    'activation_percent': TRAILING_CONFIG_ADVANCED['levels'][0]['profit_pct'],
+    'ema_buffer': TRAILING_CONFIG_ADVANCED['levels'][0]['ema_buffer'],
+    'never_back': TRAILING_CONFIG_ADVANCED['never_back'],
+    'check_interval': TRAILING_CONFIG_ADVANCED['check_interval'],
 }
 
 # Timeframe di riferimento per EMA 10 trailing
@@ -5761,17 +5796,20 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
 
 async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
     """
-    Job che aggiorna trailing stop loss per tutte le posizioni attive
-    Viene eseguito ogni 5 minuti
+    Advanced Trailing Stop Loss - Multi-Level Progressive
     
     LOGICA:
-    1. Per ogni posizione aperta
-    2. Scarica dati timeframe EMA di riferimento
-    3. Calcola EMA 10
-    4. Se prezzo > entry + activation_percent:
-       - Attiva trailing
-       - Sposta SL sotto EMA 10 (mai indietro)
-    5. Aggiorna SL su Bybit
+    1. Per ogni posizione aperta, calcola profit %
+    2. Trova il livello appropriato da TRAILING_CONFIG_ADVANCED
+    3. Calcola nuovo SL basato su EMA 10 con buffer dinamico
+    4. Aggiorna su Bybit se SL è migliore (mai indietro)
+    5. Notifica su Telegram quando cambia livello
+    
+    LIVELLI:
+    - 0.3%: Early protection (buffer largo 0.3%)
+    - 0.5%: Standard trail (buffer medio 0.2%)
+    - 1.0%: Tight trail (buffer stretto 0.1%)
+    - 2.0%: Ultra tight trail (buffer ultra 0.05%)
     """
     if not TRAILING_STOP_ENABLED:
         return
@@ -5780,179 +5818,142 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
         positions_copy = dict(ACTIVE_POSITIONS)
     
     if not positions_copy:
-        logging.debug('🔇 Nessuna posizione attiva per trailing SL')
         return
     
-    logging.info(f'🔄 Checking trailing SL per {len(positions_copy)} posizioni...')
+    logging.debug(f"Trailing check: {len(positions_copy)} positions")
     
     for symbol, pos_info in positions_copy.items():
         try:
-            # Solo posizioni BUY (per ora)
-            if pos_info['side'] != 'Buy':
+            # Skip posizioni SELL (per ora solo BUY)
+            if pos_info.get('side') != 'Buy':
                 continue
             
-            # Dati posizione
             entry_price = pos_info['entry_price']
             current_sl = pos_info['sl']
-            timeframe_entry = pos_info['timeframe']
-            trailing_active = pos_info.get('trailing_active', False)
-            highest_price = pos_info.get('highest_price', entry_price)
+            timeframe_entry = pos_info.get('timeframe', '15m')
+            chat_id = pos_info.get('chat_id')
             
-            # Determina TF per EMA trailing
-            ema_tf = TRAILING_EMA_TIMEFRAME.get(timeframe_entry, timeframe_entry)
+            # Determina timeframe EMA per trailing (da TRAILING_EMA_TIMEFRAME)
+            ema_tf = TRAILING_EMA_TIMEFRAME.get(timeframe_entry, '15m')
             
-            # Scarica dati
-            df = bybit_get_klines(symbol, ema_tf, limit=50)
+            # Scarica dati per calcolare EMA 10
+            df = bybit_get_klines(symbol, ema_tf, limit=20)
             if df.empty:
-                logging.warning(f'⚠️ Nessun dato per {symbol} {ema_tf} (trailing SL)')
+                logging.warning(f"{symbol}: No data for trailing EMA calculation")
                 continue
             
             current_price = df['close'].iloc[-1]
             
-            # Aggiorna highest price
-            if current_price > highest_price:
-                highest_price = current_price
-                with POSITIONS_LOCK:
-                    if symbol in ACTIVE_POSITIONS:
-                        ACTIVE_POSITIONS[symbol]['highest_price'] = highest_price
-            
             # Calcola profit %
-            profit_percent = ((current_price - entry_price) / entry_price) * 100
+            profit_pct = ((current_price - entry_price) / entry_price) * 100
             
-            # Check se attivare trailing
-            if not trailing_active and profit_percent >= TRAILING_CONFIG['activation_percent']:
-                logging.info(f'✅ Trailing SL ATTIVATO per {symbol} (profit: {profit_percent:.2f}%)')
-                with POSITIONS_LOCK:
-                    if symbol in ACTIVE_POSITIONS:
-                        ACTIVE_POSITIONS[symbol]['trailing_active'] = True
-                trailing_active = True
+            # ===== TROVA IL LIVELLO APPROPRIATO =====
+            active_level = None
+            for level in TRAILING_CONFIG_ADVANCED['levels']:
+                if profit_pct >= level['profit_pct']:
+                    active_level = level
+                else:
+                    break  # Stop al primo livello non raggiunto
             
-            # Se trailing non attivo, skip
-            if not trailing_active:
-                logging.debug(f'⏳ {symbol}: Trailing non ancora attivo (profit: {profit_percent:.2f}%)')
+            if not active_level:
+                logging.debug(f"{symbol}: Profit {profit_pct:.2f}% < min threshold, trailing not active")
                 continue
             
-            # Calcola EMA 10
+            # ===== CALCOLA NUOVO SL CON BUFFER DINAMICO =====
             ema_10 = df['close'].ewm(span=10, adjust=False).mean().iloc[-1]
+            ema_buffer = active_level['ema_buffer']
+            new_sl = ema_10 * (1 - ema_buffer)
             
-            # Nuovo SL: sotto EMA 10 con buffer
-            new_sl = ema_10 * (1 - TRAILING_CONFIG['ema_buffer'])
-            
-            # NEVER BACK: SL non torna mai indietro
-            if TRAILING_CONFIG['never_back'] and new_sl <= current_sl:
-                logging.debug(f'🔒 {symbol}: SL rimane {current_sl:.4f} (new {new_sl:.4f} è minore)')
+            # Check se SL è migliorato (mai indietro)
+            if TRAILING_CONFIG_ADVANCED['never_back'] and new_sl <= current_sl:
+                logging.debug(f"{symbol}: New SL {new_sl:.4f} <= current {current_sl:.4f}, skip")
                 continue
             
-            # Verifica che nuovo SL non sia sopra il prezzo corrente (safety)
-            if new_sl >= current_price * 0.998:  # Almeno 0.2% sotto
-                logging.warning(f'⚠️ {symbol}: New SL {new_sl:.4f} troppo vicino a price {current_price:.4f}')
+            # Check movimento minimo (evita micro-aggiustamenti)
+            min_move_pct = TRAILING_CONFIG_ADVANCED.get('min_move_pct', 0.1)
+            move_pct = ((new_sl - current_sl) / current_sl) * 100
+            if move_pct < min_move_pct:
+                logging.debug(f"{symbol}: SL move {move_pct:.2f}% < min {min_move_pct}%, skip")
                 continue
             
-            # Arrotonda con decimali dinamici
-            price_decimals = get_price_decimals(new_sl)
-            new_sl = round(new_sl, price_decimals)
-            
-            # Differenza significativa? (almeno 0.1% di movimento)
-            sl_move_percent = ((new_sl - current_sl) / current_sl) * 100
-            if sl_move_percent < 0.1:
-                logging.debug(f'🔹 {symbol}: SL move troppo piccolo ({sl_move_percent:.2f}%)')
-                continue
-            
-            logging.info(f'🔼 {symbol}: Aggiornamento SL da {current_sl:.{price_decimals}f} a {new_sl:.{price_decimals}f}')
-            logging.info(f'   Price: {current_price:.{price_decimals}f}, EMA 10 ({ema_tf}): {ema_10:.{price_decimals}f}')
-
-            # ===== VERIFICA POSIZIONE ESISTE SU BYBIT =====
-            if BybitHTTP is not None:
-                try:
-                    session = create_bybit_session()
-                    
-                    # 🔧 FIX: Definisci 'positions' PRIMA di usarlo
-                    positions = session.get_positions(
-                        category='linear',
-                        symbol=symbol
-                    )
-                    
-                    if positions.get('retCode') == 0:
-                        pos_list = positions.get('result', {}).get('list', [])
-                        
-                        # Verifica se c'è una posizione con size > 0
-                        position_exists = False
-                        for pos in pos_list:
-                            if float(pos.get('size', 0)) > 0:
-                                position_exists = True
-                                break
-                        
-                        if not position_exists:
-                            logging.warning(f'⚠️ {symbol}: Posizione NON trovata su Bybit, rimuovo dal tracking')
-                            with POSITIONS_LOCK:
-                                if symbol in ACTIVE_POSITIONS:
-                                    del ACTIVE_POSITIONS[symbol]
-                            continue
-                    else:
-                        # Errore API nella verifica posizione
-                        logging.error(f'❌ {symbol}: Errore verifica posizione: {positions.get("retMsg")}')
-                        continue
-                            
-                    # Aggiorna SL solo se posizione esiste
-                    result = session.set_trading_stop(
-                        category='linear',
-                        symbol=symbol,
-                        positionIdx=0,  # One-way mode
-                        stopLoss=str(new_sl)
-                    )
-                    
-                    if result.get('retCode') == 0:
-                        # Aggiorna tracking locale
-                        with POSITIONS_LOCK:
-                            if symbol in ACTIVE_POSITIONS:
-                                ACTIVE_POSITIONS[symbol]['sl'] = new_sl
-                        
-                        logging.info(f'✅ {symbol}: Trailing SL aggiornato su Bybit a ${new_sl:.{price_decimals}f}')
-
-                        # ===== INVIA NOTIFICA TELEGRAM =====
-                        chat_id = pos_info.get('chat_id')
-                        
-                        if chat_id:
-                            try:
-                                # Calcola profit attuale
-                                profit_percent = ((current_price - entry_price) / entry_price) * 100
-                                profit_usd = (current_price - entry_price) * pos_info['qty']
-                                
-                                # Calcola quanto si è spostato lo SL
-                                sl_move_usd = (new_sl - current_sl) * pos_info['qty']
-                                
-                                notification = (
-                                    f"🔼 <b>Trailing Stop Aggiornato</b>\n\n"
-                                    f"🪙 <b>Symbol:</b> {symbol} ({timeframe_entry})\n"
-                                    f"💵 <b>Prezzo:</b> ${current_price:.{price_decimals}f}\n"
-                                    f"📈 <b>Profit:</b> {profit_percent:+.2f}% (${profit_usd:+.2f})\n\n"
-                                    f"🛑 <b>Stop Loss:</b>\n"
-                                    f"  Prima: ${current_sl:.{price_decimals}f}\n"
-                                    f"  Ora: ${new_sl:.{price_decimals}f}\n"
-                                    f"  Spostamento: +${sl_move_usd:.2f}\n\n"
-                                    f"📊 <b>EMA 10 ({ema_tf}):</b> ${ema_10:.{price_decimals}f}\n"
-                                    f"💡 SL protegge ora ${(new_sl - entry_price) * pos_info['qty']:.2f} di profit"
-                                )
-                                
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text=notification,
-                                    parse_mode='HTML'
-                                )
-                                
-                                logging.info(f'📱 Notifica trailing inviata per {symbol}')
-                            
-                            except Exception as e:
-                                logging.error(f'❌ Errore invio notifica trailing: {e}')
-                    
-                    else:
-                        logging.error(f'❌ {symbol}: Errore aggiornamento SL Bybit: {result.get("retMsg")}')
+            # ===== AGGIORNA SU BYBIT =====
+            try:
+                session = create_bybit_session()
+                result = session.set_trading_stop(
+                    category="linear",
+                    symbol=symbol,
+                    stopLoss=str(round(new_sl, get_price_decimals(new_sl))),
+                    positionIdx=0
+                )
                 
-                except Exception as e:
-                    logging.error(f'❌ {symbol}: Errore set_trading_stop: {e}')
+                if result.get('retCode') == 0:
+                    # ===== AGGIORNA TRACKING LOCALE =====
+                    with POSITIONS_LOCK:
+                        if symbol in ACTIVE_POSITIONS:
+                            old_sl = ACTIVE_POSITIONS[symbol]['sl']
+                            ACTIVE_POSITIONS[symbol]['sl'] = new_sl
+                            
+                            # Check se abbiamo cambiato livello
+                            old_level = None
+                            for lvl in TRAILING_CONFIG_ADVANCED['levels']:
+                                old_profit = ((current_price - entry_price) / entry_price) * 100
+                                if old_profit >= lvl['profit_pct']:
+                                    old_level = lvl
+                            
+                            level_changed = (old_level != active_level) if old_level else True
+                            
+                            logging.info(f"{symbol}: Trailing SL updated to {new_sl:.4f} (Level: {active_level['label']})")
+                    
+                    # ===== NOTIFICA TELEGRAM =====
+                    if chat_id:
+                        try:
+                            profit_usd = (current_price - entry_price) * pos_info['qty']
+                            sl_move_usd = (new_sl - current_sl) * pos_info['qty']
+                            
+                            # Emoji per livello
+                            level_emoji = {
+                                'Early Protection': '🟡',
+                                'Standard Trail': '🟢',
+                                'Tight Trail': '🔵',
+                                'Ultra Tight Trail': '🟣'
+                            }.get(active_level['label'], '⚪')
+                            
+                            notification = f"<b>📈 Trailing Stop Upgraded</b>\n\n"
+                            notification += f"{level_emoji} <b>Level: {active_level['label']}</b>\n"
+                            notification += f"<b>Symbol:</b> {symbol} ({timeframe_entry})\n"
+                            notification += f"<b>Prezzo:</b> ${current_price:.{get_price_decimals(current_price)}f}\n"
+                            notification += f"<b>Profit:</b> {profit_pct:.2f}% (${profit_usd:.2f})\n\n"
+                            notification += f"<b>Stop Loss:</b>\n"
+                            notification += f"• Prima: ${current_sl:.{get_price_decimals(current_sl)}f}\n"
+                            notification += f"• Ora: ${new_sl:.{get_price_decimals(new_sl)}f}\n"
+                            notification += f"• Spostamento: ${sl_move_usd:.2f}\n\n"
+                            notification += f"<b>EMA 10 ({ema_tf}):</b> ${ema_10:.{get_price_decimals(ema_10)}f}\n"
+                            notification += f"<b>Buffer:</b> {ema_buffer * 100:.2f}% sotto EMA\n\n"
+                            
+                            # Calcola quanto profit è ora protetto
+                            protected_profit = (new_sl - entry_price) * pos_info['qty']
+                            if protected_profit > 0:
+                                notification += f"✅ <b>SL protegge ora ${protected_profit:.2f} di profit</b>"
+                            else:
+                                notification += f"⚠️ SL ancora sotto entry (break-even mode)"
+                            
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=notification,
+                                parse_mode="HTML"
+                            )
+                            logging.info(f"Notifica trailing inviata per {symbol}")
+                        except Exception as e:
+                            logging.error(f"Errore invio notifica trailing: {e}")
+                else:
+                    logging.error(f"{symbol}: Errore aggiornamento SL Bybit: {result.get('retMsg')}")
             
+            except Exception as e:
+                logging.error(f"{symbol}: Errore set_trading_stop: {e}")
+        
         except Exception as e:
-            logging.exception(f'❌ Errore trailing SL per {symbol}: {e}')
+            logging.exception(f"Errore trailing SL per {symbol}: {e}")
+
 
 
 # ===== FUNZIONE per schedulare il job =====
@@ -5965,7 +5966,9 @@ def schedule_trailing_stop_job(application):
         logging.info('🔕 Trailing Stop Loss disabilitato')
         return
     
-    interval = TRAILING_CONFIG['check_interval']
+    #interval = TRAILING_CONFIG['check_interval']
+    # Usa check_interval dal config advanced
+    interval = TRAILING_CONFIG_ADVANCED['check_interval']  # ← MODIFICA QUI
     
     application.job_queue.run_repeating(
         update_trailing_stop_loss,
@@ -8652,15 +8655,12 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Comando /trailing
-    Mostra status trailing stop loss per tutte le posizioni
-    """
+    """Comando /trailing - Mostra status trailing con livelli"""
     if not TRAILING_STOP_ENABLED:
         await update.message.reply_text(
-            '🔕 <b>Trailing Stop Loss DISABILITATO</b>\n\n'
-            'Abilita nelle configurazioni: TRAILING_STOP_ENABLED = True',
-            parse_mode='HTML'
+            "<b>Trailing Stop Loss DISABILITATO</b>\n"
+            "Abilita nelle configurazioni: TRAILING_STOP_ENABLED = True",
+            parse_mode="HTML"
         )
         return
     
@@ -8669,15 +8669,26 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not positions_copy:
         await update.message.reply_text(
-            '📭 <b>Nessuna posizione attiva</b>\n\n'
-            'Non ci sono posizioni con trailing stop loss.',
-            parse_mode='HTML'
+            "<b>Nessuna posizione attiva</b>\n"
+            "Non ci sono posizioni con trailing stop loss.",
+            parse_mode="HTML"
         )
         return
     
-    msg = f"🔄 <b>Trailing Stop Loss Status</b>\n\n"
-    msg += f"Check Interval: {TRAILING_CONFIG['check_interval']//60} minuti\n"
-    msg += f"Activation: +{TRAILING_CONFIG['activation_percent']}% profit\n\n"
+    msg = "<b>📈 Advanced Trailing Stop Status</b>\n\n"
+    
+    # Mostra configurazione livelli
+    msg += "<b>🎯 Livelli Configurati:</b>\n"
+    for i, level in enumerate(TRAILING_CONFIG_ADVANCED['levels'], 1):
+        msg += f"{i}. {level['label']}\n"
+        msg += f"   • Attivazione: ≥{level['profit_pct']}% profit\n"
+        msg += f"   • Buffer: {level['ema_buffer']*100:.2f}% sotto EMA\n\n"
+    
+    msg += f"<b>⚙️ Settings:</b>\n"
+    msg += f"Check Interval: {TRAILING_CONFIG_ADVANCED['check_interval']} secondi\n"
+    msg += f"Never Back: {'✅ ON' if TRAILING_CONFIG_ADVANCED['never_back'] else '❌ OFF'}\n\n"
+    
+    msg += "<b>📊 Posizioni Attive:</b>\n\n"
     
     for symbol, pos in positions_copy.items():
         if pos['side'] != 'Buy':
@@ -8685,40 +8696,49 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         entry = pos['entry_price']
         current_sl = pos['sl']
-        highest = pos.get('highest_price', entry)
-        trailing_active = pos.get('trailing_active', False)
         timeframe_entry = pos['timeframe']
         
         # Scarica prezzo corrente
         df = bybit_get_klines(symbol, timeframe_entry, limit=5)
         current_price = df['close'].iloc[-1] if not df.empty else entry
+        profit_pct = ((current_price - entry) / entry) * 100
         
-        profit_percent = ((current_price - entry) / entry) * 100
+        # Determina livello attivo
+        active_level = None
+        for level in TRAILING_CONFIG_ADVANCED['levels']:
+            if profit_pct >= level['profit_pct']:
+                active_level = level
+        
+        level_emoji = '⚪' if not active_level else {
+            'Early Protection': '🟡',
+            'Standard Trail': '🟢',
+            'Tight Trail': '🔵',
+            'Ultra Tight Trail': '🟣'
+        }.get(active_level['label'], '⚪')
+        
         price_decimals = get_price_decimals(current_price)
         
-        status_emoji = "✅" if trailing_active else "⏳"
+        msg += f"{level_emoji} <b>{symbol}</b> ({timeframe_entry})\n"
+        msg += f"Entry: ${entry:.{price_decimals}f}\n"
+        msg += f"Current: ${current_price:.{price_decimals}f}\n"
+        msg += f"SL: ${current_sl:.{price_decimals}f}\n"
+        msg += f"Profit: {profit_pct:.2f}%\n"
         
-        msg += f"{status_emoji} <b>{symbol}</b> ({timeframe_entry})\n"
-        msg += f"  Entry: ${entry:.{price_decimals}f}\n"
-        msg += f"  Current: ${current_price:.{price_decimals}f}\n"
-        msg += f"  Highest: ${highest:.{price_decimals}f}\n"
-        msg += f"  SL: ${current_sl:.{price_decimals}f}\n"
-        msg += f"  Profit: {profit_percent:+.2f}%\n"
-        
-        if trailing_active:
-            msg += f"  Status: Trailing ATTIVO\n"
+        if active_level:
+            msg += f"<b>Level: {active_level['label']}</b>\n"
         else:
-            needed = TRAILING_CONFIG['activation_percent'] - profit_percent
-            msg += f"  Status: Serve +{needed:.2f}% per attivare\n"
+            needed = TRAILING_CONFIG_ADVANCED['levels'][0]['profit_pct'] - profit_pct
+            msg += f"Serve +{needed:.2f}% per attivare\n"
         
         msg += "\n"
     
-    msg += "💡 <b>Info:</b>\n"
+    msg += "\n<b>ℹ️ Info</b>\n"
     msg += "• SL segue EMA 10 del TF superiore\n"
+    msg += "• Livelli progressivi stringono automaticamente\n"
     msg += "• SL non torna mai indietro\n"
-    msg += f"• Buffer: {TRAILING_CONFIG['ema_buffer']*100}% sotto EMA"
     
-    await update.message.reply_text(msg, parse_mode='HTML')
+    await update.message.reply_text(msg, parse_mode="HTML")
+
 
 async def cmd_test_volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
