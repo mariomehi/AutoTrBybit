@@ -5631,7 +5631,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             return
         
         timeframe = AUTO_DISCOVERY_CONFIG['timeframe']
-        AUTO_DISCOVERY_CONFIG['autotrade']
+        autotrade = AUTO_DISCOVERY_CONFIG['autotrade']
         
         # Converti in set per comparazione
         new_symbols_set = set(top_symbols)
@@ -7490,6 +7490,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/abilita SYMBOL TF - Notifiche complete\n"
         "/pausa SYMBOL TF - Solo pattern (default)\n"
         "/test SYMBOL TF - Test pattern\n\n"
+        "/timefilter - Gestisci filtro orari\n\n"
         "💼 <b>Comandi Trading:</b>\n"
         "/balance - Mostra saldo\n"
         "/posizioni - Posizioni aperte\n"
