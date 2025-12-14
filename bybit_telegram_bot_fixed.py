@@ -6147,7 +6147,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     riskforsymbol = risk_base
                 
-                qty = calculate_positionsize(entryprice, slprice, riskforsymbol)
+                qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
                 
                 # Add risk info nel caption
                 caption += f"📊 Risk Management:\n"
@@ -6282,7 +6282,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     riskforsymbol = risk_base
                 
-                qty = calculate_positionsize(entryprice, slprice, riskforsymbol)
+                qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
                 
                 # Add risk info nel caption
                 caption += f"📊 Risk Management:\n"
@@ -6456,7 +6456,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     riskforsymbol = risk_base
                 
-                qty = calculate_positionsize(entryprice, slprice, riskforsymbol)
+                qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
                 
                 # Add risk info nel caption
                 caption += f"📊 Risk Management:\n"
@@ -6547,7 +6547,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 logging.info(f"Symbol override for {symbol}: ${riskforsymbol:.2f}")
             else:
                 riskforsymbol = risk_base
-            qty = calculate_positionsize(entryprice, slprice, riskforsymbol)
+            qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
             
             position_exists = symbol in ACTIVE_POSITIONS
             
