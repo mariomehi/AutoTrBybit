@@ -412,6 +412,28 @@ BYBIT_ENDPOINTS = {
 BYBIT_PUBLIC_REST = 'https://api.bybit.com'  # Dati di mercato sempre da mainnet
 
 
+# ===== MARKET TIME FILTER =====
+MARKET_TIME_FILTER_ENABLED = True
+# Ore UTC bloccate (default: 01-04 UTC)
+MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = {1, 2, 3, 4}
+# Modalità: se True blocca solo autotrade, se False blocca anche analisi pattern
+MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY = True
+
+def is_good_trading_time_utc(now=None) -> tuple[bool, str]:
+    """
+    Ritorna (ok, reason)
+    """
+    if not MARKET_TIME_FILTER_ENABLED:
+        return (True, "Market time filter OFF")
+
+    now = now or datetime.now(timezone.utc)
+    h = now.hour
+
+    if h in MARKET_TIME_FILTER_BLOCKED_UTC_HOURS:
+        return (False, f"Blocked low-liquidity hour UTC={h:02d}")
+    return (True, f"OK hour UTC={h:02d}")
+
+
 def create_bybit_session():
     """Crea sessione Bybit per trading (Demo o Live)"""
     if BybitHTTP is None:
@@ -5609,7 +5631,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             return
         
         timeframe = AUTO_DISCOVERY_CONFIG['timeframe']
-        autotrade = AUTO_DISCOVERY_CONFIG['autotrade']
+         AUTO_DISCOVERY_CONFIG['autotrade']
         
         # Converti in set per comparazione
         new_symbols_set = set(top_symbols)
@@ -8800,6 +8822,18 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Determina autotrade
         autotrade = job_data.get('autotrade', False)
+        
+        # ===== MARKET TIME FILTER (autotrade gate) =====
+        time_ok, time_reason = is_good_trading_time_utc()
+        if not time_ok:
+            if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
+                if autotrade:
+                    logging.info(f"{symbol} {timeframe}: Autotrade disabilitato ({time_reason})")
+                autotrade = False  # solo ordini off, analisi continua
+            else:
+                logging.info(f"{symbol} {timeframe}: Analisi saltata ({time_reason})")
+                return
+
         autotrade_emoji = "🤖" if autotrade else "📊"
         autotrade_text = "Autotrade ON" if autotrade else "Solo monitoraggio"
         
@@ -9902,6 +9936,93 @@ async def cmd_trend_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(msg, parse_mode='HTML')
 
+async def cmd_time_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /timefilter
+    /timefilter on|off
+    /timefilter hours 1 2 3 4
+    /timefilter mode autotrade|all
+    """
+    global MARKET_TIME_FILTER_ENABLED
+    global MARKET_TIME_FILTER_BLOCKED_UTC_HOURS
+    global MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY
+
+    args = context.args
+
+    # Status
+    if not args:
+        mode = "AUTOTRADE_ONLY" if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY else "ALL_ANALYSIS"
+        hours = ", ".join([f"{h:02d}" for h in sorted(MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)])
+        msg = ""
+        msg += "<b>Market Time Filter</b>\n"
+        msg += f"Status: {'✅ ON' if MARKET_TIME_FILTER_ENABLED else '❌ OFF'}\n"
+        msg += f"Mode: <b>{mode}</b>\n"
+        msg += f"Blocked UTC hours: <b>{hours if hours else 'None'}</b>\n\n"
+        msg += "<b>Comandi</b>\n"
+        msg += "<code>timefilter on</code> | <code>timefilter off</code>\n"
+        msg += "<code>timefilter hours 1 2 3 4</code>\n"
+        msg += "<code>timefilter hours clear</code>\n"
+        msg += "<code>timefilter mode autotrade</code> (blocca solo ordini)\n"
+        msg += "<code>timefilter mode all</code> (blocca anche analisi)\n"
+        await update.message.reply_text(msg, parse_mode="HTML")
+        return
+
+    cmd = args[0].lower()
+
+    # ON/OFF
+    if cmd in ("on", "off"):
+        MARKET_TIME_FILTER_ENABLED = (cmd == "on")
+        await update.message.reply_text(
+            f"<b>Market Time Filter</b>: {'✅ ON' if MARKET_TIME_FILTER_ENABLED else '❌ OFF'}",
+            parse_mode="HTML"
+        )
+        return
+
+    # MODE
+    if cmd == "mode":
+        if len(args) < 2:
+            await update.message.reply_text("Uso: <code>timefilter mode autotrade|all</code>", parse_mode="HTML")
+            return
+        m = args[1].lower()
+        if m not in ("autotrade", "all"):
+            await update.message.reply_text("Valore non valido. Usa: autotrade | all", parse_mode="HTML")
+            return
+        MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY = (m == "autotrade")
+        await update.message.reply_text(
+            f"Mode impostato: <b>{'AUTOTRADE_ONLY' if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY else 'ALL_ANALYSIS'}</b>",
+            parse_mode="HTML"
+        )
+        return
+
+    # HOURS
+    if cmd == "hours":
+        if len(args) < 2:
+            await update.message.reply_text("Uso: <code>timefilter hours 1 2 3 4</code> oppure <code>timefilter hours clear</code>", parse_mode="HTML")
+            return
+
+        if args[1].lower() == "clear":
+            MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = set()
+            await update.message.reply_text("Blocked UTC hours svuotate.", parse_mode="HTML")
+            return
+
+        new_hours = set()
+        for s in args[1:]:
+            if not s.isdigit():
+                await update.message.reply_text(f"Ora non valida: {s} (usa numeri 0-23)", parse_mode="HTML")
+                return
+            h = int(s)
+            if h < 0 or h > 23:
+                await update.message.reply_text(f"Ora fuori range: {h} (0-23)", parse_mode="HTML")
+                return
+            new_hours.add(h)
+
+        MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = new_hours
+        hours = ", ".join([f"{h:02d}" for h in sorted(MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)])
+        await update.message.reply_text(f"Blocked UTC hours impostate: <b>{hours}</b>", parse_mode="HTML")
+        return
+
+    await update.message.reply_text("Comando non valido. Usa: <code>timefilter</code>", parse_mode="HTML")
+
 # ----------------------------- MAIN -----------------------------
 
 def main():
@@ -9969,6 +10090,7 @@ def main():
     application.add_handler(CommandHandler('test_flag', cmd_test_flag))
     application.add_handler(CommandHandler('test_br', cmd_test_breakout_retest))
     application.add_handler(CommandHandler('trend_filter', cmd_trend_filter))
+    application.add_handler(CommandHandler("timefilter", cmd_time_filter))
 
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
