@@ -812,6 +812,26 @@ def get_price_decimals(price: float) -> int:
     else:
         return 6
 
+# ===== DYNAMIC RISK CALCULATION =====
+def calculate_dynamic_risk(ema_score: int) -> float:
+    """
+    Scala il rischio in base alla qualità EMA
+    
+    Score ranges:
+    - GOLD (80+): $15 (+50%)
+    - GOOD (60-80): $10 (standard)
+    - OK (40-60): $5 (-50%)
+    - WEAK (<40): $2 (-80%)
+    """
+    if ema_score >= 80:
+        return 15.0  # 🌟 Setup perfetto
+    elif ema_score >= 60:
+        return 10.0  # ✅ Setup buono
+    elif ema_score >= 40:
+        return 5.0   # ⚠️ Setup debole
+    else:
+        return 2.0   # ❌ Setup molto debole
+
 
 def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str = None):
     """
@@ -6110,11 +6130,41 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"TP: ${tp_price:.{price_decimals}f} (2R)\n"
                 
                 # Risk calculation
-                risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
-                qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+                # ===== DYNAMIC RISK CALCULATION =====
+                # Calcola risk basato su EMA score
+                if ema_analysis and 'score' in ema_analysis:
+                    ema_score = ema_analysis['score']
+                    risk_base = calculate_dynamic_risk(ema_score)
+                    logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
+                else:
+                    risk_base = RISK_USD
+                    logging.debug(f"No EMA analysis, using base risk ${RISK_USD}")
                 
-                caption += f"\n📦 Qty: {qty:.4f}\n"
-                caption += f"💰 Risk: ${risk_for_symbol}\n"
+                # Apply symbol-specific override se configurato
+                if symbol in SYMBOL_RISK_OVERRIDE:
+                    riskforsymbol = SYMBOL_RISK_OVERRIDE[symbol]
+                    logging.info(f"Symbol override for {symbol}: ${riskforsymbol:.2f}")
+                else:
+                    riskforsymbol = risk_base
+                
+                qty = calculate_positionsize(entryprice, slprice, riskforsymbol)
+                
+                # Add risk info nel caption
+                caption += f"📊 Risk Management:\n"
+                caption += f"Position Size: {qty:.4f}\n"
+                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                if ema_analysis:
+                    caption += f"EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n"
+                    caption += f"Risk Tier: "
+                    if ema_analysis['score'] >= 80:
+                        caption += "🌟 GOLD (Max Risk)\n"
+                    elif ema_analysis['score'] >= 60:
+                        caption += "✅ GOOD (Standard Risk)\n"
+                    elif ema_analysis['score'] >= 40:
+                        caption += "⚠️ OK (Reduced Risk)\n"
+                    else:
+                        caption += "❌ WEAK (Minimal Risk)\n"
+
 
 
             elif pattern == 'Pin Bar Bullish (GOLD)' or \
@@ -6215,11 +6265,41 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"TP: ${tp_price:.{price_decimals}f} (2R)\n"
                 
                 # Risk calculation
-                risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
-                qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+                # ===== DYNAMIC RISK CALCULATION =====
+                # Calcola risk basato su EMA score
+                if ema_analysis and 'score' in ema_analysis:
+                    ema_score = ema_analysis['score']
+                    risk_base = calculate_dynamic_risk(ema_score)
+                    logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
+                else:
+                    risk_base = RISK_USD
+                    logging.debug(f"No EMA analysis, using base risk ${RISK_USD}")
                 
-                caption += f"\n📦 Qty: {qty:.4f}\n"
-                caption += f"💰 Risk: ${risk_for_symbol}\n"
+                # Apply symbol-specific override se configurato
+                if symbol in SYMBOL_RISK_OVERRIDE:
+                    riskforsymbol = SYMBOL_RISK_OVERRIDE[symbol]
+                    logging.info(f"Symbol override for {symbol}: ${riskforsymbol:.2f}")
+                else:
+                    riskforsymbol = risk_base
+                
+                qty = calculate_positionsize(entryprice, slprice, riskforsymbol)
+                
+                # Add risk info nel caption
+                caption += f"📊 Risk Management:\n"
+                caption += f"Position Size: {qty:.4f}\n"
+                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                if ema_analysis:
+                    caption += f"EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n"
+                    caption += f"Risk Tier: "
+                    if ema_analysis['score'] >= 80:
+                        caption += "🌟 GOLD (Max Risk)\n"
+                    elif ema_analysis['score'] >= 60:
+                        caption += "✅ GOOD (Standard Risk)\n"
+                    elif ema_analysis['score'] >= 40:
+                        caption += "⚠️ OK (Reduced Risk)\n"
+                    else:
+                        caption += "❌ WEAK (Minimal Risk)\n"
+
                 
                 # Strategic notes
                 caption += f"\n<b>💡 Strategic Notes:</b>\n"
@@ -6359,11 +6439,41 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"TP: ${tp_price:.{price_decimals}f} (2R)\n"
                 
                 # Risk calculation
-                risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
-                qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+                # ===== DYNAMIC RISK CALCULATION =====
+                # Calcola risk basato su EMA score
+                if ema_analysis and 'score' in ema_analysis:
+                    ema_score = ema_analysis['score']
+                    risk_base = calculate_dynamic_risk(ema_score)
+                    logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
+                else:
+                    risk_base = RISK_USD
+                    logging.debug(f"No EMA analysis, using base risk ${RISK_USD}")
                 
-                caption += f"\n📦 Qty: {qty:.4f}\n"
-                caption += f"💰 Risk: ${risk_for_symbol}\n"
+                # Apply symbol-specific override se configurato
+                if symbol in SYMBOL_RISK_OVERRIDE:
+                    riskforsymbol = SYMBOL_RISK_OVERRIDE[symbol]
+                    logging.info(f"Symbol override for {symbol}: ${riskforsymbol:.2f}")
+                else:
+                    riskforsymbol = risk_base
+                
+                qty = calculate_positionsize(entryprice, slprice, riskforsymbol)
+                
+                # Add risk info nel caption
+                caption += f"📊 Risk Management:\n"
+                caption += f"Position Size: {qty:.4f}\n"
+                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                if ema_analysis:
+                    caption += f"EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n"
+                    caption += f"Risk Tier: "
+                    if ema_analysis['score'] >= 80:
+                        caption += "🌟 GOLD (Max Risk)\n"
+                    elif ema_analysis['score'] >= 60:
+                        caption += "✅ GOOD (Standard Risk)\n"
+                    elif ema_analysis['score'] >= 40:
+                        caption += "⚠️ OK (Reduced Risk)\n"
+                    else:
+                        caption += "❌ WEAK (Minimal Risk)\n"
+
                 
                 # Strategic Notes
                 caption += f"\n<b>💡 Strategic Notes:</b>\n"
@@ -6429,8 +6539,16 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     tp_price = last_close * 1.02
             
             # ===== CALCOLO POSITION SIZE E CHECK =====
-            risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
-            qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+            #risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
+            #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+            # Apply symbol-specific override se configurato
+            if symbol in SYMBOL_RISK_OVERRIDE:
+                riskforsymbol = SYMBOL_RISK_OVERRIDE[symbol]
+                logging.info(f"Symbol override for {symbol}: ${riskforsymbol:.2f}")
+            else:
+                riskforsymbol = risk_base
+            qty = calculate_positionsize(entryprice, slprice, riskforsymbol)
+            
             position_exists = symbol in ACTIVE_POSITIONS
             
             # ===== COSTRUISCI CAPTION =====
