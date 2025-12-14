@@ -4859,34 +4859,172 @@ async def sync_positions_with_bybit():
         return False
 
 
-def calculate_position_size(entry_price: float, sl_price: float, risk_usd: float):
+# ===== POSITION SIZING INTELLIGENTE CON VOLATILITÀ =====
+def calculate_optimal_position_size(
+    entry_price: float,
+    sl_price: float,
+    symbol: str,
+    volatility_atr: float,
+    ema_score: int = 50,
+    risk_usd: float = 10.0
+) -> float:
     """
-    Calcola la quantità basata sul rischio in USD
-    Formula: Qty = Risk USD / |Entry - SL|
+    Calcola qty ottimale basato su volatilità (ATR)
     
-    Con limiti di sicurezza per evitare qty troppo grandi
+    LOGICA:
+    1. Base risk = dynamic_risk(ema_score)
+    2. Volatility adjustment = ATR normalizzato rispetto al prezzo
+    3. Symbol-specific limits
+    
+    ATR alto = qty minore (più volatilità)
+    ATR basso = qty maggiore (meno volatilità)
+    EMA score = aggiusta ulteriormente
+    
+    Args:
+        entry_price: Prezzo di entrata (es. 45000 per BTC)
+        sl_price: Stop loss
+        symbol: Symbol (es. BTCUSDT, ETHUSDT)
+        volatility_atr: ATR corrente
+        ema_score: EMA score (0-100)
+        risk_usd: Risk base in USD
+    
+    Returns:
+        qty: Quantity ottimale
     """
+    
+    # ===== STEP 1: Calcola risk base da EMA score =====
+    risk_base = calculate_dynamic_risk(ema_score)
+    
+    # ===== STEP 2: Calcola fattore volatilità =====
+    # ATR normalizzato: (ATR / prezzo) * 100
+    # Questo ci dà la volatilità percentuale
+    volatility_pct = (volatility_atr / entry_price) * 100
+    
+    logging.debug(f"{symbol}: ATR={volatility_atr:.2f}, Volatility%={volatility_pct:.2f}%")
+    
+    # Fattore di aggiustamento volatilità
+    # ATR alto → fattore alto → rischio ridotto
+    # ATR basso → fattore basso → rischio aumentato
+    if volatility_pct >= 3.0:
+        volatility_factor = 2.0  # Volatilità MOLTO alta: dimezza il rischio
+    elif volatility_pct >= 2.0:
+        volatility_factor = 1.5  # Volatilità alta: riduci del 33%
+    elif volatility_pct >= 1.0:
+        volatility_factor = 1.2  # Volatilità media: riduci del 17%
+    elif volatility_pct >= 0.5:
+        volatility_factor = 1.0  # Volatilità bassa: rischio standard
+    else:
+        volatility_factor = 0.8  # Volatilità MOLTO bassa: aumenta il 25%
+    
+    # Limita il fattore per safety (non aumentare mai più del 50%)
+    volatility_factor = max(0.8, min(volatility_factor, 2.0))
+    
+    # Risk aggiustato per volatilità
+    adjusted_risk = risk_base / volatility_factor
+    
+    logging.info(f"{symbol}: Risk base=${risk_base:.2f} → Adjusted=${adjusted_risk:.2f} (factor={volatility_factor:.2f}x)")
+    
+    # ===== STEP 3: Calcola qty =====
     risk_per_unit = abs(entry_price - sl_price)
+    
     if risk_per_unit == 0:
         return 0
     
-    qty = risk_usd / risk_per_unit
+    qty = adjusted_risk / risk_per_unit
     
-    # Limite massimo di sicurezza basato sul prezzo
-    # Per symbol a basso prezzo, limita qty massima
-    if entry_price < 1:
-        # Per coin sotto $1, max 10,000 contracts
-        max_qty = 10000
-    elif entry_price < 10:
-        # Per coin sotto $10, max 1,000 contracts
-        max_qty = 1000
+    # ===== STEP 4: Applica limiti per symbol =====
+    qty_limits = get_symbol_qty_limits(symbol)
+    min_qty = qty_limits['min']
+    max_qty = qty_limits['max']
+    qty_step = qty_limits['step']
+    
+    # Arrotonda al qty_step più vicino
+    if qty_step > 0:
+        qty = round(qty / qty_step) * qty_step
     else:
-        # Per coin normali, max 100 contracts
-        max_qty = 100
+        qty = round(qty, 3)
     
-    qty = min(qty, max_qty)
+    # Limita tra min e max
+    qty = max(min_qty, min(qty, max_qty))
+    
+    logging.info(f"{symbol}: Final qty={qty} (min={min_qty}, max={max_qty})")
     
     return float(max(0, qty))
+
+
+def get_symbol_qty_limits(symbol: str) -> dict:
+    """
+    Ritorna i limiti di qty per ogni symbol
+    Diversi symbol hanno diversi limiti su Bybit
+    """
+    
+    # Estrai il base asset dal symbol (es. BTC da BTCUSDT)
+    if 'BTC' in symbol:
+        return {
+            'min': 0.001,
+            'max': 100.0,
+            'step': 0.001,
+            'description': 'Bitcoin'
+        }
+    
+    elif 'ETH' in symbol:
+        return {
+            'min': 0.01,
+            'max': 10000.0,
+            'step': 0.01,
+            'description': 'Ethereum'
+        }
+    
+    elif 'BNB' in symbol:
+        return {
+            'min': 0.1,
+            'max': 10000.0,
+            'step': 0.1,
+            'description': 'Binance Coin'
+        }
+    
+    elif 'SOL' in symbol:
+        return {
+            'min': 0.1,
+            'max': 100000.0,
+            'step': 0.1,
+            'description': 'Solana'
+        }
+    
+    elif 'DOGE' in symbol or 'SHIB' in symbol or 'PEPE' in symbol:
+        # Coin a basso prezzo
+        return {
+            'min': 1.0,
+            'max': 1000000.0,
+            'step': 1.0,
+            'description': 'Low-price coin'
+        }
+    
+    else:
+        # Default per unknown symbol
+        return {
+            'min': 0.01,
+            'max': 100000.0,
+            'step': 0.01,
+            'description': 'Unknown'
+        }
+
+
+# ===== BACKWARD COMPATIBILITY =====
+def calculate_position_size(entryprice: float, slprice: float, risk_usd: float) -> float:
+    """
+    Legacy function - usa la nuova versione con ATR di default
+    Per backward compatibility con il codice esistente
+    """
+    # Se non abbiamo ATR, usiamo un fattore di volatilità di default (1.0 = neutrale)
+    return calculate_optimal_position_size(
+        entry_price=entryprice,
+        sl_price=slprice,
+        symbol='UNKNOWN',  # Non sappiamo il symbol qui
+        volatility_atr=abs(entryprice - slprice) * 1.0,  # Approximation
+        ema_score=50,  # Neutrale
+        risk_usd=risk_usd
+    )
 
 
 def calculate_ema_stop_loss(df: pd.DataFrame, timeframe: str, entry_price: float, side: str = 'Buy'):
@@ -6340,8 +6478,32 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     riskforsymbol = risk_base
                 
-                qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+                #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+                # ===== INTELLIGENT POSITION SIZING =====
+                # Calcola ATR per volatilità
+                lastatr = atr(df, period=14).iloc[-1]
+                if math.isnan(lastatr):
+                    lastatr = abs(entryprice - slprice) * 0.01  # Fallback: 1% del range
                 
+                # Calcola qty con position sizing intelligente
+                ema_score = ema_analysis['score'] if ema_analysis else 50
+                qty = calculate_optimal_position_size(
+                    entry_price=entryprice,
+                    sl_price=slprice,
+                    symbol=symbol,
+                    volatility_atr=lastatr,
+                    ema_score=ema_score,
+                    risk_usd=riskforsymbol
+                )
+                
+                # Add info nel caption
+                caption += f"📊 Position Sizing:\n"
+                caption += f"Position Size: {qty:.4f}\n"
+                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                if lastatr > 0:
+                    volatility_pct = (lastatr / entryprice) * 100
+                    caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
+
                 # Add risk info nel caption
                 caption += f"📊 Risk Management:\n"
                 caption += f"Position Size: {qty:.4f}\n"
@@ -6357,7 +6519,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                         caption += "⚠️ OK (Reduced Risk)\n"
                     else:
                         caption += "❌ WEAK (Minimal Risk)\n"
-
 
 
             elif pattern == 'Pin Bar Bullish (GOLD)' or \
@@ -6475,8 +6636,32 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     riskforsymbol = risk_base
                 
-                qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+                #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+                # ===== INTELLIGENT POSITION SIZING =====
+                # Calcola ATR per volatilità
+                lastatr = atr(df, period=14).iloc[-1]
+                if math.isnan(lastatr):
+                    lastatr = abs(entryprice - slprice) * 0.01  # Fallback: 1% del range
                 
+                # Calcola qty con position sizing intelligente
+                ema_score = ema_analysis['score'] if ema_analysis else 50
+                qty = calculate_optimal_position_size(
+                    entry_price=entryprice,
+                    sl_price=slprice,
+                    symbol=symbol,
+                    volatility_atr=lastatr,
+                    ema_score=ema_score,
+                    risk_usd=riskforsymbol
+                )
+                
+                # Add info nel caption
+                caption += f"📊 Position Sizing:\n"
+                caption += f"Position Size: {qty:.4f}\n"
+                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                if lastatr > 0:
+                    volatility_pct = (lastatr / entryprice) * 100
+                    caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
+
                 # Add risk info nel caption
                 caption += f"📊 Risk Management:\n"
                 caption += f"Position Size: {qty:.4f}\n"
@@ -6492,7 +6677,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                         caption += "⚠️ OK (Reduced Risk)\n"
                     else:
                         caption += "❌ WEAK (Minimal Risk)\n"
-
                 
                 # Strategic notes
                 caption += f"\n<b>💡 Strategic Notes:</b>\n"
@@ -6649,7 +6833,32 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     riskforsymbol = risk_base
                 
-                qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+                #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+                # ===== INTELLIGENT POSITION SIZING =====
+                # Calcola ATR per volatilità
+                lastatr = atr(df, period=14).iloc[-1]
+                if math.isnan(lastatr):
+                    lastatr = abs(entryprice - slprice) * 0.01  # Fallback: 1% del range
+                
+                # Calcola qty con position sizing intelligente
+                ema_score = ema_analysis['score'] if ema_analysis else 50
+                qty = calculate_optimal_position_size(
+                    entry_price=entryprice,
+                    sl_price=slprice,
+                    symbol=symbol,
+                    volatility_atr=lastatr,
+                    ema_score=ema_score,
+                    risk_usd=riskforsymbol
+                )
+                
+                # Add info nel caption
+                caption += f"📊 Position Sizing:\n"
+                caption += f"Position Size: {qty:.4f}\n"
+                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                if lastatr > 0:
+                    volatility_pct = (lastatr / entryprice) * 100
+                    caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
+
                 
                 # Add risk info nel caption
                 caption += f"📊 Risk Management:\n"
@@ -6740,7 +6949,34 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 logging.info(f"Symbol override for {symbol}: ${riskforsymbol:.2f}")
             else:
                 riskforsymbol = risk_base
-            qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+            #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+            # ===== INTELLIGENT POSITION SIZING =====
+            riskforsymbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
+            
+            # Calcola ATR per volatilità
+            lastatr = atr(df, period=14).iloc[-1]
+            if math.isnan(lastatr):
+                lastatr = abs(entryprice - slprice) * 0.01  # Fallback: 1% del range
+            
+            # Calcola qty con position sizing intelligente
+            ema_score = ema_analysis['score'] if ema_analysis else 50
+            qty = calculate_optimal_position_size(
+                entry_price=entryprice,
+                sl_price=slprice,
+                symbol=symbol,
+                volatility_atr=lastatr,
+                ema_score=ema_score,
+                risk_usd=riskforsymbol
+            )
+            
+            # Add info nel caption
+            caption += f"📊 Position Sizing:\n"
+            caption += f"Position Size: {qty:.4f}\n"
+            caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+            if lastatr > 0:
+                volatility_pct = (lastatr / entryprice) * 100
+                caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
+
             
             position_exists = symbol in ACTIVE_POSITIONS
             
@@ -6970,7 +7206,32 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             else:
                 risk_for_symbol = risk_base
             
-            qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+            #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
+            # ===== INTELLIGENT POSITION SIZING =====
+            # Calcola ATR per volatilità
+            lastatr = atr(df, period=14).iloc[-1]
+            if math.isnan(lastatr):
+                lastatr = abs(entryprice - slprice) * 0.01  # Fallback: 1% del range
+            
+            # Calcola qty con position sizing intelligente
+            ema_score = ema_analysis['score'] if ema_analysis else 50
+            qty = calculate_optimal_position_size(
+                entry_price=entryprice,
+                sl_price=slprice,
+                symbol=symbol,
+                volatility_atr=lastatr,
+                ema_score=ema_score,
+                risk_usd=riskforsymbol
+            )
+            
+            # Add info nel caption
+            caption += f"📊 Position Sizing:\n"
+            caption += f"Position Size: {qty:.4f}\n"
+            caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+            if lastatr > 0:
+                volatility_pct = (lastatr / entryprice) * 100
+                caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
+
             
             # Check posizione esistente
             position_exists = symbol in ACTIVE_POSITIONS
