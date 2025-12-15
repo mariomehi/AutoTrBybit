@@ -5428,6 +5428,12 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     - sl_price: prezzo stop loss
     - tp_price: prezzo take profit
     """
+    logging.info(f'📤 Placing order: {symbol} {side} qty={qty:.4f}')
+    logging.info(f'   Entry: ${entry_price:.4f}')
+    logging.info(f'   SL: ${sl_price:.4f}')
+    logging.info(f'   TP: ${tp_price:.4f}')
+    logging.info(f'   Mode: {TRADING_MODE}')
+    
     if BybitHTTP is None:
         return {'error': 'pybit non disponibile'}
     
@@ -6091,6 +6097,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     - DEFAULT: Invia grafico SOLO quando trova pattern
     - FULL_MODE: Invia sempre (anche senza pattern, con analisi EMA)
     """
+    logging.info(f'🔍 Analyzing {symbol} {timeframe}...')
+    logging.debug(f'   Volume mode: {VOLUME_FILTER_MODE}')
+    logging.debug(f'   Trend mode: {TREND_FILTER_MODE}')
+    logging.debug(f'   EMA mode: {EMA_FILTER_MODE if EMA_FILTER_ENABLED else "OFF"}')
+    logging.debug(f'   Market time: {"ON" if MARKET_TIME_FILTER_ENABLED else "OFF"}')
+    
     job_ctx = context.job.data
     chat_id = job_ctx['chat_id']
     symbol = job_ctx['symbol']
@@ -6174,7 +6186,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                             parse_mode='HTML'
                         )
                 
-                return  # STOP QUI - Non cerca pattern
+                #return  # STOP QUI - Non cerca pattern
             
             # LOOSE MODE: Blocca se score < 40
             elif EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
@@ -6212,7 +6224,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                             parse_mode='HTML'
                         )
                 
-                return  # STOP - Non cerca pattern
+                #return  # STOP - Non cerca pattern
         
         # ===== STEP 3: CERCA PATTERN (solo se EMA permette) =====
         # I filtri globali sono DENTRO check_patterns() ora
@@ -7047,6 +7059,11 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
 
             
             position_exists = symbol in ACTIVE_POSITIONS
+            if position_exists:
+                logging.warning(f'🚫 Position already exists for {symbol}, skip order')
+            else:
+                logging.info(f'✅ No position for {symbol}, ready to place order')
+
             
             # ===== COSTRUISCI CAPTION =====
             quality_emoji_map = {
@@ -10093,7 +10110,7 @@ def main():
     """Funzione principale"""
     # Setup logging
     logging.basicConfig(
-        level=logging.DEBUG,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
+        level=logging.INFO,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
