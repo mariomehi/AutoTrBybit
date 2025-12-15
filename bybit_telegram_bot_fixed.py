@@ -6235,7 +6235,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         if found:
             #logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
             logging.info(f'✅ {symbol} {timeframe} - Pattern FOUND: {pattern} ({side})')
-                # Log pattern-specific data se disponibile
+            # Log pattern-specific data se disponibile
             if pattern_data:
                 if 'quality_score' in pattern_data:
                     logging.info(f'   Quality Score: {pattern_data["quality_score"]}/100')
@@ -6555,10 +6555,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 # Apply symbol-specific override se configurato
                 if symbol in SYMBOL_RISK_OVERRIDE:
-                    riskforsymbol = SYMBOL_RISK_OVERRIDE[symbol]
-                    logging.info(f"Symbol override for {symbol}: ${riskforsymbol:.2f}")
+                    risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+                    logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
                 else:
-                    riskforsymbol = risk_base
+                    risk_for_symbol = risk_base
                 
                 #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
                 # ===== INTELLIGENT POSITION SIZING =====
@@ -6581,7 +6581,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Add info nel caption
                 caption += f"📊 Position Sizing:\n"
                 caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
                 if lastatr > 0:
                     volatility_pct = (lastatr / entry_price) * 100
                     caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
@@ -6589,7 +6589,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Add risk info nel caption
                 caption += f"📊 Risk Management:\n"
                 caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
                 if ema_analysis:
                     caption += f"EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n"
                     caption += f"Risk Tier: "
@@ -6713,10 +6713,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 # Apply symbol-specific override se configurato
                 if symbol in SYMBOL_RISK_OVERRIDE:
-                    riskforsymbol = SYMBOL_RISK_OVERRIDE[symbol]
-                    logging.info(f"Symbol override for {symbol}: ${riskforsymbol:.2f}")
+                    risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+                    logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
                 else:
-                    riskforsymbol = risk_base
+                    risk_for_symbol = risk_base
                 
                 #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
                 # ===== INTELLIGENT POSITION SIZING =====
@@ -6739,7 +6739,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Add info nel caption
                 caption += f"📊 Position Sizing:\n"
                 caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
                 if lastatr > 0:
                     volatility_pct = (lastatr / entry_price) * 100
                     caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
@@ -6747,7 +6747,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Add risk info nel caption
                 caption += f"📊 Risk Management:\n"
                 caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
                 if ema_analysis:
                     caption += f"EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n"
                     caption += f"Risk Tier: "
@@ -6910,10 +6910,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 # Apply symbol-specific override se configurato
                 if symbol in SYMBOL_RISK_OVERRIDE:
-                    riskforsymbol = SYMBOL_RISK_OVERRIDE[symbol]
-                    logging.info(f"Symbol override for {symbol}: ${riskforsymbol:.2f}")
+                    risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+                    logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
                 else:
-                    riskforsymbol = risk_base
+                    risk_for_symbol = risk_base
                 
                 #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
                 # ===== INTELLIGENT POSITION SIZING =====
@@ -6936,7 +6936,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Add info nel caption
                 caption += f"📊 Position Sizing:\n"
                 caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
                 if lastatr > 0:
                     volatility_pct = (lastatr / entry_price) * 100
                     caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
@@ -6945,7 +6945,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Add risk info nel caption
                 caption += f"📊 Risk Management:\n"
                 caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
                 if ema_analysis:
                     caption += f"EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n"
                     caption += f"Risk Tier: "
@@ -7027,13 +7027,13 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
             # Apply symbol-specific override se configurato
             if symbol in SYMBOL_RISK_OVERRIDE:
-                riskforsymbol = SYMBOL_RISK_OVERRIDE[symbol]
-                logging.info(f"Symbol override for {symbol}: ${riskforsymbol:.2f}")
+                risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+                logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
             else:
-                riskforsymbol = risk_base
+                risk_for_symbol = risk_base
             #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
             # ===== INTELLIGENT POSITION SIZING =====
-            riskforsymbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
+            risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
             
             # Calcola ATR per volatilità
             lastatr = atr(df, period=14).iloc[-1]
@@ -7054,7 +7054,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Add info nel caption
             caption += f"📊 Position Sizing:\n"
             caption += f"Position Size: {qty:.4f}\n"
-            caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+            caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
             if lastatr > 0:
                 volatility_pct = (lastatr / entry_price) * 100
                 caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
