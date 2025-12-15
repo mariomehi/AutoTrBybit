@@ -6097,11 +6097,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     - DEFAULT: Invia grafico SOLO quando trova pattern
     - FULL_MODE: Invia sempre (anche senza pattern, con analisi EMA)
     """
-    logging.info(f'🔍 Analyzing {symbol} {timeframe}...')
-    logging.debug(f'   Volume mode: {VOLUME_FILTER_MODE}')
-    logging.debug(f'   Trend mode: {TREND_FILTER_MODE}')
-    logging.debug(f'   EMA mode: {EMA_FILTER_MODE if EMA_FILTER_ENABLED else "OFF"}')
-    logging.debug(f'   Market time: {"ON" if MARKET_TIME_FILTER_ENABLED else "OFF"}')
     
     job_ctx = context.job.data
     chat_id = job_ctx['chat_id']
@@ -6109,6 +6104,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     timeframe = job_ctx['timeframe']
     key = f'{symbol}-{timeframe}'
 
+    logging.info(f'🔍 Analyzing {symbol} {timeframe}...')
+    logging.info(f'   Volume mode: {VOLUME_FILTER_MODE}')
+    logging.info(f'   Trend mode: {TREND_FILTER_MODE}')
+    logging.info(f'   EMA mode: {EMA_FILTER_MODE if EMA_FILTER_ENABLED else "OFF"}')
+    logging.info(f'   Market time: {"ON" if MARKET_TIME_FILTER_ENABLED else "OFF"}')
+    
     # Check se auto-discovered
     is_auto = job_ctx.get('auto_discovered', False)
 
