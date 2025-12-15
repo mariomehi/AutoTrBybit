@@ -6105,10 +6105,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     key = f'{symbol}-{timeframe}'
 
     logging.info(f'🔍 Analyzing {symbol} {timeframe}...')
-    logging.info(f'   Volume mode: {VOLUME_FILTER_MODE}')
-    logging.info(f'   Trend mode: {TREND_FILTER_MODE}')
-    logging.info(f'   EMA mode: {EMA_FILTER_MODE if EMA_FILTER_ENABLED else "OFF"}')
-    logging.info(f'   Market time: {"ON" if MARKET_TIME_FILTER_ENABLED else "OFF"}')
+    logging.debug(f'   Volume mode: {VOLUME_FILTER_MODE}')
+    logging.debug(f'   Trend mode: {TREND_FILTER_MODE}')
+    logging.debug(f'   EMA mode: {EMA_FILTER_MODE if EMA_FILTER_ENABLED else "OFF"}')
+    logging.debug(f'   Market time: {"ON" if MARKET_TIME_FILTER_ENABLED else "OFF"}')
     
     # Check se auto-discovered
     is_auto = job_ctx.get('auto_discovered', False)
@@ -6565,17 +6565,17 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Calcola ATR per volatilità
                 lastatr = atr(df, period=14).iloc[-1]
                 if math.isnan(lastatr):
-                    lastatr = abs(entryprice - slprice) * 0.01  # Fallback: 1% del range
+                    lastatr = abs(entry_price - sl_price) * 0.01  # Fallback: 1% del range
                 
                 # Calcola qty con position sizing intelligente
                 ema_score = ema_analysis['score'] if ema_analysis else 50
                 qty = calculate_optimal_position_size(
-                    entry_price=entryprice,
-                    sl_price=slprice,
+                    entry_price=entry_price,
+                    sl_price=sl_price,
                     symbol=symbol,
                     volatility_atr=lastatr,
                     ema_score=ema_score,
-                    risk_usd=riskforsymbol
+                    risk_usd=risk_for_symbol
                 )
                 
                 # Add info nel caption
@@ -6583,7 +6583,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"Position Size: {qty:.4f}\n"
                 caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
                 if lastatr > 0:
-                    volatility_pct = (lastatr / entryprice) * 100
+                    volatility_pct = (lastatr / entry_price) * 100
                     caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
 
                 # Add risk info nel caption
@@ -6723,17 +6723,17 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Calcola ATR per volatilità
                 lastatr = atr(df, period=14).iloc[-1]
                 if math.isnan(lastatr):
-                    lastatr = abs(entryprice - slprice) * 0.01  # Fallback: 1% del range
+                    lastatr = abs(entry_price - sl_price) * 0.01  # Fallback: 1% del range
                 
                 # Calcola qty con position sizing intelligente
                 ema_score = ema_analysis['score'] if ema_analysis else 50
                 qty = calculate_optimal_position_size(
-                    entry_price=entryprice,
-                    sl_price=slprice,
+                    entry_price=entry_price,
+                    sl_price=slp_rice,
                     symbol=symbol,
                     volatility_atr=lastatr,
                     ema_score=ema_score,
-                    risk_usd=riskforsymbol
+                    risk_usd=risk_for_symbol
                 )
                 
                 # Add info nel caption
@@ -6741,7 +6741,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"Position Size: {qty:.4f}\n"
                 caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
                 if lastatr > 0:
-                    volatility_pct = (lastatr / entryprice) * 100
+                    volatility_pct = (lastatr / entry_price) * 100
                     caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
 
                 # Add risk info nel caption
@@ -6920,17 +6920,17 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Calcola ATR per volatilità
                 lastatr = atr(df, period=14).iloc[-1]
                 if math.isnan(lastatr):
-                    lastatr = abs(entryprice - slprice) * 0.01  # Fallback: 1% del range
+                    lastatr = abs(entry_price - sl_price) * 0.01  # Fallback: 1% del range
                 
                 # Calcola qty con position sizing intelligente
                 ema_score = ema_analysis['score'] if ema_analysis else 50
                 qty = calculate_optimal_position_size(
-                    entry_price=entryprice,
-                    sl_price=slprice,
+                    entry_price=entry_price,
+                    sl_price=sl_price,
                     symbol=symbol,
                     volatility_atr=lastatr,
                     ema_score=ema_score,
-                    risk_usd=riskforsymbol
+                    risk_usd=risk_for_symbol
                 )
                 
                 # Add info nel caption
@@ -6938,7 +6938,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"Position Size: {qty:.4f}\n"
                 caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
                 if lastatr > 0:
-                    volatility_pct = (lastatr / entryprice) * 100
+                    volatility_pct = (lastatr / entry_price) * 100
                     caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
 
                 
@@ -7038,17 +7038,17 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Calcola ATR per volatilità
             lastatr = atr(df, period=14).iloc[-1]
             if math.isnan(lastatr):
-                lastatr = abs(entryprice - slprice) * 0.01  # Fallback: 1% del range
+                lastatr = abs(entry_price - sl_price) * 0.01  # Fallback: 1% del range
             
             # Calcola qty con position sizing intelligente
             ema_score = ema_analysis['score'] if ema_analysis else 50
             qty = calculate_optimal_position_size(
-                entry_price=entryprice,
-                sl_price=slprice,
+                entry_price=entry_price,
+                sl_price=sl_price,
                 symbol=symbol,
                 volatility_atr=lastatr,
                 ema_score=ema_score,
-                risk_usd=riskforsymbol
+                risk_usd=risk_for_symbol
             )
             
             # Add info nel caption
@@ -7056,7 +7056,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             caption += f"Position Size: {qty:.4f}\n"
             caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
             if lastatr > 0:
-                volatility_pct = (lastatr / entryprice) * 100
+                volatility_pct = (lastatr / entry_price) * 100
                 caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
 
             
@@ -7298,7 +7298,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Calcola ATR per volatilità
             lastatr = atr(df, period=14).iloc[-1]
             if math.isnan(lastatr):
-                lastatr = abs(entryprice - slprice) * 0.01  # Fallback: 1% del range
+                lastatr = abs(entry_price - sl_price) * 0.01  # Fallback: 1% del range
             
             # Calcola qty con position sizing intelligente
             ema_score = ema_analysis['score'] if ema_analysis else 50
@@ -7316,7 +7316,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             caption += f"Position Size: {qty:.4f}\n"
             caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
             if lastatr > 0:
-                volatility_pct = (lastatr / entryprice) * 100
+                volatility_pct = (lastatr / entry_price) * 100
                 caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
 
             
