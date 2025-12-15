@@ -7218,7 +7218,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     f'🚫 Pattern {pattern} su {symbol} {timeframe} '
                     f'BLOCCATO da supporto HTF {htf_block["htf"]}'
                 )
-                
+
                 if full_mode:
                     caption = (
                         f"⚠️ <b>Pattern BLOCCATO da HTF Support</b>\n\n"
@@ -7245,6 +7245,72 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                         )
                 
                 return  # BLOCCA segnale
+
+            # Check EMA filter per SELL (come per BUY)
+            if EMA_FILTER_ENABLED and ema_analysis:
+                if EMA_FILTER_MODE == 'strict' and not ema_analysis['passed']:
+                    logging.warning(
+                        f'🚫 {symbol} {timeframe} - Pattern {pattern} (SELL) '
+                        f'bloccato da EMA STRICT (score {ema_analysis["score"]}/100)'
+                    )
+                    
+                    if full_mode:
+                        caption = (
+                            f"🔴 <b>Pattern SELL Trovato MA Bloccato</b>\n\n"
+                            f"Pattern: {pattern}\n"
+                            f"EMA Score: {ema_analysis['score']}/100\n"
+                            f"Threshold: 60/100 (STRICT)\n\n"
+                            f"⚠️ Pattern SELL valido MA condizioni EMA non ottimali"
+                        )
+                        
+                        try:
+                            chart_buffer = generate_chart(df, symbol, timeframe)
+                            await context.bot.send_photo(
+                                chat_id=chat_id,
+                                photo=chart_buffer,
+                                caption=caption,
+                                parse_mode='HTML'
+                            )
+                        except:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=caption,
+                                parse_mode='HTML'
+                            )
+                    
+                    return  # Blocca ordine SELL
+                
+                elif EMA_FILTER_MODE == 'loose' and ema_analysis['score'] < 40:
+                    logging.warning(
+                        f'🚫 {symbol} {timeframe} - Pattern {pattern} (SELL) '
+                        f'bloccato da EMA LOOSE (score {ema_analysis["score"]}/100 < 40)'
+                    )
+                    
+                    if full_mode:
+                        caption = (
+                            f"🔴 <b>Pattern SELL Trovato MA Bloccato</b>\n\n"
+                            f"Pattern: {pattern}\n"
+                            f"EMA Score: {ema_analysis['score']}/100\n"
+                            f"Threshold: 40/100 (LOOSE)\n\n"
+                            f"⚠️ EMA score troppo basso per SELL"
+                        )
+                        
+                        try:
+                            chart_buffer = generate_chart(df, symbol, timeframe)
+                            await context.bot.send_photo(
+                                chat_id=chat_id,
+                                photo=chart_buffer,
+                                caption=caption,
+                                parse_mode='HTML'
+                            )
+                        except:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=caption,
+                                parse_mode='HTML'
+                            )
+                    
+                    return  # Blocca ordine SELL
             
             # ===== CALCOLO PARAMETRI SELL =====
             entry_price = last_close
