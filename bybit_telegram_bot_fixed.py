@@ -399,7 +399,6 @@ AVAILABLE_PATTERNS = {
     },
 }
 
-
 # Lock per modifiche thread-safe
 PATTERNS_LOCK = threading.Lock()
 
@@ -1877,6 +1876,47 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     curr_ema5 = ema_5.iloc[-1]
     curr_ema10 = ema_10.iloc[-1]
     curr_ema60 = ema_60.iloc[-1]
+
+        # EMA 60 Breakout Detection
+    prev_price = prev['close']
+    prev_ema60 = ema_60.iloc[-2]
+    
+    was_below_ema60 = prev_price < prev_ema60
+    now_above_ema60 = curr_price > curr_ema60
+    ema60_breakout = was_below_ema60 and now_above_ema60
+    
+    # Se è breakout EMA 60 → GOLD automatico
+    if ema60_breakout:
+        breakout_pct = ((curr_price - curr_ema60) / curr_ema60) * 100
+        
+        # Breakout deve essere significativo (>0.3%) e volume OK
+        if breakout_pct >= 0.3 and vol_ratio >= 2.0:
+            logging.info(
+                f'🚀 Bullish Engulfing ROMPE EMA 60! '
+                f'Breakout: +{breakout_pct:.2f}%, Vol: {vol_ratio:.1f}x'
+            )
+            
+            pattern_data = {
+                'tier': 'GOLD',
+                'quality_score': 95,
+                'ema60_breakout': True,
+                'breakout_strength': breakout_pct,
+                'entry_price': curr_price,
+                'prev_body': prev_body,
+                'curr_body': curr_body,
+                'ema5': curr_ema5,
+                'ema10': curr_ema10,
+                'ema60': curr_ema60,
+                'volume_ratio': vol_ratio,
+                'rejection_strength': rejection_strength,
+                'suggested_entry': curr_price,
+                'suggested_sl': curr_ema60 * 0.998,
+                'suggested_tp': curr_price + (curr_price - curr_ema60 * 0.998) * 2.0,
+            }
+            
+            return (True, 'GOLD', pattern_data)
+    
+    # ===== FINE BLOCCO - Continua con logica TIER normale =====
     
     # ===== STEP 4: TREND FILTER (EMA 60) =====
     # MUST: Prezzo sopra EMA 60 (uptrend)
