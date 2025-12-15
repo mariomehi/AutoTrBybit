@@ -7302,12 +7302,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Calcola qty con position sizing intelligente
             ema_score = ema_analysis['score'] if ema_analysis else 50
             qty = calculate_optimal_position_size(
-                entry_price=entryprice,
-                sl_price=slprice,
+                entry_price=entry_price,
+                sl_price=sl_price,
                 symbol=symbol,
                 volatility_atr=lastatr,
                 ema_score=ema_score,
-                risk_usd=riskforsymbol
+                risk_usd=risk_for_symbol
             )
             
             # Add info nel caption
