@@ -7314,7 +7314,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Add info nel caption
             caption += f"📊 Position Sizing:\n"
             caption += f"Position Size: {qty:.4f}\n"
-            caption += f"Risk per Trade: ${riskforsymbol:.2f}\n"
+            caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
             if lastatr > 0:
                 volatility_pct = (lastatr / entry_price) * 100
                 caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
