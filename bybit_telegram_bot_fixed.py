@@ -10773,9 +10773,9 @@ async def cmd_force_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Test con threshold rilassato (1.5x invece di 3x)
             if vol_ratio >= 1.5:
                 found, data = is_volume_spike_breakout(df)
-                tests['Volume Spike (3x)'] = found
+                tests['Volume Spike 3x'] = found
             else:
-                tests['Volume Spike (3x)'] = f"Volume too low ({vol_ratio:.1f}x < 3x)"
+                tests['Volume Spike 3x'] = f"Volume too low ({vol_ratio:.1f}x minore 3x)"
         except Exception as e:
             tests['Volume Spike'] = f"Error: {str(e)[:30]}"
         
