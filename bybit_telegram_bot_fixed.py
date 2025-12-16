@@ -6435,6 +6435,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         last_time = df.index[-1]
         timestamp_str = last_time.strftime('%Y-%m-%d %H:%M UTC')
 
+        position_exists = symbol in ACTIVE_POSITIONS
+
+        # Log per debug
+        if position_exists:
+            logging.debug(f'{symbol}: Position already exists, skip order')
+
         caption = ""  # ← AGGIUNGI QUESTA RIGA
         # ===== CALCOLA DECIMALI UNA SOLA VOLTA =====
         price_decimals = get_price_decimals(last_close)
