@@ -10750,7 +10750,7 @@ async def cmd_force_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = args[0].upper()
     timeframe = args[1].lower()
     
-    await update.message.reply_text(f'🔍 Force testing (NO FILTERS) {symbol} {timeframe}...')
+    await update.message.reply_text(f'🔍 Force testing NO FILTERS {symbol} {timeframe}...')
     
     try:
         df = bybit_get_klines(symbol, timeframe, limit=200)
@@ -10758,7 +10758,7 @@ async def cmd_force_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f'❌ Nessun dato')
             return
         
-        msg = f"🔍 <b>FORCE TEST (NO FILTERS): {symbol} {timeframe}</b>\n\n"
+        msg = f"🔍 <b>FORCE TEST NO FILTERS: {symbol} {timeframe}</b>\n\n"
         
         # Test DIRETTO dei pattern (bypass filtri)
         tests = {}
