@@ -972,19 +972,19 @@ def calculate_dynamic_risk(ema_score: int) -> float:
     Scala il rischio in base alla qualità EMA
     
     Score ranges:
-    - GOLD (80+): $15 (+50%)
-    - GOOD (60-80): $10 (standard)
-    - OK (40-60): $5 (-50%)
-    - WEAK (<40): $2 (-80%)
+    - GOLD (80+): $20 (+50%)
+    - GOOD (60-80): $15 (standard)
+    - OK (40-60): $10 (-50%)
+    - WEAK (<40): $5 (-80%)
     """
     if ema_score >= 80:
-        return 15.0  # 🌟 Setup perfetto
+        return 20.0  # 🌟 Setup perfetto
     elif ema_score >= 60:
-        return 10.0  # ✅ Setup buono
+        return 15.0  # ✅ Setup buono
     elif ema_score >= 40:
-        return 5.0   # ⚠️ Setup debole
+        return 10.0   # ⚠️ Setup debole
     else:
-        return 2.0   # ❌ Setup molto debole
+        return 5.0   # ❌ Setup molto debole
 
 
 def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str = None):
@@ -7031,7 +7031,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 ema_score = ema_analysis['score'] if ema_analysis else 50
                 qty = calculate_optimal_position_size(
                     entry_price=entry_price,
-                    sl_price=slp_rice,
+                    sl_price=sl_price,
                     symbol=symbol,
                     volatility_atr=lastatr,
                     ema_score=ema_score,
