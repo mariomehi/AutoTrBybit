@@ -10536,6 +10536,324 @@ async def cmd_time_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("Comando non valido. Usa: <code>timefilter</code>", parse_mode="HTML")
 
+async def cmd_debug_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /debug_filters SYMBOL TIMEFRAME
+    Mostra TUTTI i filtri e perché stanno bloccando i pattern
+    """
+    args = context.args
+    
+    if len(args) < 2:
+        await update.message.reply_text(
+            '❌ Uso: /debug_filters SYMBOL TIMEFRAME\n'
+            'Esempio: /debug_filters BTCUSDT 5m'
+        )
+        return
+    
+    symbol = args[0].upper()
+    timeframe = args[1].lower()
+    
+    await update.message.reply_text(f'🔍 Analizzando filtri per {symbol} {timeframe}...')
+    
+    try:
+        # Ottieni dati
+        df = bybit_get_klines(symbol, timeframe, limit=200)
+        if df.empty:
+            await update.message.reply_text(f'❌ Nessun dato per {symbol}')
+            return
+        
+        msg = f"🔍 <b>DEBUG FILTERS: {symbol} {timeframe}</b>\n\n"
+        
+        # ===== 1. MARKET TIME FILTER =====
+        msg += "<b>⏰ 1. MARKET TIME FILTER</b>\n"
+        msg += f"Enabled: {'✅' if MARKET_TIME_FILTER_ENABLED else '❌'}\n"
+        
+        if MARKET_TIME_FILTER_ENABLED:
+            time_ok, time_reason = is_good_trading_time_utc()
+            now_utc = datetime.now(timezone.utc)
+            current_hour = now_utc.hour
+            
+            msg += f"Current UTC Hour: <b>{current_hour:02d}</b>\n"
+            msg += f"Blocked Hours: {sorted(MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)}\n"
+            msg += f"Status: {'✅ OK' if time_ok else f'❌ BLOCKED - {time_reason}'}\n"
+            msg += f"Mode: {'AUTOTRADE_ONLY' if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY else 'ALL_ANALYSIS'}\n"
+            
+            if not time_ok:
+                msg += "\n⚠️ <b>PATTERN SEARCH SKIPPED!</b>\n"
+                if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
+                    msg += "Analisi pattern OK, ma autotrade disabilitato\n"
+                else:
+                    msg += "TUTTO bloccato (analisi + autotrade)\n"
+        
+        msg += "\n"
+        
+        # ===== 2. VOLUME FILTER =====
+        msg += "<b>📊 2. VOLUME FILTER</b>\n"
+        msg += f"Mode: <b>{VOLUME_FILTER_MODE}</b>\n"
+        msg += f"Enabled: {'✅' if VOLUME_FILTER_ENABLED else '❌'}\n"
+        
+        vol = df['volume']
+        if len(vol) >= 20:
+            avg_vol = vol.iloc[-20:-1].mean()
+            current_vol = vol.iloc[-1]
+            
+            if avg_vol > 0:
+                vol_ratio = current_vol / avg_vol
+                
+                msg += f"Current Volume: {current_vol:.2f}\n"
+                msg += f"Avg Volume (20): {avg_vol:.2f}\n"
+                msg += f"Ratio: <b>{vol_ratio:.2f}x</b>\n"
+                
+                # Check diversi threshold
+                msg += f"\nThreshold Checks:\n"
+                msg += f"• 1.2x (S/R Bounce): {'✅ PASS' if vol_ratio >= 1.2 else '❌ FAIL'}\n"
+                msg += f"• 1.5x (Globale): {'✅ PASS' if vol_ratio >= 1.5 else '❌ FAIL'}\n"
+                msg += f"• 1.8x (Enhanced): {'✅ PASS' if vol_ratio >= 1.8 else '❌ FAIL'}\n"
+                msg += f"• 2.0x (Flag): {'✅ PASS' if vol_ratio >= 2.0 else '❌ FAIL'}\n"
+                msg += f"• 3.0x (Volume Spike): {'✅ PASS' if vol_ratio >= 3.0 else '❌ FAIL'}\n"
+                
+                if vol_ratio < 1.5:
+                    msg += "\n⚠️ <b>Volume TROPPO BASSO per la maggior parte dei pattern!</b>\n"
+            else:
+                msg += "❌ Average volume is ZERO!\n"
+        else:
+            msg += "❌ Dati insufficienti per calcolare volume\n"
+        
+        msg += "\n"
+        
+        # ===== 3. TREND FILTER =====
+        msg += "<b>📈 3. TREND FILTER</b>\n"
+        msg += f"Enabled: {'✅' if TREND_FILTER_ENABLED else '❌'}\n"
+        msg += f"Mode: <b>{TREND_FILTER_MODE}</b>\n"
+        
+        if TREND_FILTER_ENABLED:
+            trend_valid, trend_reason, trend_details = is_valid_trend_for_entry(
+                df, mode=TREND_FILTER_MODE, symbol=symbol
+            )
+            
+            msg += f"Status: {'✅ VALID' if trend_valid else f'❌ INVALID - {trend_reason}'}\n"
+            
+            if TREND_FILTER_MODE == 'ema_based' and trend_details:
+                ema60 = trend_details.get('ema60', 0)
+                price = trend_details.get('price', 0)
+                distance = trend_details.get('distance_pct', 0)
+                
+                msg += f"EMA 60: ${ema60:.2f}\n"
+                msg += f"Price: ${price:.2f}\n"
+                msg += f"Distance: {distance:.2f}%\n"
+                
+                if not trend_valid:
+                    msg += "\n⚠️ <b>TREND FILTER BLOCKING!</b>\n"
+        
+        msg += "\n"
+        
+        # ===== 4. EMA FILTER =====
+        msg += "<b>💹 4. EMA FILTER</b>\n"
+        msg += f"Enabled: {'✅' if EMA_FILTER_ENABLED else '❌'}\n"
+        msg += f"Mode: <b>{EMA_FILTER_MODE}</b>\n"
+        
+        if EMA_FILTER_ENABLED:
+            ema_analysis = analyze_ema_conditions(df, timeframe, None)
+            
+            msg += f"Score: <b>{ema_analysis['score']}/100</b>\n"
+            msg += f"Quality: <b>{ema_analysis['quality']}</b>\n"
+            msg += f"Passed: {'✅ YES' if ema_analysis['passed'] else '❌ NO'}\n"
+            
+            if EMA_FILTER_MODE == 'strict':
+                msg += f"Threshold: 60/100\n"
+                if ema_analysis['score'] < 60:
+                    msg += "\n⚠️ <b>EMA STRICT BLOCKING!</b>\n"
+            elif EMA_FILTER_MODE == 'loose':
+                msg += f"Threshold: 40/100\n"
+                if ema_analysis['score'] < 40:
+                    msg += "\n⚠️ <b>EMA LOOSE BLOCKING!</b>\n"
+            
+            msg += f"\nDetails:\n{ema_analysis['details']}\n"
+        
+        msg += "\n"
+        
+        # ===== 5. PATTERN-SPECIFIC CHECKS =====
+        msg += "<b>🎯 5. PATTERN-SPECIFIC VOLUME CHECKS</b>\n"
+        
+        # Test alcuni pattern chiave
+        patterns_to_test = [
+            ('Volume Spike Breakout', lambda: is_volume_spike_breakout(df)),
+            ('S/R Bounce', lambda: is_support_resistance_bounce(df)),
+            ('Bullish Flag', lambda: is_bullish_flag_breakout(df)),
+        ]
+        
+        for pattern_name, pattern_func in patterns_to_test:
+            try:
+                result = pattern_func()
+                found = result[0] if isinstance(result, tuple) else result
+                msg += f"• {pattern_name}: {'✅ FOUND' if found else '❌ Not found'}\n"
+            except Exception as e:
+                msg += f"• {pattern_name}: ❌ Error - {str(e)[:50]}\n"
+        
+        msg += "\n"
+        
+        # ===== 6. SUMMARY =====
+        msg += "<b>📋 SUMMARY</b>\n"
+        
+        blocking_filters = []
+        
+        if MARKET_TIME_FILTER_ENABLED:
+            time_ok, _ = is_good_trading_time_utc()
+            if not time_ok and not MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
+                blocking_filters.append("Market Time (ALL)")
+        
+        if VOLUME_FILTER_ENABLED and vol_ratio < 1.5:
+            blocking_filters.append("Volume (too low)")
+        
+        if TREND_FILTER_ENABLED:
+            trend_valid, _, _ = is_valid_trend_for_entry(df, mode=TREND_FILTER_MODE)
+            if not trend_valid:
+                blocking_filters.append(f"Trend ({TREND_FILTER_MODE})")
+        
+        if EMA_FILTER_ENABLED and not ema_analysis['passed']:
+            blocking_filters.append(f"EMA ({EMA_FILTER_MODE})")
+        
+        if blocking_filters:
+            msg += "❌ <b>FILTERS BLOCKING:</b>\n"
+            for f in blocking_filters:
+                msg += f"  • {f}\n"
+        else:
+            msg += "✅ <b>All filters OK</b>\n"
+            msg += "If no pattern found, issue is in pattern logic itself\n"
+        
+        # Limita lunghezza
+        if len(msg) > 4000:
+            msg = msg[:3900] + "\n\n... (troncato)"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+        
+    except Exception as e:
+        logging.exception('Errore in cmd_debug_filters')
+        await update.message.reply_text(f'❌ Errore: {str(e)}')
+
+
+async def cmd_force_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /force_test SYMBOL TIMEFRAME
+    Forza il test dei pattern SENZA FILTRI GLOBALI
+    Per vedere se il problema è nei filtri o nei pattern stessi
+    """
+    args = context.args
+    
+    if len(args) < 2:
+        await update.message.reply_text(
+            '❌ Uso: /force_test SYMBOL TIMEFRAME\n'
+            'Esempio: /force_test BTCUSDT 5m'
+        )
+        return
+    
+    symbol = args[0].upper()
+    timeframe = args[1].lower()
+    
+    await update.message.reply_text(f'🔍 Force testing (NO FILTERS) {symbol} {timeframe}...')
+    
+    try:
+        df = bybit_get_klines(symbol, timeframe, limit=200)
+        if df.empty:
+            await update.message.reply_text(f'❌ Nessun dato')
+            return
+        
+        msg = f"🔍 <b>FORCE TEST (NO FILTERS): {symbol} {timeframe}</b>\n\n"
+        
+        # Test DIRETTO dei pattern (bypass filtri)
+        tests = {}
+        
+        # Volume Spike (con threshold custom basso)
+        try:
+            vol = df['volume']
+            avg_vol = vol.iloc[-20:-1].mean()
+            curr_vol = vol.iloc[-1]
+            vol_ratio = curr_vol / avg_vol if avg_vol > 0 else 0
+            
+            # Test con threshold rilassato (1.5x invece di 3x)
+            if vol_ratio >= 1.5:
+                found, data = is_volume_spike_breakout(df)
+                tests['Volume Spike (3x)'] = found
+            else:
+                tests['Volume Spike (3x)'] = f"Volume too low ({vol_ratio:.1f}x < 3x)"
+        except Exception as e:
+            tests['Volume Spike'] = f"Error: {str(e)[:30]}"
+        
+        # S/R Bounce
+        try:
+            found, data = is_support_resistance_bounce(df)
+            tests['S/R Bounce'] = found
+        except Exception as e:
+            tests['S/R Bounce'] = f"Error: {str(e)[:30]}"
+        
+        # Bullish Flag
+        try:
+            found, data = is_bullish_flag_breakout(df)
+            tests['Bullish Flag'] = found
+        except Exception as e:
+            tests['Bullish Flag'] = f"Error: {str(e)[:30]}"
+        
+        # Triple Touch
+        try:
+            found, data = is_triple_touch_breakout(df)
+            tests['Triple Touch'] = found
+        except Exception as e:
+            tests['Triple Touch'] = f"Error: {str(e)[:30]}"
+        
+        # Engulfing Enhanced
+        try:
+            prev = df.iloc[-2]
+            curr = df.iloc[-1]
+            found, tier, data = is_bullish_engulfing_enhanced(prev, curr, df)
+            tests[f'Engulfing Enhanced'] = f"{tier} tier" if found else False
+        except Exception as e:
+            tests['Engulfing Enhanced'] = f"Error: {str(e)[:30]}"
+        
+        # Pin Bar Enhanced
+        try:
+            curr = df.iloc[-1]
+            found, tier, data = is_pin_bar_bullish_enhanced(curr, df)
+            tests['Pin Bar Enhanced'] = f"{tier} tier" if found else False
+        except Exception as e:
+            tests['Pin Bar Enhanced'] = f"Error: {str(e)[:30]}"
+        
+        # Morning Star Enhanced
+        try:
+            found, tier, data = is_morning_star_enhanced(df)
+            tests['Morning Star Enhanced'] = f"{tier} tier" if found else False
+        except Exception as e:
+            tests['Morning Star Enhanced'] = f"Error: {str(e)[:30]}"
+        
+        # Results
+        for pattern, result in tests.items():
+            if result is True:
+                emoji = "✅"
+                status = "FOUND"
+            elif result is False:
+                emoji = "❌"
+                status = "Not found"
+            elif isinstance(result, str) and "tier" in result:
+                emoji = "✅"
+                status = result
+            else:
+                emoji = "⚠️"
+                status = str(result)
+            
+            msg += f"{emoji} {pattern}: {status}\n"
+        
+        msg += "\n<b>💡 Note:</b>\n"
+        msg += "Questo test bypassa TUTTI i filtri globali.\n"
+        msg += "Se trovi pattern qui ma non nelle analisi normali,\n"
+        msg += "il problema è nei filtri (volume/trend/EMA).\n\n"
+        msg += "Usa /debug_filters per vedere quale filtro blocca."
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+        
+    except Exception as e:
+        logging.exception('Errore in cmd_force_test')
+        await update.message.reply_text(f'❌ Errore: {str(e)}')
+
+
 # ----------------------------- MAIN -----------------------------
 
 def main():
@@ -10604,6 +10922,8 @@ def main():
     application.add_handler(CommandHandler('test_br', cmd_test_breakout_retest))
     application.add_handler(CommandHandler('trend_filter', cmd_trend_filter))
     application.add_handler(CommandHandler("timefilter", cmd_time_filter))
+    application.add_handler(CommandHandler('debug_filters', cmd_debug_filters))
+    application.add_handler(CommandHandler('force_test', cmd_force_test))
 
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
