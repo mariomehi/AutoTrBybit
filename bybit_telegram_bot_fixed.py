@@ -8897,7 +8897,7 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /orders [LIMIT]
     Mostra gli ultimi ordini chiusi con P&L da Bybit
-    CON DECIMALI DINAMICI basati sul prezzo
+    CON DISTINZIONE BUY/SELL e metriche separate
     """
     if not BYBIT_API_KEY or not BYBIT_API_SECRET:
         await update.message.reply_text(
@@ -8939,10 +8939,29 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             msg = f"📊 <b>Ultimi {len(pnl_list)} Ordini Chiusi ({TRADING_MODE.upper()})</b>\n\n"
             
+            # Statistiche globali
             total_pnl = 0
             win_count = 0
             loss_count = 0
             
+            # Statistiche separate BUY/SELL
+            buy_stats = {
+                'count': 0,
+                'wins': 0,
+                'losses': 0,
+                'total_pnl': 0,
+                'total_volume': 0
+            }
+            
+            sell_stats = {
+                'count': 0,
+                'wins': 0,
+                'losses': 0,
+                'total_pnl': 0,
+                'total_volume': 0
+            }
+            
+            # Processa ogni ordine
             for pnl_entry in pnl_list:
                 symbol = pnl_entry.get('symbol', 'N/A')
                 side = pnl_entry.get('side', 'N/A')
@@ -8956,12 +8975,30 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 close_time = datetime.fromtimestamp(updated_time / 1000, tz=timezone.utc)
                 time_str = close_time.strftime('%d/%m %H:%M')
                 
-                # Statistiche
+                # Aggiorna statistiche globali
                 total_pnl += closed_pnl
                 if closed_pnl > 0:
                     win_count += 1
                 else:
                     loss_count += 1
+                
+                # Aggiorna statistiche per side
+                if side == 'Buy':
+                    buy_stats['count'] += 1
+                    buy_stats['total_pnl'] += closed_pnl
+                    buy_stats['total_volume'] += qty * avg_entry
+                    if closed_pnl > 0:
+                        buy_stats['wins'] += 1
+                    else:
+                        buy_stats['losses'] += 1
+                else:  # Sell
+                    sell_stats['count'] += 1
+                    sell_stats['total_pnl'] += closed_pnl
+                    sell_stats['total_volume'] += qty * avg_entry
+                    if closed_pnl > 0:
+                        sell_stats['wins'] += 1
+                    else:
+                        sell_stats['losses'] += 1
                 
                 # Emoji in base al risultato
                 side_emoji = "🟢" if side == 'Buy' else "🔴"
@@ -8975,7 +9012,7 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     else:
                         pnl_percent = ((avg_entry - avg_exit) / avg_entry) * 100
                 
-                # ===== DECIMALI DINAMICI =====
+                # Decimali dinamici
                 price_decimals = get_price_decimals(avg_entry)
                 
                 # Costruisci messaggio ordine
@@ -8986,14 +9023,99 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += f"  {pnl_emoji} PnL: ${closed_pnl:+.2f} ({pnl_percent:+.2f}%)\n"
                 msg += f"  Time: {time_str}\n\n"
             
-            # Statistiche finali
+            # ===== STATISTICHE FINALI CON SEPARAZIONE BUY/SELL =====
             msg += "━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            # Statistiche globali
             msg += f"💰 <b>PnL Totale: ${total_pnl:+.2f}</b>\n"
             msg += f"✅ Win: {win_count} | ❌ Loss: {loss_count}\n"
             
             if (win_count + loss_count) > 0:
                 win_rate = (win_count / (win_count + loss_count)) * 100
-                msg += f"📊 Win Rate: {win_rate:.1f}%\n"
+                msg += f"📊 Win Rate: {win_rate:.1f}%\n\n"
+            
+            # ===== STATISTICHE BUY =====
+            if buy_stats['count'] > 0:
+                buy_win_rate = (buy_stats['wins'] / buy_stats['count']) * 100
+                avg_pnl_buy = buy_stats['total_pnl'] / buy_stats['count']
+                
+                msg += "🟢 <b>BUY Statistics:</b>\n"
+                msg += f"  Trades: {buy_stats['count']}\n"
+                msg += f"  Wins: {buy_stats['wins']} | Losses: {buy_stats['losses']}\n"
+                msg += f"  Win Rate: {buy_win_rate:.1f}%\n"
+                msg += f"  Total PnL: ${buy_stats['total_pnl']:+.2f}\n"
+                msg += f"  Avg PnL/Trade: ${avg_pnl_buy:+.2f}\n"
+                msg += f"  Volume: ${buy_stats['total_volume']:.0f}\n\n"
+            
+            # ===== STATISTICHE SELL =====
+            if sell_stats['count'] > 0:
+                sell_win_rate = (sell_stats['wins'] / sell_stats['count']) * 100
+                avg_pnl_sell = sell_stats['total_pnl'] / sell_stats['count']
+                
+                msg += "🔴 <b>SELL Statistics:</b>\n"
+                msg += f"  Trades: {sell_stats['count']}\n"
+                msg += f"  Wins: {sell_stats['wins']} | Losses: {sell_stats['losses']}\n"
+                msg += f"  Win Rate: {sell_win_rate:.1f}%\n"
+                msg += f"  Total PnL: ${sell_stats['total_pnl']:+.2f}\n"
+                msg += f"  Avg PnL/Trade: ${avg_pnl_sell:+.2f}\n"
+                msg += f"  Volume: ${sell_stats['total_volume']:.0f}\n\n"
+            
+            # ===== CONFRONTO PERFORMANCE =====
+            if buy_stats['count'] > 0 and sell_stats['count'] > 0:
+                msg += "📈 <b>Performance Comparison:</b>\n"
+                
+                # Win rate comparison
+                if buy_stats['wins'] / buy_stats['count'] > sell_stats['wins'] / sell_stats['count']:
+                    msg += f"  Best Win Rate: 🟢 BUY ({buy_win_rate:.1f}%)\n"
+                else:
+                    msg += f"  Best Win Rate: 🔴 SELL ({sell_win_rate:.1f}%)\n"
+                
+                # PnL comparison
+                if buy_stats['total_pnl'] > sell_stats['total_pnl']:
+                    msg += f"  Most Profitable: 🟢 BUY (${buy_stats['total_pnl']:+.2f})\n"
+                else:
+                    msg += f"  Most Profitable: 🔴 SELL (${sell_stats['total_pnl']:+.2f})\n"
+                
+                # Avg PnL comparison
+                avg_pnl_buy = buy_stats['total_pnl'] / buy_stats['count']
+                avg_pnl_sell = sell_stats['total_pnl'] / sell_stats['count']
+                
+                if avg_pnl_buy > avg_pnl_sell:
+                    msg += f"  Better Avg: 🟢 BUY (${avg_pnl_buy:+.2f}/trade)\n"
+                else:
+                    msg += f"  Better Avg: 🔴 SELL (${avg_pnl_sell:+.2f}/trade)\n"
+                
+                msg += "\n"
+            
+            # ===== INSIGHTS =====
+            msg += "💡 <b>Insights:</b>\n"
+            
+            # Identifica lato più profittevole
+            if buy_stats['count'] > 0 and sell_stats['count'] > 0:
+                if buy_stats['total_pnl'] > sell_stats['total_pnl'] * 1.5:
+                    msg += "  • BUY trades molto più profittevoli\n"
+                    msg += "  • Considera di tradare più BUY\n"
+                elif sell_stats['total_pnl'] > buy_stats['total_pnl'] * 1.5:
+                    msg += "  • SELL trades molto più profittevoli\n"
+                    msg += "  • Considera di tradare più SELL\n"
+                else:
+                    msg += "  • Performance BUY/SELL bilanciata\n"
+            
+            # Warning se un lato perde
+            if buy_stats['count'] > 0 and buy_stats['total_pnl'] < -10:
+                msg += "  • ⚠️ BUY trades in perdita netta\n"
+            if sell_stats['count'] > 0 and sell_stats['total_pnl'] < -10:
+                msg += "  • ⚠️ SELL trades in perdita netta\n"
+            
+            # Best side by win rate
+            if buy_stats['count'] > 0 and sell_stats['count'] > 0:
+                buy_wr = buy_stats['wins'] / buy_stats['count']
+                sell_wr = sell_stats['wins'] / sell_stats['count']
+                
+                if buy_wr > 0.6 and buy_wr > sell_wr:
+                    msg += f"  • ✅ BUY win rate eccellente ({buy_wr*100:.1f}%)\n"
+                elif sell_wr > 0.6 and sell_wr > buy_wr:
+                    msg += f"  • ✅ SELL win rate eccellente ({sell_wr*100:.1f}%)\n"
             
             msg += f"\n💡 Usa /orders [numero] per vedere più ordini\n"
             msg += f"Esempio: /orders 20"
