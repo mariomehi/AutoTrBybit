@@ -1295,6 +1295,9 @@ def is_volume_spike_breakout(df: pd.DataFrame) -> tuple:
     """
     if len(df) < 60:
         return (False, None)
+
+    # 🔧 FIX: Inizializza subito
+    pattern_data = None
     
     # Candele
     curr = df.iloc[-1]
@@ -1443,6 +1446,9 @@ def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
     """
     if len(df) < 50:
         return (False, None)
+
+    # 🔧 FIX: Inizializza subito
+    pattern_data = None
     
     curr = df.iloc[-1]
     
@@ -1830,6 +1836,22 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     """
     if len(df) < 60:
         return (False, None, None)
+
+    # ========================================
+    # 🔧 FIX: Dichiara TUTTE le variabili usate in pattern_data
+    # ========================================
+    rejection_strength = 0.0
+    lower_wick_pct = 0.0
+    upper_wick_pct = 0.0
+    curr_body = 0.0
+    prev_body = 0.0
+    total_range = 0.0
+    was_higher = False
+    distance_to_ema5 = 0.0
+    distance_to_ema10 = 0.0
+    distance_to_ema60 = 0.0
+    above_ema10 = False
+    above_ema60 = False
     
     # ===== STEP 1: ENGULFING BASE CHECK =====
     prev_body_top = max(prev['open'], prev['close'])
@@ -2106,6 +2128,22 @@ def is_bearish_engulfing_enhanced(prev, curr, df):
     """
     if len(df) < 60:
         return (False, None, None)
+
+    # 🔧 FIX: Dichiara TUTTE le variabili
+    rejection_strength = 0.0
+    upper_wick_pct = 0.0
+    lower_wick_pct = 0.0
+    curr_body = 0.0
+    prev_body = 0.0
+    total_range = 0.0
+    had_rally = False
+    rally_depth = 0.0
+    distance_to_ema10 = 0.0
+    distance_to_ema60 = 0.0
+    below_ema10 = False
+    below_ema60 = False
+    close_position = 0.0
+    ema_anti_aligned = False
     
     # ===== STEP 1: ENGULFING BASE CHECK =====
     prev_body_top = max(prev['open'], prev['close'])
@@ -2455,6 +2493,32 @@ def is_morning_star_enhanced(df):
     """
     if len(df) < 60:
         return (False, None, None)
+
+    # 🔧 FIX: Dichiara TUTTE le variabili
+    a_body = 0.0
+    a_range = 0.0
+    a_body_pct = 0.0
+    b_body = 0.0
+    b_range = 0.0
+    recovery_pct = 0.0
+    vol_a = 0.0
+    vol_b = 0.0
+    vol_c = 0.0
+    vol_c_ratio = 0.0
+    pullback_detected = False
+    pullback_depth = 0.0
+    gap_detected = False
+    gap_size = 0.0
+    vol_progression_ok = False
+    fib_recovery = False
+    ema_sandwich = False
+    distance_to_ema10 = 0.0
+    distance_to_ema60 = 0.0
+    b_distance_to_ema10 = 0.0
+    b_distance_to_ema60 = 0.0
+    b_touches_ema60 = False
+    b_touches_ema10 = False
+    ema_aligned = False
     
     # ===== STEP 1: CANDELE DEL PATTERN =====
     a = df.iloc[-3]  # Prima: ribassista grande
@@ -3777,6 +3841,27 @@ def is_pin_bar_bullish_enhanced(candle, df):
     """
     if len(df) < 60:
         return (False, None, None)
+
+    # 🔧 FIX: Dichiara TUTTE le variabili
+    body = 0.0
+    total_range = 0.0
+    lower_wick = 0.0
+    upper_wick = 0.0
+    body_pct = 0.0
+    lower_wick_pct = 0.0
+    upper_wick_pct = 0.0
+    is_bullish = False
+    swept_liquidity = False
+    sweep_depth = 0.0
+    pullback_detected = False
+    pullback_depth = 0.0
+    fib_retracement = False
+    distance_to_ema10 = 0.0
+    distance_to_ema60 = 0.0
+    tail_distance_to_ema10 = 0.0
+    tail_distance_to_ema60 = 0.0
+    close_position = 0.0
+    ema_aligned = False
     
     # ===== STEP 1: PIN BAR ANATOMY CHECK =====
     body = abs(candle['close'] - candle['open'])
