@@ -1316,9 +1316,9 @@ def is_volume_spike_breakout(df: pd.DataFrame) -> tuple:
     
     # Determina threshold da VOLUME_FILTER_MODE
     if VOLUME_FILTER_MODE == 'adaptive':
-        min_volume_ratio = 2.5  # Più permissivo
+        min_volume_ratio = 0.5  # Più permissivo
     else:
-        min_volume_ratio = 3.0  # Default strict
+        min_volume_ratio = 1.0  # Default strict
     
     if volume_ratio < min_volume_ratio:
         return (False, None)
@@ -1512,7 +1512,7 @@ def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
     
     # Volume minimo 1.2x (meno stretto di Sweep che richiede 2x)
     # Perché: bounce su S/R può avere volume normale
-    if vol_ratio < 1.2:
+    if vol_ratio < 0.0:
         return (False, None)
     
     # === STEP 5: EMA 10 CHECK (trend breve intatto) ===
@@ -1534,7 +1534,7 @@ def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
     # Distanza massima 2% da EMA 60
     distance_to_ema60 = abs(curr['close'] - curr_ema60) / curr_ema60
     
-    if distance_to_ema60 > 0.02:
+    if distance_to_ema60 > 0.03:
         return (False, None)
     
     # === STEP 7: QUALITY BONUS (opzionale) ===
@@ -1718,7 +1718,7 @@ def is_higher_low_consolidation_breakout(df: pd.DataFrame) -> tuple:
     vol_ratio = curr_vol / consolidation_vol_avg
     
     # Volume breakout > 2x consolidamento
-    if vol_ratio < 2.0:
+    if vol_ratio < 0.0:
         return (False, None)
     
     # ===== EMA CHECKS (opzionali) =====
@@ -1738,7 +1738,7 @@ def is_higher_low_consolidation_breakout(df: pd.DataFrame) -> tuple:
     if has_higher_lows:
         quality_score += 10
     
-    if vol_ratio > 3.0:
+    if vol_ratio > 0.0:
         quality_score += 10
     
     if above_ema10 and above_ema60:
@@ -1864,7 +1864,7 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     vol_ratio = curr_vol / avg_vol
     
     # Minimum volume threshold
-    if vol_ratio < 1.5:
+    if vol_ratio < 0.0:
         return (False, None, None)
     
     # ===== STEP 3: CALCULATE EMAs =====
@@ -1890,7 +1890,7 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
         breakout_pct = ((curr_price - curr_ema60) / curr_ema60) * 100
         
         # Breakout deve essere significativo (>0.3%) e volume OK
-        if breakout_pct >= 0.3 and vol_ratio >= 2.0:
+        if breakout_pct >= 0.3 and vol_ratio >= 0.0:
             logging.info(
                 f'🚀 Bullish Engulfing ROMPE EMA 60! '
                 f'Breakout: +{breakout_pct:.2f}%, Vol: {vol_ratio:.1f}x'
@@ -1964,17 +1964,17 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     # === TIER 1: GOLD (EMA 60 Bounce) ===
     near_ema60 = distance_to_ema60 < 0.005  # Entro 0.5%
     
-    if near_ema60 and was_higher and vol_ratio >= 2.0 and rejection_strength >= 1.0:
+    if near_ema60 and was_higher and vol_ratio >= 0.0 and rejection_strength >= 1.0:
         tier = 'GOLD'
         quality_score = 90
         
     # === TIER 2: GOOD (EMA 10 Bounce) ===
-    elif distance_to_ema10 < 0.01 and above_ema60 and vol_ratio >= 1.8:
+    elif distance_to_ema10 < 0.01 and above_ema60 and vol_ratio >= 0.0:
         tier = 'GOOD'
         quality_score = 75
         
     # === TIER 3: OK (Generic Engulfing) ===
-    elif above_ema60 and vol_ratio >= 1.5:
+    elif above_ema60 and vol_ratio >= 0.0:
         tier = 'OK'
         quality_score = 60
     
@@ -1989,7 +1989,7 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
         quality_score += 10
     
     # Bonus 2: Volume eccezionale
-    if vol_ratio >= 3.0:
+    if vol_ratio >= 0.0:
         quality_score += 10
     
     # Bonus 3: Rejection molto forte
@@ -2140,7 +2140,7 @@ def is_bearish_engulfing_enhanced(prev, curr, df):
     vol_ratio = curr_vol / avg_vol
     
     # Minimum volume threshold
-    if vol_ratio < 1.8:  # ← Più permissivo per SHORT
+    if vol_ratio < 0.0:  # ← Più permissivo per SHORT
         return (False, None, None)
     
     # ===== STEP 3: CALCULATE EMAs =====
@@ -2210,7 +2210,7 @@ def is_bearish_engulfing_enhanced(prev, curr, df):
         breakdown_pct = ((curr_ema60 - curr_price) / curr_ema60) * 100
         
         # Breakdown deve essere significativo (>0.3%) e volume forte
-        if breakdown_pct >= 0.3 and vol_ratio >= 2.5 and rejection_strength >= 1.0:
+        if breakdown_pct >= 0.3 and vol_ratio >= 0.0 and rejection_strength >= 1.0:
             tier = 'GOLD'
             quality_score = 95
             
@@ -2231,7 +2231,7 @@ def is_bearish_engulfing_enhanced(prev, curr, df):
     # === TIER 3: OK (Generic Bearish Engulfing) ===
     if tier is None:
         # MUST: Deve essere sotto EMA 60 (downtrend)
-        if below_ema60 and vol_ratio >= 1.8:
+        if below_ema60 and vol_ratio >= 0.0:
             tier = 'OK'
             quality_score = 62
     
@@ -2246,7 +2246,7 @@ def is_bearish_engulfing_enhanced(prev, curr, df):
         quality_score += 10
     
     # Bonus 2: Volume eccezionale
-    if vol_ratio >= 3.5:  # ← Più alto per SHORT
+    if vol_ratio >= 0.0:  # ← Più alto per SHORT
         quality_score += 10
     
     # Bonus 3: Upper rejection molto forte
@@ -3153,7 +3153,7 @@ def is_triple_touch_breakout(df: pd.DataFrame) -> tuple:
     vol_ratio = curr_vol / cons_vol_avg
     
     # Volume breakout DEVE essere > 2x consolidamento
-    if vol_ratio < 2.0:
+    if vol_ratio < 0.0:
         logging.debug(f'🚫 Triple Touch: Volume insufficiente ({vol_ratio:.1f}x)')
         return (False, None)
     
@@ -3370,7 +3370,7 @@ def is_breakout_retest(df: pd.DataFrame) -> tuple:
             
             vol_ratio = breakout_vol / consolidation_vol
             
-            if vol_ratio < 2.0:
+            if vol_ratio < 0.0:
                 continue
         else:
             return (False, None)  # Volume essenziale per questo pattern
@@ -3634,7 +3634,7 @@ def is_liquidity_sweep_reversal(df: pd.DataFrame):
     vol_ratio = recovery_vol / avg_vol
     
     # Volume recovery DEVE essere > 2x
-    if vol_ratio < 2.0:
+    if vol_ratio < 0.0:
         return (False, None)
     
     # === STEP 8: CURRENT CANDLE conferma breakout ===
@@ -3826,7 +3826,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     vol_ratio = curr_vol / avg_vol
     
     # Minimum volume threshold (pin bar needs volume)
-    if vol_ratio < 1.5:
+    if vol_ratio < 0.0:
         return (False, None, None)
     
     # ===== STEP 3: CALCULATE EMAs =====
@@ -3914,7 +3914,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     if (tail_near_ema60 and 
         lower_wick_pct >= 0.65 and 
         pullback_detected and 
-        vol_ratio >= 2.5 and
+        vol_ratio >= 0.0 and
         close_position >= 0.5):
         
         tier = 'GOLD'
@@ -3924,7 +3924,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     elif (tail_distance_to_ema10 < 0.01 and 
           curr_price > curr_ema60 and 
           lower_wick_pct >= 0.60 and
-          vol_ratio >= 2.0):
+          vol_ratio >= 0.0):
         
         tier = 'GOOD'
         quality_score = 78
@@ -3932,7 +3932,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     # === TIER 3: OK (Generic Pin Bar) ===
     elif (curr_price > curr_ema60 and 
           lower_wick_pct >= 0.60 and
-          vol_ratio >= 1.5):
+          vol_ratio >= 0.0):
         
         tier = 'OK'
         quality_score = 62
@@ -4428,7 +4428,7 @@ def is_compression_breakout(df: pd.DataFrame):
     vol_ratio = breakout_vol / consolidation_vol
     
     # Volume breakout deve essere > 1.8x consolidamento
-    if vol_ratio < 1.8:
+    if vol_ratio < 0.0:
         logging.debug(f'❌ Compression Breakout: Volume insufficiente ({vol_ratio:.1f}x, serve 1.8x+)')
         return False
     
@@ -4672,8 +4672,8 @@ def is_bullish_flag_breakout(df: pd.DataFrame):
                     
                     # Volume breakout deve essere > 2x consolidamento
                     # E almeno 60% del volume pole (conferma interesse)
-                    volume_ok = (vol_ratio > 2.0 and 
-                                breakout_vol > pole_vol * 0.6)
+                    volume_ok = (vol_ratio > 0.0 and 
+                                breakout_vol > pole_vol * 0.5)
                 else:
                     volume_ok = False
         
