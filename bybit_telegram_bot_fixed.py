@@ -7553,6 +7553,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 tier = pattern_data['tier']
                 score = pattern_data['quality_score']
+                entry_price = pattern_data['X']
                 
                 quality_emoji_map = {
                     'GOLD': '🌟',
