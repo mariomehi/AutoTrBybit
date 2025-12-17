@@ -5617,11 +5617,14 @@ def check_higher_timeframe_resistance(symbol, current_tf, current_price):
     """
     Controlla se ci sono resistenze EMA su timeframe superiori
     
+    NEW: Aggiunge check momentum per evitare entry su HTF in discesa
+    
     Returns:
         {
             'blocked': True/False,
             'htf': '30m' / '4h',
-            'details': 'EMA 5 = $101, EMA 10 = $100.50'
+            'details': 'EMA 5 = $101, EMA 10 = $100.50',
+            'momentum': 'bearish' / 'bullish' / 'neutral'  # NUOVO
         }
     """
     # Mappa timeframe -> higher timeframe
@@ -5645,37 +5648,135 @@ def check_higher_timeframe_resistance(symbol, current_tf, current_price):
         return {'blocked': False}
     
     # Calcola EMA HTF
-    #ema5_htf = df_htf['close'].ewm(span=5, adjust=False).mean().iloc[-1]
-    ema10_htf = df_htf['close'].ewm(span=10, adjust=False).mean().iloc[-1]
-        
-    # ===== CORREZIONE LOGICA =====
-    # Check resistenza (EMA SOTTO il prezzo = resistenza!)
+    ema5_htf = df_htf['close'].ewm(span=5, adjust=False).mean()
+    ema10_htf = df_htf['close'].ewm(span=10, adjust=False).mean()
+    ema60_htf = df_htf['close'].ewm(span=60, adjust=False).mean()
+    
+    curr_ema5 = ema5_htf.iloc[-1]
+    curr_ema10 = ema10_htf.iloc[-1]
+    curr_ema60 = ema60_htf.iloc[-1]
+    
+    # ===== NUOVO: CHECK MOMENTUM HTF =====
+    
+    # 1. Verifica direzione EMA 10
+    prev_ema10 = ema10_htf.iloc[-3]  # 2 candele fa
+    ema10_direction = curr_ema10 - prev_ema10
+    ema10_slope = (ema10_direction / prev_ema10) * 100 if prev_ema10 > 0 else 0
+    
+    # 2. Verifica se prezzo sta rompendo sotto EMA 10
+    curr_htf_close = df_htf['close'].iloc[-1]
+    prev_htf_close = df_htf['close'].iloc[-2]
+    
+    was_above_ema10 = prev_htf_close > ema10_htf.iloc[-2]
+    now_below_ema10 = curr_htf_close < curr_ema10
+    
+    ema10_breakdown = was_above_ema10 and now_below_ema10
+    
+    # 3. Verifica allineamento EMA (bearish = EMA 5 sotto EMA 10)
+    bearish_alignment = curr_ema5 < curr_ema10
+    
+    # 4. Verifica ultimi 3 prezzi in discesa
+    recent_closes = df_htf['close'].iloc[-3:]
+    downtrend_recent = all(recent_closes.iloc[i] > recent_closes.iloc[i+1] 
+                           for i in range(len(recent_closes)-1))
+    
+    # ===== DECISIONE MOMENTUM =====
+    momentum_bearish = False
+    momentum_reason = []
+    
+    # CRITERIO 1: EMA 10 in discesa (slope negativo significativo)
+    if ema10_slope < -0.1:  # Scende più di 0.1%
+        momentum_bearish = True
+        momentum_reason.append(f"EMA 10 declining ({ema10_slope:.2f}%)")
+    
+    # CRITERIO 2: Breakdown EMA 10 appena avvenuto
+    if ema10_breakdown:
+        momentum_bearish = True
+        momentum_reason.append("EMA 10 breakdown (just crossed below)")
+    
+    # CRITERIO 3: EMA bearish alignment + prezzo sotto entrambe
+    if bearish_alignment and curr_htf_close < curr_ema10:
+        momentum_bearish = True
+        momentum_reason.append("Bearish EMA alignment")
+    
+    # CRITERIO 4: Downtrend confermato (3 candele consecutive in discesa)
+    if downtrend_recent:
+        momentum_bearish = True
+        momentum_reason.append("HTF downtrend confirmed (3 lower closes)")
+    
+    # CRITERIO 5: Distanza eccessiva da EMA 60 (overextension = probabile pullback)
+    distance_from_ema60 = (curr_htf_close - curr_ema60) / curr_ema60
+    if distance_from_ema60 > 0.03:  # Più del 3% sopra EMA 60
+        momentum_bearish = True
+        momentum_reason.append(f"Overextended from EMA 60 (+{distance_from_ema60*100:.1f}%)")
+    
+    # ===== FINE CHECK MOMENTUM =====
+    
+    # Check resistenza originale (EMA sopra prezzo)
     if current_tf in ['5m', '15m']:
-        # Per scalping: controlla EMA 5 e 10 su 30m
-        # BLOCCA se EMA 5 o 10 sono SOTTO il prezzo corrente (resistenza sopra)
-        #if ema5_htf > current_price or ema10_htf > current_price:
-        if ema10_htf > current_price:  # ← SOLO EMA 10
-            # EMA sopra = resistenza
-            logging.warning(f'Ema 10 blocca ad HTF {symbol} {htf}')
+        # BLOCCA se:
+        # 1. EMA 10 è sopra prezzo (resistenza) E
+        # 2. Momentum è bearish
+        if curr_ema10 > current_price:
+            if momentum_bearish:
+                logging.warning(
+                    f'🚫 HTF {htf} BLOCKING {symbol}: '
+                    f'EMA 10 resistance + Bearish momentum'
+                )
+                return {
+                    'blocked': True,
+                    'htf': htf,
+                    'details': (
+                        f'EMA 10 ({htf}): ${curr_ema10:.2f}\n'
+                        f'Price: ${current_price:.2f}\n'
+                        f'EMA 10 Slope: {ema10_slope:.2f}%\n'
+                        f'Momentum: BEARISH\n'
+                        f'Reasons: {", ".join(momentum_reason)}'
+                    ),
+                    'momentum': 'bearish'
+                }
+        
+        # BLOCCA anche se momentum è MOLTO bearish, 
+        # anche se EMA non è resistenza diretta
+        if len(momentum_reason) >= 3:  # 3+ segnali bearish
+            logging.warning(
+                f'🚫 HTF {htf} BLOCKING {symbol}: '
+                f'Strong bearish momentum ({len(momentum_reason)} signals)'
+            )
             return {
                 'blocked': True,
                 'htf': htf,
-                'details': f'EMA 10 ({htf}): ${ema10_htf:.2f}\nPrice: ${current_price:.2f}'
+                'details': (
+                    f'HTF Timeframe: {htf}\n'
+                    f'EMA 10: ${curr_ema10:.2f}\n'
+                    f'EMA 10 Slope: {ema10_slope:.2f}%\n'
+                    f'Price: ${current_price:.2f}\n'
+                    f'Momentum: STRONG BEARISH\n'
+                    f'Signals: {", ".join(momentum_reason)}'
+                ),
+                'momentum': 'bearish'
             }
     
     elif current_tf in ['30m', '1h']:
-        # Per day: controlla EMA 60 su 4h
-        ema60_htf = df_htf['close'].ewm(span=60, adjust=False).mean().iloc[-1]
-        
-        # BLOCCA se EMA 60 è SOPRA il prezzo
-        if ema60_htf > current_price:  # 👈 CORRETTO
-            return {
-                'blocked': True,
-                'htf': htf,
-                'details': f'EMA 60 ({htf}): ${ema60_htf:.2f}\nPrice: ${current_price:.2f}'
-            }
+        # Per day trading: check EMA 60 su 4h + momentum
+        if curr_ema60 > current_price:
+            if momentum_bearish:
+                return {
+                    'blocked': True,
+                    'htf': htf,
+                    'details': (
+                        f'EMA 60 ({htf}): ${curr_ema60:.2f}\n'
+                        f'Price: ${current_price:.2f}\n'
+                        f'Momentum: BEARISH\n'
+                        f'Reasons: {", ".join(momentum_reason)}'
+                    ),
+                    'momentum': 'bearish'
+                }
     
-    return {'blocked': False}
+    return {
+        'blocked': False,
+        'momentum': 'bullish' if not momentum_bearish else 'neutral'
+    }
 
 def check_higher_timeframe_support(symbol, current_tf, current_price):
     """
