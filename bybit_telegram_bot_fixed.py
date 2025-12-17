@@ -9427,7 +9427,11 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if pos['side'] != 'Buy':
             continue
         
-        entry = pos['entry_price']
+        #entry = pos['entry_price']
+        entry_price = pos_info.get('entry_price')  # ← USA .get() per safety
+            if not entry_price:
+                logging.error(f"{symbol}: Missing entry_price in position data")
+                continue
         current_sl = pos['sl']
         timeframe_entry = pos['timeframe']
         
