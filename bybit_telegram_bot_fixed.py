@@ -6651,7 +6651,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         # ===== STEP 4: CALCOLA PARAMETRI TRADING =====
         atr_series = atr(df, period=14)
         last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else np.nan
-        
+
+        # 🔧 FIX: Dichiara position_exists SUBITO
+        position_exists = symbol in ACTIVE_POSITIONS
         # ===== STEP 5: COSTRUISCI MESSAGGIO =====
         
         if found and side == 'Buy':
@@ -6692,8 +6694,15 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 return  # BLOCCA segnale
 
+            # Variabili comuni (default)
+            entry_price = last_close
+            sl_price = None
+            tp_price = None
+            ema_used = 'ATR'
+            ema_value = 0
+
             # ===== GESTIONE PATTERN-SPECIFIC ENTRY/SL/TP =====
-            elif pattern == 'Volume Spike Breakout' and pattern_data:
+            if pattern == 'Volume Spike Breakout' and pattern_data:
                 entry_price = last_close  # Entry immediato
                 
                 # SL: EMA 10 o ATR
@@ -7644,7 +7653,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 tier = pattern_data['tier']
                 score = pattern_data['quality_score']
-                entry_price = pattern_data['X']
+                entry_price = pattern_data['ema60']
                 
                 quality_emoji_map = {
                     'GOLD': '🌟',
