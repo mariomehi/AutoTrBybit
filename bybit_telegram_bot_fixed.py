@@ -495,7 +495,7 @@ def create_bybit_session():
 def bybit_get_klines(symbol: str, interval: str, limit: int = 200):
     """
     Ottiene klines da Bybit v5 public API
-    Returns: DataFrame con OHLCV
+    Returns: DataFrame con OHLCV (SOLO candele chiuse)
     """
     itv = BYBIT_INTERVAL_MAP.get(interval)
     if itv is None:
@@ -506,7 +506,7 @@ def bybit_get_klines(symbol: str, interval: str, limit: int = 200):
         'category': 'linear', 
         'symbol': symbol, 
         'interval': itv, 
-        'limit': limit
+        'limit': limit + 1  # ← RICHIEDI 1 candela in più
     }
     
     try:
@@ -530,7 +530,15 @@ def bybit_get_klines(symbol: str, interval: str, limit: int = 200):
         df['timestamp'] = pd.to_datetime(df['timestamp'].astype(float), unit='ms')
         df.set_index('timestamp', inplace=True)
         df = df[['open','high','low','close','volume']].astype(float)
-        # Debug: Verifica volume
+        
+        # ===== AGGIUNGI QUESTO BLOCCO =====
+        # Rimuovi l'ultima candela (in formazione)
+        if len(df) > 0:
+            df = df.iloc[:-1]  # ← SCARTA L'ULTIMA RIGA
+            logging.debug(f"{symbol} {interval}: Removed last candle (in formation), using {len(df)} closed candles")
+        # ===== FINE BLOCCO =====
+        
+        # Debug volume (dopo aver rimosso ultima candela)
         if len(df) > 0:
             vol_sum = df['volume'].sum()
             vol_mean = df['volume'].mean()
@@ -549,7 +557,6 @@ def bybit_get_klines(symbol: str, interval: str, limit: int = 200):
     except Exception as e:
         logging.error(f'Errore nel parsing klines: {e}')
         return pd.DataFrame()
-
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """Calcola Average True Range"""
