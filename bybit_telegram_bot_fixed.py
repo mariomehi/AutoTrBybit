@@ -6258,6 +6258,40 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             if not entry_price:
                 logging.error(f"{symbol}: Missing entry_price in position data")
                 continue
+
+            # ===== AGGIUNGI QUESTO BLOCCO =====
+            # Verifica che la posizione esista REALMENTE su Bybit
+            try:
+                session = create_bybit_session()
+                positions_response = session.get_positions(
+                    category='linear',
+                    symbol=symbol
+                )
+                
+                if positions_response.get('retCode') == 0:
+                    pos_list = positions_response.get('result', {}).get('list', [])
+                    
+                    # Cerca posizione attiva per questo symbol
+                    real_position = None
+                    for p in pos_list:
+                        if float(p.get('size', 0)) > 0:
+                            real_position = p
+                            break
+                    
+                    if not real_position:
+                        logging.warning(f"{symbol}: No active position on Bybit, removing from tracking")
+                        with POSITIONS_LOCK:
+                            if symbol in ACTIVE_POSITIONS:
+                                del ACTIVE_POSITIONS[symbol]
+                        continue
+                else:
+                    logging.error(f"{symbol}: Error checking position: {positions_response.get('retMsg')}")
+                    continue
+                    
+            except Exception as e:
+                logging.error(f"{symbol}: Error verifying position: {e}")
+                continue
+            # ===== FINE BLOCCO =====
                 
             current_sl = pos_info['sl']
             timeframe_entry = pos_info.get('timeframe', '15m')
