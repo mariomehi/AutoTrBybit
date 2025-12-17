@@ -6234,7 +6234,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
     - 1.0%: Tight trail (buffer stretto 0.1%)
     - 2.0%: Ultra tight trail (buffer ultra 0.05%)
     """
-    """
+    
     if not TRAILING_STOP_ENABLED:
         return
     
