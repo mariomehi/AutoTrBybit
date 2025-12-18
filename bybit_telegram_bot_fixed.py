@@ -495,7 +495,7 @@ def create_bybit_session():
 def bybit_get_klines(symbol: str, interval: str, limit: int = 200):
     """
     Ottiene klines da Bybit v5 public API
-    Returns: DataFrame con OHLCV (SOLO candele chiuse)
+    Returns: DataFrame con OHLCV
     """
     itv = BYBIT_INTERVAL_MAP.get(interval)
     if itv is None:
@@ -506,7 +506,7 @@ def bybit_get_klines(symbol: str, interval: str, limit: int = 200):
         'category': 'linear', 
         'symbol': symbol, 
         'interval': itv, 
-        'limit': limit + 1  # ← RICHIEDI 1 candela in più
+        'limit': limit
     }
     
     try:
@@ -530,15 +530,7 @@ def bybit_get_klines(symbol: str, interval: str, limit: int = 200):
         df['timestamp'] = pd.to_datetime(df['timestamp'].astype(float), unit='ms')
         df.set_index('timestamp', inplace=True)
         df = df[['open','high','low','close','volume']].astype(float)
-        
-        # ===== AGGIUNGI QUESTO BLOCCO =====
-        # Rimuovi l'ultima candela (in formazione)
-        if len(df) > 0:
-            df = df.iloc[:-1]  # ← SCARTA L'ULTIMA RIGA
-            logging.debug(f"{symbol} {interval}: Removed last candle (in formation), using {len(df)} closed candles")
-        # ===== FINE BLOCCO =====
-        
-        # Debug volume (dopo aver rimosso ultima candela)
+        # Debug: Verifica volume
         if len(df) > 0:
             vol_sum = df['volume'].sum()
             vol_mean = df['volume'].mean()
@@ -6674,6 +6666,37 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 )
             return
 
+        # ===== AGGIUNGI QUESTO CHECK =====
+        # Verifica età ultima candela per escludere quella corrente (in formazione)
+        last_candle_time = df.index[-1]
+        now_utc = datetime.now(timezone.utc)
+        
+        # Calcola quanti secondi sono passati dall'apertura dell'ultima candela
+        time_diff = (now_utc - last_candle_time).total_seconds()
+        
+        # Ottieni durata timeframe in secondi
+        interval_seconds = INTERVAL_SECONDS.get(timeframe, 300)
+        
+        # Se l'ultima candela è troppo recente (meno del 90% del timeframe),
+        # è ancora in formazione → usa la penultima
+        threshold = interval_seconds * 0.9  # 90% del timeframe
+        
+        if time_diff < threshold:
+            logging.debug(
+                f"{symbol} {timeframe}: Last candle too recent "
+                f"({time_diff:.0f}s < {threshold:.0f}s threshold), "
+                f"using previous closed candle"
+            )
+            # Rimuovi ultima candela (quella in formazione)
+            df = df.iloc[:-1]
+            
+            if df.empty:
+                logging.warning(f'{symbol} {timeframe}: No closed candles available')
+                return
+        
+        # Ora df contiene SOLO candele chiuse
+        # ===== FINE BLOCCO =====
+
         last_close = df['close'].iloc[-1]
         last_time = df.index[-1]
         timestamp_str = last_time.strftime('%Y-%m-%d %H:%M UTC')
@@ -7105,6 +7128,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Risk calculation
                 # ===== DYNAMIC RISK CALCULATION =====
                 # Calcola risk basato su EMA score
+                # Prima di usare risk_base
+                risk_base = RISKUSD  # default sempre definito
                 if ema_analysis and 'score' in ema_analysis:
                     ema_score = ema_analysis['score']
                     risk_base = calculate_dynamic_risk(ema_score)
@@ -7263,6 +7288,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Risk calculation
                 # ===== DYNAMIC RISK CALCULATION =====
                 # Calcola risk basato su EMA score
+                # Prima di usare risk_base
+                risk_base = RISK_USD  # default sempre definito
                 if ema_analysis and 'score' in ema_analysis:
                     ema_score = ema_analysis['score']
                     risk_base = calculate_dynamic_risk(ema_score)
@@ -7460,6 +7487,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Risk calculation
                 # ===== DYNAMIC RISK CALCULATION =====
                 # Calcola risk basato su EMA score
+                # Prima di usare risk_base
+                risk_base = RISKUSD  # default sempre definito
                 if ema_analysis and 'score' in ema_analysis:
                     ema_score = ema_analysis['score']
                     risk_base = calculate_dynamic_risk(ema_score)
