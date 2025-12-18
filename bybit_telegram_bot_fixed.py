@@ -1846,11 +1846,11 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     prev_body = 0.0
     total_range = 0.0
     was_higher = False
-    distance_to_ema5 = 0.0
-    distance_to_ema10 = 0.0
-    distance_to_ema60 = 0.0
-    above_ema10 = False
-    above_ema60 = False
+    distance_to_ema5 = 0.0   # ← AGGIUNGI
+    distance_to_ema10 = 0.0  # ← AGGIUNGI
+    distance_to_ema60 = 0.0  # ← AGGIUNGI
+    above_ema10 = False      # ← AGGIUNGI
+    above_ema60 = False      # ← AGGIUNGI
     
     # ===== STEP 1: ENGULFING BASE CHECK =====
     prev_body_top = max(prev['open'], prev['close'])
