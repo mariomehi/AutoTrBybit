@@ -7617,6 +7617,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             #risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
             #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
             # Apply symbol-specific override se configurato
+            risk_base = RISK_USD
             if symbol in SYMBOL_RISK_OVERRIDE:
                 risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
                 logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
