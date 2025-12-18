@@ -6669,9 +6669,11 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         # ===== AGGIUNGI QUESTO CHECK =====
         # Verifica età ultima candela per escludere quella corrente (in formazione)
         last_candle_time = df.index[-1]
-        now_utc = datetime.now(timezone.utc)
+        if last_candle_time.tzinfo is None:
+            last_candle_time = last_candle_time.tz_localize('UTC')
         
         # Calcola quanti secondi sono passati dall'apertura dell'ultima candela
+        now_utc = datetime.now(timezone.utc)
         time_diff = (now_utc - last_candle_time).total_seconds()
         
         # Ottieni durata timeframe in secondi
