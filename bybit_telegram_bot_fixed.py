@@ -7131,7 +7131,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # ===== DYNAMIC RISK CALCULATION =====
                 # Calcola risk basato su EMA score
                 # Prima di usare risk_base
-                risk_base = RISKUSD  # default sempre definito
+                risk_base = RISK_USD  # default sempre definito
                 if ema_analysis and 'score' in ema_analysis:
                     ema_score = ema_analysis['score']
                     risk_base = calculate_dynamic_risk(ema_score)
@@ -7490,7 +7490,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # ===== DYNAMIC RISK CALCULATION =====
                 # Calcola risk basato su EMA score
                 # Prima di usare risk_base
-                risk_base = RISKUSD  # default sempre definito
+                risk_base = RISK_USD  # default sempre definito
                 if ema_analysis and 'score' in ema_analysis:
                     ema_score = ema_analysis['score']
                     risk_base = calculate_dynamic_risk(ema_score)
