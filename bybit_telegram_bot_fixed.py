@@ -221,7 +221,7 @@ AUTO_DISCOVERY_CONFIG = {
     'top_count': 10,  # Top 10 symbols
     'timeframe': '5m',  # Timeframe da analizzare
     'autotrade': True,  # Autotrade per auto-discovery (False = solo notifiche)
-    'update_interval': 14400,  # 12 ore in secondi (12 * 60 * 60)
+    'update_interval': 7200,  # 2 ore in secondi (12 * 60 * 60)
     'min_volume_usdt': 5000000,  # Min volume 24h: 10M USDT
     'min_price_change': 5.0,  # Min variazione 24h: +5%
     'max_price_change': 110.0,  # Max variazione 24h: +110% (evita pump & dump)
