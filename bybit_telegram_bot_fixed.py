@@ -6206,17 +6206,17 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                         return {'error': 'Limit order timeout, no fill'}
         
         else:
-        # Piazza ordine market con SL e TP
-        order = session.place_order(
-            category='linear',  # USDT Perpetual
-            symbol=symbol,
-            side=side,
-            orderType='Market',
-            qty=str(qty),
-            stopLoss=str(sl_price),
-            takeProfit=str(tp_price),
-            positionIdx=0  # One-way mode
-        )
+            # Piazza ordine market con SL e TP
+            order = session.place_order(
+                category='linear',  # USDT Perpetual
+                symbol=symbol,
+                side=side,
+                orderType='Market',
+                qty=str(qty),
+                stopLoss=str(sl_price),
+                takeProfit=str(tp_price),
+                positionIdx=0  # One-way mode
+            )
         
         logging.info(f'✅ Ordine eseguito: {order}')
         
