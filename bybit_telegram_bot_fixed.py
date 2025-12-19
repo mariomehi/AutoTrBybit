@@ -170,6 +170,14 @@ EMA_FILTER_ENABLED = True  # Abilita/disabilita filtro EMA
 # 'off' = Nessun filtro EMA (solo pattern)
 EMA_FILTER_MODE = 'loose'  # 'strict', 'loose', 'off'
 
+HTF_MOMENTUM_CONFIG = {
+    'enabled': True,
+    'min_bearish_signals': 2,  # Min segnali bearish per bloccare (2-4)
+    'ema10_slope_threshold': -0.1,  # % slope negativo per considerare bearish
+    'overextension_threshold': 0.03,  # % sopra EMA 60 = overextended
+    'strong_candle_body_min': 0.60,  # Corpo minimo candela forte
+}
+
 # Configurazione EMA per diversi timeframe
 EMA_CONFIG = {
     # Scalping (5m, 15m) - Focus su EMA veloci
@@ -452,6 +460,26 @@ MARKET_TIME_FILTER_ENABLED = True
 MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = {1, 2, 3, 4}
 # Modalità: se True blocca solo autotrade, se False blocca anche analisi pattern
 MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY = True
+
+# Aggiungi configurazione pattern-specific
+PATTERN_ORDER_TYPE = {
+    # Pattern veloci → MARKET (no time to wait)
+    'volume_spike_breakout': 'market',
+    'liquidity_sweep_reversal': 'market',
+    'pin_bar_bullish': 'market',
+    
+    # Pattern lenti → LIMIT (hai tempo)
+    'breakout_retest': 'limit',       # Retest = hai tempo
+    'bullish_flag_breakout': 'limit', # Flag = setup lento
+    'morning_star': 'limit',          # 3 candele = lento
+    'bullish_engulfing': 'limit',     # 2 candele = tempo
+}
+
+LIMIT_ORDER_CONFIG = {
+    'offset_pct': 0.0015,  # Entry 0.15% SOTTO prezzo corrente
+    'timeout_seconds': 60,  # Cancella se non fill in 60s
+    'fallback_to_market': True,  # Se timeout → prova market
+}
 
 def is_good_trading_time_utc(now=None) -> tuple[bool, str]:
     """
@@ -1318,11 +1346,26 @@ def is_volume_spike_breakout(df: pd.DataFrame) -> tuple:
     
     # Determina threshold da VOLUME_FILTER_MODE
     if VOLUME_FILTER_MODE == 'adaptive':
-        min_volume_ratio = 0.5  # Più permissivo
+        min_volume_ratio = 2.0  # Più permissivo
     else:
-        min_volume_ratio = 1.0  # Default strict
+        min_volume_ratio = 2.5  # Default strict
     
     if volume_ratio < min_volume_ratio:
+        return (False, None)
+
+    # ===== AGGIUNGI: Check overextension da EMA 10 =====
+    distance_from_ema10 = abs(curr['close'] - curr_ema10) / curr_ema10
+    if distance_from_ema10 > 0.008:  # Max 0.8% da EMA 10
+        logging.debug(f'Volume Spike: Prezzo troppo esteso da EMA 10 ({distance_from_ema10*100:.2f}%)')
+        return (False, None)
+    
+    # ===== AGGIUNGI: Verifica che non sia già pump esaurito =====
+    # Ultimi 3 prezzi NON devono essere tutti in salita verticale
+    recent_3 = df['close'].iloc[-3:]
+    vertical_pump = all(recent_3.iloc[i+1] > recent_3.iloc[i] * 1.005 for i in range(2))
+    
+    if vertical_pump:
+        logging.debug(f'Volume Spike: Pump già in atto, skip per evitare top')
         return (False, None)
     
     # === CHECK 2: CANDELA VERDE FORTE ===
@@ -1400,14 +1443,20 @@ def is_volume_spike_breakout(df: pd.DataFrame) -> tuple:
 
 def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
     """
-    🥉 SUPPORT/RESISTANCE BOUNCE
+    🥉 SUPPORT/RESISTANCE BOUNCE (OPTIMIZED FOR 5m)
     
     Win Rate: 52-58% (5m), 56-62% (15m)
     Risk:Reward: 1.6:1 medio
     
+    MODIFICHE per 5m:
+    ✅ Lookback ridotto da 50 a 30 candele (2.5h invece di 4h)
+    ✅ Support deve essere toccato RECENTEMENTE (max 15 candele fa)
+    ✅ Volume threshold ridotto a 1.0x per velocità 5m
+    ✅ Distance check EMA 60 esteso a 3% per maggiore flessibilità
+    
     COME FUNZIONA:
     ============================================
-    1. Identifica livelli S/R significativi (ultimi 50 periodi)
+    1. Identifica livelli S/R significativi (ultimi 30 periodi)
     2. Prezzo "tocca" support (bounce zone ±0.5%)
     3. Candela verde con REJECTION (ombra lunga sotto)
     4. Volume superiore alla media
@@ -1423,21 +1472,22 @@ def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
     FILTRI USATI:
     ============================================
     ✅ Filtri GLOBALI:
-       - Volume > 1.5x media (check_patterns)
+       - Volume > 1.0x media (più permissivo per 5m)
        - Uptrend structure (check_patterns)
        - ATR expanding (warning only)
     
     ✅ Filtri INTERNI:
-       - Volume > 1.2x media (meno stretto di Sweep)
+       - Volume > 1.0x media
        - Support toccato 3+ volte (valido)
+       - Support toccato max 15 candele fa (fresco)
        - Rejection: wick >= corpo
        - Close sopra/vicino EMA 10 (trend OK)
-       - Distanza < 2% da EMA 60 (non troppo lontano)
+       - Distanza < 3% da EMA 60 (esteso per 5m)
     
     EMA USATE:
     ============================================
     - EMA 10: Check trend breve (momentum)
-    - EMA 60: Check trend medio (distanza max 2%)
+    - EMA 60: Check trend medio (distanza max 3%)
     - NO EMA 5, 223 (non rilevanti per questo pattern)
     
     Returns:
@@ -1452,8 +1502,9 @@ def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
     curr = df.iloc[-1]
     
     # === STEP 1: IDENTIFICA SUPPORT LEVEL ===
-    # Support = zona con più "touches" negli ultimi 50 periodi
-    lookback_lows = df['low'].iloc[-50:-1]
+    # MODIFICA: Lookback ridotto per 5m
+    lookback = 30  # Era 50 → 2.5 ore invece di 4 ore
+    lookback_lows = df['low'].iloc[-lookback:-1]
     
     # Trova i 5 low più bassi
     sorted_lows = lookback_lows.nsmallest(5)
@@ -1467,6 +1518,19 @@ def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
     
     # Support deve essere significativo (3+ touches)
     if touches < 3:
+        return (False, None)
+    
+    # ===== AGGIUNGI: Support deve essere toccato RECENTEMENTE =====
+    # Per 5m, support vecchio è irrilevante
+    last_touch_idx = None
+    for i in range(len(lookback_lows)-1, -1, -1):
+        if abs(lookback_lows.iloc[i] - support_level) <= tolerance:
+            last_touch_idx = i
+            break
+    
+    # Se ultimo tocco > 15 candele fa (75 min su 5m), support non è fresco
+    if last_touch_idx is not None and last_touch_idx < len(lookback_lows) - 15:
+        logging.debug(f'S/R Bounce: Support non recente (ultimo tocco {len(lookback_lows) - last_touch_idx} candele fa)')
         return (False, None)
     
     # === STEP 2: PREZZO TOCCA SUPPORT ===
@@ -1515,9 +1579,9 @@ def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
     
     vol_ratio = curr_vol / avg_vol
     
-    # Volume minimo 1.2x (meno stretto di Sweep che richiede 2x)
-    # Perché: bounce su S/R può avere volume normale
-    if vol_ratio < 0.0:
+    # MODIFICA: Volume minimo 1.0x (più permissivo per 5m)
+    # Era 1.2x → troppo stretto per velocità 5m
+    if vol_ratio < 1.0:
         return (False, None)
     
     # === STEP 5: EMA 10 CHECK (trend breve intatto) ===
@@ -1536,7 +1600,8 @@ def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
     ema_60 = df['close'].ewm(span=60, adjust=False).mean()
     curr_ema60 = ema_60.iloc[-1]
     
-    # Distanza massima 2% da EMA 60
+    # MODIFICA: Distanza massima 3% da EMA 60 (era 2%)
+    # Più permissivo per 5m per non perdere setup validi
     distance_to_ema60 = abs(curr['close'] - curr_ema60) / curr_ema60
     
     if distance_to_ema60 > 0.03:
@@ -1548,6 +1613,9 @@ def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
     
     # Rejection strength (quanto è forte il wick rispetto al corpo)
     rejection_strength = lower_wick / body if body > 0 else 1.0
+    
+    # ===== AGGIUNGI: Calcola freshness del support =====
+    support_freshness = 'fresh' if last_touch_idx is not None and last_touch_idx >= len(lookback_lows) - 5 else 'recent'
     
     # === PATTERN CONFERMATO ===
     pattern_data = {
@@ -1561,7 +1629,9 @@ def is_support_resistance_bounce(df: pd.DataFrame) -> tuple:
         'near_ema60': near_ema60,
         'body_pct': body_pct,
         'lower_wick_pct': lower_wick / total_range,
-        'tier': 1  # High priority (Tier 1)
+        'support_freshness': support_freshness,  # NUOVO
+        'last_touch_candles_ago': len(lookback_lows) - last_touch_idx if last_touch_idx is not None else None,  # NUOVO
+        'tier': 2  # Good (Tier 2) - considerato medio per 5m
     }
     
     return (True, pattern_data)
@@ -1822,12 +1892,13 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     TIER 3 - OK Setup (52-55% win): ⚠️
     ├─ Engulfing generico
     ├─ Sopra EMA 60 (solo trend filter)
-    ├─ Volume 1.5x+
+    ├─ Volume 1.8x+ (was 1.5x)
     └─ → Entry ACCETTABILE (minimal edge)
     
     REJECTION:
     ├─ Sotto EMA 60 (downtrend)
-    ├─ Volume < 1.5x
+    ├─ Volume < 1.8x (was 1.5x)
+    ├─ Prev candle capitulation (volume 3x+)
     └─ Troppo lontano da EMA (>2%)
     
     Returns:
@@ -1846,11 +1917,11 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     prev_body = 0.0
     total_range = 0.0
     was_higher = False
-    distance_to_ema5 = 0.0   # ← AGGIUNGI
-    distance_to_ema10 = 0.0  # ← AGGIUNGI
-    distance_to_ema60 = 0.0  # ← AGGIUNGI
-    above_ema10 = False      # ← AGGIUNGI
-    above_ema60 = False      # ← AGGIUNGI
+    distance_to_ema5 = 0.0
+    distance_to_ema10 = 0.0
+    distance_to_ema60 = 0.0
+    above_ema10 = False
+    above_ema60 = False
     
     # ===== STEP 1: ENGULFING BASE CHECK =====
     prev_body_top = max(prev['open'], prev['close'])
@@ -1884,8 +1955,23 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     
     vol_ratio = curr_vol / avg_vol
     
-    # Minimum volume threshold
-    if vol_ratio < 0.0:
+    # ===== NUOVO: Check candela precedente non deve essere capitulation =====
+    # Se candela precedente ha volume 3x+ = capitulation, engulfing meno affidabile
+    if len(vol) >= 22:
+        prev_vol = vol.iloc[-2]
+        avg_vol_before = vol.iloc[-22:-2].mean()
+        
+        if avg_vol_before > 0:
+            prev_vol_ratio = prev_vol / avg_vol_before
+            
+            # Se prev aveva volume panic (3x+), skip engulfing
+            if prev_vol_ratio > 3.0:
+                logging.debug(f'Engulfing: Candela prev era capitulation (vol {prev_vol_ratio:.1f}x), skip')
+                return (False, None, None)
+    
+    # ===== MODIFICA: Volume threshold più alto (1.8x invece di 1.5x) =====
+    # Engulfing su timeframe veloci richiede conferma volume forte
+    if vol_ratio < 1.8:  # Era 1.5
         return (False, None, None)
     
     # ===== STEP 3: CALCULATE EMAs =====
@@ -1922,7 +2008,7 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
         breakout_pct = ((curr_price - curr_ema60) / curr_ema60) * 100
         
         # Breakout deve essere significativo (>0.3%) e volume OK
-        if breakout_pct >= 0.3 and vol_ratio >= 0.0:
+        if breakout_pct >= 0.3 and vol_ratio >= 1.8:  # Usa 1.8x
             logging.info(
                 f'🚀 Bullish Engulfing ROMPE EMA 60! '
                 f'Breakout: +{breakout_pct:.2f}%, Vol: {vol_ratio:.1f}x'
@@ -1964,7 +2050,7 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
         return (False, None, None)
     
     lower_wick_pct = lower_wick / total_range
-    upper_wick_pct = upper_wick / total_range  # ← AGGIUNGI QUESTA SE MANCA
+    upper_wick_pct = upper_wick / total_range
     rejection_strength = lower_wick / curr_body if curr_body > 0 else 0
     
     # ===== STEP 6: PULLBACK DETECTION =====
@@ -1980,14 +2066,11 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
         if max_recent > curr_price * 1.008:
             was_higher = True
     
-    # ===== STEP 7: EMA DISTANCE CALCULATION =====
-    #distance_to_ema5 = abs(curr_price - curr_ema5) / curr_ema5
-    #distance_to_ema10 = abs(curr_price - curr_ema10) / curr_ema10
-    #distance_to_ema60 = abs(curr_price - curr_ema60) / curr_ema60
+    # ===== STEP 7: EMA DISTANCE CALCULATION (già fatto sopra) =====
+    # distance_to_ema5, distance_to_ema10, distance_to_ema60 già calcolati
     
     # Check se prezzo è SOPRA o SOTTO l'EMA (per pullback)
-    above_ema10 = curr_price > curr_ema10
-    above_ema60 = curr_price > curr_ema60
+    # above_ema10, above_ema60 già calcolati
     
     # ===== STEP 8: TIER CLASSIFICATION =====
     
@@ -1997,17 +2080,17 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     # === TIER 1: GOLD (EMA 60 Bounce) ===
     near_ema60 = distance_to_ema60 < 0.005  # Entro 0.5%
     
-    if near_ema60 and was_higher and vol_ratio >= 0.0 and rejection_strength >= 1.0:
+    if near_ema60 and was_higher and vol_ratio >= 2.0 and rejection_strength >= 1.0:
         tier = 'GOLD'
         quality_score = 90
         
     # === TIER 2: GOOD (EMA 10 Bounce) ===
-    elif distance_to_ema10 < 0.01 and above_ema60 and vol_ratio >= 0.0:
+    elif distance_to_ema10 < 0.01 and above_ema60 and vol_ratio >= 1.8:  # Usa 1.8x
         tier = 'GOOD'
         quality_score = 75
         
     # === TIER 3: OK (Generic Engulfing) ===
-    elif above_ema60 and vol_ratio >= 0.0:
+    elif above_ema60 and vol_ratio >= 1.8:  # Usa 1.8x
         tier = 'OK'
         quality_score = 60
     
@@ -2022,7 +2105,7 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
         quality_score += 10
     
     # Bonus 2: Volume eccezionale
-    if vol_ratio >= 0.0:
+    if vol_ratio >= 2.5:
         quality_score += 10
     
     # Bonus 3: Rejection molto forte
@@ -2030,7 +2113,6 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
         quality_score += 10
     
     # Bonus 4: EMA alignment (EMA 5 > EMA 10 > EMA 60)
-    ema_aligned = curr_ema5 > curr_ema10 > curr_ema60
     if ema_aligned:
         quality_score += 5
     
@@ -2080,7 +2162,7 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
         
         # Rejection info
         'lower_wick_pct': lower_wick_pct * 100,
-        'upper_wick_pct': (upper_wick / total_range) * 100,
+        'upper_wick_pct': upper_wick_pct * 100,
         'rejection_strength': rejection_strength,
         
         # Pullback info
@@ -3153,11 +3235,18 @@ def is_triple_touch_breakout(df: pd.DataFrame) -> tuple:
     cons_lows = consolidation['low']
     
     # OGNI low deve essere sopra EMA 60
-    all_above_ema60 = (cons_lows > ema60_during_cons).all()
+    #all_above_ema60 = (cons_lows > ema60_during_cons).all()
+    ema_10 = df['close'].ewm(span=10, adjust=False).mean()
+    ema_10_pattern = ema_10.iloc[pattern_start_idx:]
+    all_lows_above_ema10 = (pattern_candles['low'] > ema_10_pattern * 0.998).all()
     
-    if not all_above_ema60:
-        logging.debug(f'🚫 Triple Touch: Consolidamento rompe sotto EMA 60')
+    if not all_lows_above_ema10:
+        logging.debug(f'Triple Touch: Pattern rompe sotto EMA 10')
         return (False, None)
+    
+    #if not all_above_ema60:
+    #    logging.debug(f'🚫 Triple Touch: Consolidamento rompe sotto EMA 60')
+    #   return (False, None)
     
     # ===== CRITICAL: VERIFICA EMA 60 DURANTE TUTTO IL PATTERN =====
     # Dal touch 1 fino a corrente
@@ -3393,6 +3482,12 @@ def is_breakout_retest(df: pd.DataFrame) -> tuple:
     touches_support = (consolidation['low'] <= support + tolerance_s).sum()
     
     if touches_resistance < 3 or touches_support < 3:
+        return (False, None)
+
+    # ===== AGGIUNGI: Volatilità consolidamento deve essere BASSA =====
+    # Per 5m, consolidamento valido = range < 0.5%
+    if timeframe == '5m' and consolidation_range_pct > 0.5:
+        logging.debug(f'Breakout+Retest: Range consolidamento troppo ampio per 5m ({consolidation_range_pct:.2f}%)')
         return (False, None)
     
     # ===== FASE 2: IDENTIFICA BREAKOUT =====
@@ -3692,7 +3787,7 @@ def is_liquidity_sweep_reversal(df: pd.DataFrame):
     else:
         recovery_pct = 1.0
     
-    if recovery_pct < 0.80:
+    if recovery_pct < 0.60:
         return (False, None)
     
     # === STEP 7: VOLUME SPIKE su recovery (MUST HAVE) ===
@@ -3709,7 +3804,14 @@ def is_liquidity_sweep_reversal(df: pd.DataFrame):
     vol_ratio = recovery_vol / avg_vol
     
     # Volume recovery DEVE essere > 2x
-    if vol_ratio < 0.0:
+    if vol_ratio < 0.5:
+        return (False, None)
+
+    # ===== AGGIUNGI: Verifica che sweep non sia troppo profondo =====
+    # Se sweep > 1% sotto previous low = probabile breakdown, non sweep
+    sweep_depth = abs(sweep_low - previous_low) / previous_low
+    if sweep_depth > 0.01:  # Max 1%
+        logging.debug(f'Liquidity Sweep: Sweep troppo profondo ({sweep_depth*100:.2f}%), probabile breakdown')
         return (False, None)
     
     # === STEP 8: CURRENT CANDLE conferma breakout ===
@@ -3893,7 +3995,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     upper_wick_pct = upper_wick / total_range
     
     # === CHECK 1: Lower wick MUST be >= 60% range ===
-    if lower_wick_pct < 0.60:
+    if lower_wick_pct < 0.55:
         return (False, None, None)
     
     # === CHECK 2: Upper wick MUST be <= 30% range ===
@@ -4640,7 +4742,7 @@ def is_bullish_flag_breakout(df: pd.DataFrame):
     # - Breakout: candela -1 (corrente)
     
     # Testa diverse lunghezze flag (da 3 a 8 candele)
-    for flag_duration in range(3, 9):  # 3, 4, 5, 6, 7, 8
+    for flag_duration in range(2, 10):  # 3, 4, 5, 6, 7, 8
         pole_index = -(flag_duration + 2)  # Pole è prima del flag
         
         if len(df) < abs(pole_index):
@@ -4768,8 +4870,8 @@ def is_bullish_flag_breakout(df: pd.DataFrame):
                     
                     # Volume breakout deve essere > 2x consolidamento
                     # E almeno 60% del volume pole (conferma interesse)
-                    volume_ok = (vol_ratio > 0.0 and 
-                                breakout_vol > pole_vol * 0.5)
+                    volume_ok = (vol_ratio > 0.5 and 
+                                breakout_vol > pole_vol * 0.4)
                 else:
                     volume_ok = False
         
@@ -5919,6 +6021,9 @@ def check_compression_htf_resistance(symbol: str, current_tf: str, current_price
 
 async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float, entry_price: float, timeframe: str, chat_id: int):
     """
+    Piazza ordine su Bybit (Market o Limit)
+    NEW: Supporta ordini LIMIT per pattern lenti
+    
     Piazza ordine market su Bybit (Demo o Live)
     Controlla REALMENTE su Bybit se esiste già una posizione aperta
     
@@ -5929,11 +6034,13 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     - sl_price: prezzo stop loss
     - tp_price: prezzo take profit
     """
-    logging.info(f'📤 Placing order: {symbol} {side} qty={qty:.4f}')
-    logging.info(f'   Entry: ${entry_price:.4f}')
-    logging.info(f'   SL: ${sl_price:.4f}')
-    logging.info(f'   TP: ${tp_price:.4f}')
-    logging.info(f'   Mode: {TRADING_MODE}')
+    # Determina tipo ordine
+    order_type = 'Market'  # Default
+
+    if pattern_name and pattern_name in PATTERN_ORDER_TYPE:
+        order_type = 'Market' if PATTERN_ORDER_TYPE[pattern_name] == 'market' else 'Limit'
+
+    logging.info(f'📤 Placing {order_type} order: {symbol} {side} qty={qty:.4f} Entry: ${entry_price:.4f} SL: ${sl_price:.4f} TP: ${tp_price:.4f} Mode: {TRADING_MODE}')
     
     if BybitHTTP is None:
         return {'error': 'pybit non disponibile'}
@@ -6013,7 +6120,92 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         
         logging.info(f'📤 Piazzando ordine {side} per {symbol}')
         logging.info(f'   Qty: {qty} | SL: {sl_price} | TP: {tp_price}')
+
+
+        if order_type == 'Limit':
+            # ===== LIMIT ORDER =====
+            # Calcola prezzo limit (entry - offset per BUY)
+            offset = LIMIT_ORDER_CONFIG['offset_pct']
+            
+            if side == 'Buy':
+                limit_price = entry_price * (1 - offset)  # Sotto prezzo corrente
+            else:
+                limit_price = entry_price * (1 + offset)  # Sopra prezzo corrente
+            
+            # Arrotonda prezzo
+            price_decimals = get_price_decimals(limit_price)
+            limit_price = round(limit_price, price_decimals)
+            
+            logging.info(f'📍 Limit price: ${limit_price:.{price_decimals}f} (entry: ${entry_price:.{price_decimals}f})')
+            
+            # Piazza ordine LIMIT
+            order = session.place_order(
+                category='linear',
+                symbol=symbol,
+                side=side,
+                orderType='Limit',
+                qty=str(qty),
+                price=str(limit_price),  # ← Prezzo limit
+                stopLoss=str(sl_price),
+                takeProfit=str(tp_price),
+                positionIdx=0,
+                timeInForce='GTC'  # Good Till Cancel
+            )
+            
+            if order.get('retCode') == 0:
+                order_id = order.get('result', {}).get('orderId')
+                
+                # ===== WAIT FOR FILL (con timeout) =====
+                timeout = LIMIT_ORDER_CONFIG['timeout_seconds']
+                start_time = time.time()
+                filled = False
+                
+                while time.time() - start_time < timeout:
+                    # Check se ordine è fillato
+                    order_status = session.get_open_orders(
+                        category='linear',
+                        symbol=symbol,
+                        orderId=order_id
+                    )
+                    
+                    if order_status.get('retCode') == 0:
+                        orders = order_status.get('result', {}).get('list', [])
+                        
+                        if not orders:  # Ordine non più in open = fillato
+                            filled = True
+                            logging.info(f'✅ Limit order FILLED: {symbol}')
+                            break
+                    
+                    await asyncio.sleep(2)  # Check ogni 2 secondi
+                
+                if not filled:
+                    logging.warning(f'⏱️ Limit order TIMEOUT: {symbol} (not filled in {timeout}s)')
+                    
+                    # Cancella ordine
+                    cancel = session.cancel_order(
+                        category='linear',
+                        symbol=symbol,
+                        orderId=order_id
+                    )
+                    
+                    if LIMIT_ORDER_CONFIG['fallback_to_market']:
+                        logging.info(f'🔄 Fallback to MARKET order: {symbol}')
+                        
+                        # Riprova con MARKET
+                        order = session.place_order(
+                            category='linear',
+                            symbol=symbol,
+                            side=side,
+                            orderType='Market',
+                            qty=str(qty),
+                            stopLoss=str(sl_price),
+                            takeProfit=str(tp_price),
+                            positionIdx=0
+                        )
+                    else:
+                        return {'error': 'Limit order timeout, no fill'}
         
+        else:
         # Piazza ordine market con SL e TP
         order = session.place_order(
             category='linear',  # USDT Perpetual
