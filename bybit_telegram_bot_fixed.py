@@ -5252,8 +5252,6 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
 async def get_open_positions_from_bybit(symbol: str = None):
     """
     Recupera le posizioni aperte reali da Bybit
-    Se symbol è specificato, controlla solo quel symbol
-    Altrimenti ritorna tutte le posizioni
     """
     if BybitHTTP is None:
         return []
@@ -5284,7 +5282,7 @@ async def get_open_positions_from_bybit(symbol: str = None):
                         'symbol': pos.get('symbol'),
                         'side': pos.get('side'),
                         'size': size,
-                        'entry_price': float(pos.get('avgPrice', 0)),
+                        'entry_price': float(pos.get('avgPrice', 0)),  # ← ASSICURATI SIA QUI
                         'unrealized_pnl': float(pos.get('unrealisedPnl', 0))
                     })
             
@@ -5326,10 +5324,14 @@ async def sync_positions_with_bybit():
                     ACTIVE_POSITIONS[symbol] = {
                         'side': pos['side'],
                         'qty': pos['size'],
+                        'entry_price': pos['entry_price'],  # ← AGGIUNGI QUESTA RIGA
                         'sl': 0,  # Non disponibile da API posizioni
                         'tp': 0,  # Non disponibile da API posizioni
                         'order_id': None,
                         'timestamp': datetime.now(timezone.utc).isoformat(),
+                        'timeframe': '15m',  # Default, non sappiamo il TF originale
+                        'trailing_active': False,
+                        'highest_price': pos['entry_price'],  # ← AGGIUNGI ANCHE QUESTA
                         'synced_from_bybit': True
                     }
                     logging.info(f'🔄 Aggiunta {symbol} al tracking (trovata su Bybit)')
