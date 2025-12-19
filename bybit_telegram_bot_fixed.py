@@ -1898,7 +1898,18 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     curr_ema10 = ema_10.iloc[-1]
     curr_ema60 = ema_60.iloc[-1]
 
-        # EMA 60 Breakout Detection
+    # Calcola distanze e flags SUBITO dopo aver ottenuto le EMA
+    distance_to_ema5 = abs(curr_price - curr_ema5) / curr_ema5
+    distance_to_ema10 = abs(curr_price - curr_ema10) / curr_ema10
+    distance_to_ema60 = abs(curr_price - curr_ema60) / curr_ema60
+    
+    above_ema10 = curr_price > curr_ema10
+    above_ema60 = curr_price > curr_ema60
+    
+    # EMA alignment check
+    ema_aligned = curr_ema5 > curr_ema10 > curr_ema60
+
+    # EMA 60 Breakout Detection
     prev_price = prev['close']
     prev_ema60 = ema_60.iloc[-2]
     
@@ -1953,6 +1964,7 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
         return (False, None, None)
     
     lower_wick_pct = lower_wick / total_range
+    upper_wick_pct = upper_wick / total_range  # ← AGGIUNGI QUESTA SE MANCA
     rejection_strength = lower_wick / curr_body if curr_body > 0 else 0
     
     # ===== STEP 6: PULLBACK DETECTION =====
@@ -1969,9 +1981,9 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
             was_higher = True
     
     # ===== STEP 7: EMA DISTANCE CALCULATION =====
-    distance_to_ema5 = abs(curr_price - curr_ema5) / curr_ema5
-    distance_to_ema10 = abs(curr_price - curr_ema10) / curr_ema10
-    distance_to_ema60 = abs(curr_price - curr_ema60) / curr_ema60
+    #distance_to_ema5 = abs(curr_price - curr_ema5) / curr_ema5
+    #distance_to_ema10 = abs(curr_price - curr_ema10) / curr_ema10
+    #distance_to_ema60 = abs(curr_price - curr_ema60) / curr_ema60
     
     # Check se prezzo è SOPRA o SOTTO l'EMA (per pullback)
     above_ema10 = curr_price > curr_ema10
