@@ -59,9 +59,9 @@ VOLUME_FILTER_ENABLED = True  # Default: abilitato
 VOLUME_FILTER_MODE = 'pattern-only'  # 'strict', 'adaptive', 'pattern-only'
 # Threshold per diversi modi
 VOLUME_THRESHOLDS = {
-    'strict': 2.0,      # Volume > 2x media (originale)
-    'adaptive': 1.3,    # Volume > 1.3x media (rilassato)
-    'pattern-only': 0   # No check globale, solo nei pattern
+    'strict': 2.5,      # Volume > 2x media (originale)
+    'adaptive': 1.8,    # Volume > 1.3x media (rilassato)
+    'pattern-only': 0.5   # No check globale, solo nei pattern
 }
 
 TREND_FILTER_ENABLED = True
@@ -103,26 +103,26 @@ TRAILING_CONFIG_ADVANCED = {
     'levels': [
         # Level 1: Attiva presto con buffer largo
         {
-            'profit_pct': 0.3,      # Attiva a +0.3% profit
-            'ema_buffer': 0.003,    # 0.3% sotto EMA (largo)
+            'profit_pct': 0.5,      # Attiva a +0.3% profit
+            'ema_buffer': 0.004,    # 0.3% sotto EMA (largo)
             'label': 'Early Protection'
         },
         # Level 2: Standard, buffer medio
         {
-            'profit_pct': 0.5,      # +0.5% profit
-            'ema_buffer': 0.002,    # 0.2% sotto EMA (medio)
+            'profit_pct': 0.8,      # +0.5% profit
+            'ema_buffer': 0.003,    # 0.2% sotto EMA (medio)
             'label': 'Standard Trail'
         },
         # Level 3: Profit buono, stringi il trailing
         {
-            'profit_pct': 1.0,      # +1.0% profit
-            'ema_buffer': 0.001,    # 0.1% sotto EMA (stretto)
+            'profit_pct': 1.5,      # +1.0% profit
+            'ema_buffer': 0.002,    # 0.1% sotto EMA (stretto)
             'label': 'Tight Trail'
         },
         # Level 4: Grande profit, trailing ultra-stretto
         {
-            'profit_pct': 2.0,      # +2.0% profit
-            'ema_buffer': 0.0005,   # 0.05% sotto EMA (ultra stretto)
+            'profit_pct': 2.5,      # +2.0% profit
+            'ema_buffer': 0.001,   # 0.05% sotto EMA (ultra stretto)
             'label': 'Ultra Tight Trail'
         },
     ],
