@@ -10399,10 +10399,10 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Mostra gli ultimi ordini chiusi con PnL da Bybit,
     con statistiche separate LONG (Buy) e SHORT (Sell).
     """
-    if not BYBIT_APIKEY or not BYBITAPISECRET:
+    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
         await update.message.reply_text(
             "API Bybit non configurate.\n"
-            "Configura BYBIT_APIKEY e BYBIT_APISECRET nelle variabili d'ambiente."
+            "Configura BYBIT_API_KEY e BYBIT_API_SECRET nelle variabili d'ambiente."
         )
         return
 
