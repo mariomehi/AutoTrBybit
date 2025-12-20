@@ -10468,7 +10468,7 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         lines = []
         lines.append(
-            f"<b>Ultimi {len(pnl_list)} Ordini Chiusi {TRADINGMODE.upper()}</b>"
+            f"<b>Ultimi {len(pnl_list)} Ordini Chiusi {TRADING_MODE.upper()}</b>"
         )
 
         for pnl_entry in pnl_list:
