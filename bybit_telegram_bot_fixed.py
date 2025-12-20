@@ -3236,14 +3236,23 @@ def is_triple_touch_breakout(df: pd.DataFrame) -> tuple:
     
     # OGNI low deve essere sopra EMA 60
     #all_above_ema60 = (cons_lows > ema60_during_cons).all()
+    
     ema_10 = df['close'].ewm(span=10, adjust=False).mean()
-    ema_10_pattern = ema_10.iloc[pattern_start_idx:]
-    all_lows_above_ema10 = (pattern_candles['low'] > ema_10_pattern * 0.998).all()
+    # Verifica che gli indici siano allineati
+    if len(df) > abs(pattern_start_idx):
+        ema_10_pattern = ema_10.iloc[pattern_start_idx:]
+        # Assicurati che abbiano la stessa lunghezza
+        if len(pattern_candles) == len(ema_10_pattern):
+            all_lows_above_ema10 = (pattern_candles['low'] > ema_10_pattern * 0.998).all()
+        else:
+            all_lows_above_ema10 = True  # Skip check se mismatch
+    else:
+        all_lows_above_ema10 = True
     
     if not all_lows_above_ema10:
         logging.debug(f'Triple Touch: Pattern rompe sotto EMA 10')
         return (False, None)
-    
+
     #if not all_above_ema60:
     #    logging.debug(f'🚫 Triple Touch: Consolidamento rompe sotto EMA 60')
     #   return (False, None)
