@@ -3906,7 +3906,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     ╔════╝ <- Close/Open (corpo piccolo, max 30%)
     ║
     ║
-    ║    <- Lower wick (MUST >= 60% range)
+    ║    <- Lower wick (MUST >= 55% range) ← MODIFICATO da 60%
     ║       "The Tail" = Rejection zone
     │
     
@@ -3923,7 +3923,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     
     TIER 2 - GOOD Setup (60-65% win): ✅
     ├─ Pin bar su EMA 10 (±1%) = SHORT-TERM SUPPORT
-    ├─ Lower wick >= 60% range
+    ├─ Lower wick >= 55% range ← MODIFICATO
     ├─ Sopra EMA 60 (uptrend intact)
     ├─ Volume 2x+
     └─ → SWING TRADE ZONE (solid setup)
@@ -3931,23 +3931,17 @@ def is_pin_bar_bullish_enhanced(candle, df):
     TIER 3 - OK Setup (55-58% win): ⚠️
     ├─ Pin bar generico
     ├─ Sopra EMA 60 (solo trend filter)
-    ├─ Lower wick >= 60%
+    ├─ Lower wick >= 55% ← MODIFICATO
     ├─ Volume 1.5x+
     └─ → MINIMAL EDGE (accettabile)
     
-    REJECTION:
-    ├─ Lower wick < 60% (no rejection)
+    REJECTION NUOVE:
+    ├─ Lower wick < 55% (no rejection) ← MODIFICATO
+    ├─ Pin bar NON su EMA 5/10/60 (fake level) ← NUOVO
     ├─ Upper wick > 30% (indecisione)
     ├─ Corpo > 30% (no pin bar)
     ├─ Sotto EMA 60 (downtrend)
     └─ Volume < 1.5x (no interesse)
-    
-    BONUS FEATURES:
-    ==========================================
-    ✅ Liquidity sweep detection (rompe previous low + reversal)
-    ✅ Fibonacci retracement (50-61.8% retrace = GOLD)
-    ✅ Morning star variant (3-candle pin bar)
-    ✅ Volume spike analysis (capitulation detection)
     
     Returns:
         (found: bool, tier: str, data: dict or None)
@@ -3994,8 +3988,8 @@ def is_pin_bar_bullish_enhanced(candle, df):
     lower_wick_pct = lower_wick / total_range
     upper_wick_pct = upper_wick / total_range
     
-    # === CHECK 1: Lower wick MUST be >= 60% range ===
-    if lower_wick_pct < 0.55:
+    # ===== MODIFICA: Lower wick più permissivo (55% invece di 60%) =====
+    if lower_wick_pct < 0.55:  # Era 0.60 → 55% OK per 5m
         return (False, None, None)
     
     # === CHECK 2: Upper wick MUST be <= 30% range ===
@@ -4024,7 +4018,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     vol_ratio = curr_vol / avg_vol
     
     # Minimum volume threshold (pin bar needs volume)
-    if vol_ratio < 0.0:
+    if vol_ratio < 1.5:
         return (False, None, None)
     
     # ===== STEP 3: CALCULATE EMAs =====
@@ -4039,6 +4033,21 @@ def is_pin_bar_bullish_enhanced(candle, df):
     
     # Pin bar low (il punto più basso della tail)
     pin_low = candle['low']
+    
+    # ===== NUOVO: CHECK PIN BAR SU LIVELLO VALIDO (EMA 5/10/60) =====
+    # Se pin bar low NON è vicino a nessuna EMA chiave, è random noise
+    near_ema5 = abs(pin_low - curr_ema5) / curr_ema5 < 0.01   # Entro 1%
+    near_ema10 = abs(pin_low - curr_ema10) / curr_ema10 < 0.01 # Entro 1%
+    near_ema60 = abs(pin_low - curr_ema60) / curr_ema60 < 0.01 # Entro 1%
+    
+    if not (near_ema5 or near_ema10 or near_ema60):
+        logging.debug(
+            f'Pin Bar: Tail non vicina a nessuna EMA chiave '
+            f'(EMA5: {abs(pin_low - curr_ema5) / curr_ema5 * 100:.2f}%, '
+            f'EMA10: {abs(pin_low - curr_ema10) / curr_ema10 * 100:.2f}%, '
+            f'EMA60: {abs(pin_low - curr_ema60) / curr_ema60 * 100:.2f}%), skip'
+        )
+        return (False, None, None)
     
     # ===== STEP 4: TREND FILTER (EMA 60) =====
     # MUST: Close sopra EMA 60 (uptrend)
@@ -4112,7 +4121,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     if (tail_near_ema60 and 
         lower_wick_pct >= 0.65 and 
         pullback_detected and 
-        vol_ratio >= 0.0 and
+        vol_ratio >= 2.5 and
         close_position >= 0.5):
         
         tier = 'GOLD'
@@ -4121,16 +4130,16 @@ def is_pin_bar_bullish_enhanced(candle, df):
     # === TIER 2: GOOD (EMA 10 Bounce) ===
     elif (tail_distance_to_ema10 < 0.01 and 
           curr_price > curr_ema60 and 
-          lower_wick_pct >= 0.60 and
-          vol_ratio >= 0.0):
+          lower_wick_pct >= 0.55 and  # ← MODIFICATO da 0.60
+          vol_ratio >= 2.0):
         
         tier = 'GOOD'
         quality_score = 78
     
     # === TIER 3: OK (Generic Pin Bar) ===
     elif (curr_price > curr_ema60 and 
-          lower_wick_pct >= 0.60 and
-          vol_ratio >= 0.0):
+          lower_wick_pct >= 0.55 and  # ← MODIFICATO da 0.60
+          vol_ratio >= 1.5):
         
         tier = 'OK'
         quality_score = 62
@@ -4177,6 +4186,11 @@ def is_pin_bar_bullish_enhanced(candle, df):
     # Bonus 9: Upper wick molto piccolo (<10%) (+5)
     if upper_wick_pct < 0.10:
         quality_score += 5
+    
+    # ===== NUOVO BONUS: Pin bar su EMA chiave (+10) =====
+    if near_ema5 or near_ema10 or near_ema60:
+        quality_score += 10
+        logging.debug(f'Pin Bar: Bonus +10 per tail su EMA chiave')
     
     # Cap a 100
     quality_score = min(quality_score, 100)
@@ -4227,6 +4241,11 @@ def is_pin_bar_bullish_enhanced(candle, df):
         'tail_near_ema10': tail_distance_to_ema10 < 0.01,
         'ema_aligned': ema_aligned,
         
+        # EMA proximity flags (NUOVO)
+        'near_ema5': near_ema5,
+        'near_ema10': near_ema10,
+        'near_ema60': near_ema60,
+        
         # Volume info
         'volume_ratio': vol_ratio,
         
@@ -4252,30 +4271,6 @@ def is_pin_bar_bullish_enhanced(candle, df):
     }
     
     return (True, tier, pattern_data)
-
-def is_pin_bar(candle):
-    """
-    Pattern: Pin Bar
-    Ombra molto lunga da un lato, corpo piccolo
-    """
-    body = abs(candle['close'] - candle['open'])
-    total_range = candle['high'] - candle['low']
-    
-    if total_range == 0:
-        return False
-    
-    upper_wick = candle['high'] - max(candle['close'], candle['open'])
-    lower_wick = min(candle['close'], candle['open']) - candle['low']
-    
-    # Pin bar rialzista: ombra inferiore lunga
-    bullish_pin = (lower_wick >= total_range * 0.6 and 
-                   body <= total_range * 0.3)
-    
-    # Pin bar ribassista: ombra superiore lunga
-    bearish_pin = (upper_wick >= total_range * 0.6 and 
-                   body <= total_range * 0.3)
-    
-    return bullish_pin or bearish_pin
 
 
 def is_doji(candle):
@@ -4984,8 +4979,6 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 return (True, 'Buy', 'Breakout + Retest', data)
             else:
                 logging.debug(f'{symbol}: Breakout + Retest - not found')
-        except NameError:
-            logging.warning('⚠️ is_breakout_retest() not implemented')
         except Exception as e:
             logging.error(f'Error in Breakout+Retest: {e}')
     
@@ -5006,8 +4999,6 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 return (True, 'Buy', 'Triple Touch Breakout', data)
             else:
                 logging.debug(f'{symbol}: Triple Touch Breakout - not found')
-        except NameError:
-            logging.warning('⚠️ is_triple_touch_breakout() not implemented')
         except Exception as e:
             logging.error(f'Error in Triple Touch: {e}')
     
@@ -5071,8 +5062,6 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 return (True, 'Buy', 'Higher Low Breakout', data)
             else:
                 logging.debug(f'{symbol}: Higher Low Consolidation Breakout - not found')
-        except NameError:
-            logging.debug('is_higher_low_consolidation_breakout() not implemented')
         except Exception as e:
             logging.error(f'Error in Higher Low: {e}')
     
@@ -5763,6 +5752,31 @@ def check_higher_timeframe_resistance(symbol, current_tf, current_price):
     curr_ema5 = ema5_htf.iloc[-1]
     curr_ema10 = ema10_htf.iloc[-1]
     curr_ema60 = ema60_htf.iloc[-1]
+
+    # ===== CHECK ULTIMA CANDELA HTF =====
+    last_htf_candle = df_htf.iloc[-1]
+    
+    # Se ultima candela HTF è rossa e forte, blocca entry
+    is_bearish = last_htf_candle['close'] < last_htf_candle['open']
+    htf_body = abs(last_htf_candle['close'] - last_htf_candle['open'])
+    htf_range = last_htf_candle['high'] - last_htf_candle['low']
+    
+    if htf_range > 0:
+        htf_body_pct = htf_body / htf_range
+        
+        # BLOCCA se candela HTF è ribassista forte (corpo > 60%)
+        if is_bearish and htf_body_pct > 0.60:
+            # E se chiude vicino al low (no rejection) = momentum ribassista
+            lower_wick = min(last_htf_candle['open'], last_htf_candle['close']) - last_htf_candle['low']
+            lower_wick_pct = lower_wick / htf_range
+            
+            if lower_wick_pct < 0.20:  # Ombra inferiore < 20% = no supporto
+                momentum_bearish = True
+                momentum_reason.append(
+                    f"Strong bearish HTF candle (body: {htf_body_pct*100:.0f}%, "
+                    f"no support rejection)"
+                )
+    
     
     # ===== NUOVO: CHECK MOMENTUM HTF =====
     
@@ -6218,7 +6232,7 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                 positionIdx=0  # One-way mode
             )
         
-        logging.info(f'✅ Ordine eseguito: {order}')
+        logging.info(f'✅ Ordine eseguito: {order_type} - {order}')
         
         # Salva la posizione come attiva
         if order.get('retCode') == 0:
@@ -7344,7 +7358,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
                 else:
                     risk_base = RISK_USD
-                    logging.debug(f"No EMA analysis, using base risk ${RISK_USD}")
+                    logging.info(f"No EMA analysis, using base risk ${RISK_USD}")
                 
                 # Apply symbol-specific override se configurato
                 if symbol in SYMBOL_RISK_OVERRIDE:
