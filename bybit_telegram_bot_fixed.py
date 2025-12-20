@@ -6019,7 +6019,7 @@ def check_compression_htf_resistance(symbol: str, current_tf: str, current_price
         return {'blocked': False}
 
 
-async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float, entry_price: float, timeframe: str, chat_id: int):
+async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float, entry_price: float, timeframe: str, chat_id: int, pattern_name: str = None):
     """
     Piazza ordine su Bybit (Market o Limit)
     NEW: Supporta ordini LIMIT per pattern lenti
@@ -7583,7 +7583,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                         tp_price,
                         entry_price,
                         timeframe,
-                        chat_id
+                        chat_id,
+                        pattern
                     )
                     
                     if 'error' in order_res:
@@ -7784,7 +7785,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                         tp_price,
                         entry_price,
                         timeframe,
-                        chat_id
+                        chat_id,
+                        pattern
                     )
                     
                     if 'error' in order_res:
@@ -7994,7 +7996,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     tp_price,
                     entry_price,
                     timeframe,
-                    chat_id
+                    chat_id,
+                    pattern
                 )
                 
                 if 'error' in order_res:
@@ -8340,7 +8343,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     tp_price,
                     entry_price,
                     timeframe,
-                    chat_id
+                    chat_id,
+                    pattern
                 )
                 
                 if 'error' in order_res:
