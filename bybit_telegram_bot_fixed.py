@@ -7311,82 +7311,80 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             PROFIT_LOCK_RETENTION = PROFIT_LOCK_CONFIG['retention']
             MIN_PROFIT_USD = PROFIT_LOCK_CONFIG['min_profit_usd']
 
-            if profit_risk_ratio >= PROFIT_LOCK_MULTIPLIER and profit_usd >= MIN_PROFIT_USD:
-            
-                if initial_risk_usd > 0:
-                    profit_risk_ratio = profit_usd / initial_risk_usd
+            if initial_risk_usd > 0:
+                profit_risk_ratio = profit_usd / initial_risk_usd
+                
+                if profit_risk_ratio >= PROFIT_LOCK_MULTIPLIER and profit_usd >= MIN_PROFIT_USD:
+                    # PROFIT ALTO! Blocca subito
                     
-                    if profit_risk_ratio >= PROFIT_LOCK_MULTIPLIER:
-                        # PROFIT ALTO! Blocca subito
+                    if side == 'Buy':
+                        # Sposta SL a entry + (80% del profit)
+                        locked_profit = profit_usd * PROFIT_LOCK_RETENTION
+                        new_sl = entry_price + (locked_profit / pos_info['qty'])
                         
-                        if side == 'Buy':
-                            # Sposta SL a entry + (80% del profit)
-                            locked_profit = profit_usd * PROFIT_LOCK_RETENTION
-                            new_sl = entry_price + (locked_profit / pos_info['qty'])
-                            
-                            # Assicurati che sia miglioramento
-                            if new_sl <= current_sl:
-                                logging.debug(f"{symbol} (BUY): Profit lock SL {new_sl:.4f} <= current {current_sl:.4f}, skip")
-                                continue
-                            
-                        else:  # Sell
-                            # Sposta SL a entry - (80% del profit)
-                            locked_profit = profit_usd * PROFIT_LOCK_RETENTION
-                            new_sl = entry_price - (locked_profit / pos_info['qty'])
-                            
-                            if new_sl >= current_sl:
-                                logging.debug(f"{symbol} (SELL): Profit lock SL {new_sl:.4f} >= current {current_sl:.4f}, skip")
-                                continue
+                        # Assicurati che sia miglioramento
+                        if new_sl <= current_sl:
+                            logging.debug(f"{symbol} (BUY): Profit lock SL {new_sl:.4f} <= current {current_sl:.4f}, skip")
+                            continue
                         
-                        # ===== AGGIORNA SU BYBIT (PROFIT LOCK) =====
-                        try:
-                            session = create_bybit_session()
-                            result = session.set_trading_stop(
-                                category="linear",
-                                symbol=symbol,
-                                stopLoss=str(round(new_sl, get_price_decimals(new_sl))),
-                                positionIdx=0
-                            )
+                    else:  # Sell
+                        # Sposta SL a entry - (80% del profit)
+                        locked_profit = profit_usd * PROFIT_LOCK_RETENTION
+                        new_sl = entry_price - (locked_profit / pos_info['qty'])
+                        
+                        if new_sl >= current_sl:
+                            logging.debug(f"{symbol} (SELL): Profit lock SL {new_sl:.4f} >= current {current_sl:.4f}, skip")
+                            continue
+                    
+                    # ===== AGGIORNA SU BYBIT (PROFIT LOCK) =====
+                    try:
+                        session = create_bybit_session()
+                        result = session.set_trading_stop(
+                            category="linear",
+                            symbol=symbol,
+                            stopLoss=str(round(new_sl, get_price_decimals(new_sl))),
+                            positionIdx=0
+                        )
+                        
+                        if result.get('retCode') == 0:
+                            with POSITIONS_LOCK:
+                                if symbol in ACTIVE_POSITIONS:
+                                    ACTIVE_POSITIONS[symbol]['sl'] = new_sl
                             
-                            if result.get('retCode') == 0:
-                                with POSITIONS_LOCK:
-                                    if symbol in ACTIVE_POSITIONS:
-                                        ACTIVE_POSITIONS[symbol]['sl'] = new_sl
-                                
-                                logging.info(f"🚀 {symbol} ({side}): PROFIT LOCK! SL → {new_sl:.4f} (profit: ${profit_usd:.2f}, {profit_risk_ratio:.1f}x risk)")
-                                
-                                # ===== NOTIFICA TELEGRAM =====
-                                if chat_id:
-                                    try:
-                                        side_emoji = "🟢" if side == 'Buy' else "🔴"
-                                        
-                                        notification = f"<b>{side_emoji} 🚀 PROFIT LOCK! ({side})</b>\n\n"
-                                        notification += f"<b>Symbol:</b> {symbol} ({timeframe_entry})\n"
-                                        notification += f"<b>Profit:</b> ${profit_usd:.2f} ({profit_pct:.2f}%)\n"
-                                        notification += f"<b>Risk Ratio:</b> {profit_risk_ratio:.1f}x risk iniziale!\n\n"
-                                        notification += f"<b>🔒 Stop Loss Locked:</b>\n"
-                                        notification += f"• Prima: ${current_sl:.{get_price_decimals(current_sl)}f}\n"
-                                        notification += f"• Ora: ${new_sl:.{get_price_decimals(new_sl)}f}\n"
-                                        notification += f"• Profit protetto: ${locked_profit:.2f} ({PROFIT_LOCK_RETENTION*100:.0f}%)\n\n"
-                                        notification += f"💡 <b>Profit molto alto rilevato!</b>\n"
-                                        notification += f"Stop loss spostato IMMEDIATAMENTE per proteggere guadagni.\n"
-                                        notification += f"Trailing normale riprenderà da questo livello."
-                                        
-                                        await context.bot.send_message(
-                                            chat_id=chat_id,
-                                            text=notification,
-                                            parse_mode="HTML"
-                                        )
-                                    except Exception as e:
-                                        logging.error(f"Errore invio notifica profit lock: {e}")
-                            else:
-                                logging.error(f"{symbol}: Errore profit lock: {result.get('retMsg')}")
-                        
-                        except Exception as e:
-                            logging.error(f"{symbol}: Errore set_trading_stop (profit lock): {e}")
-                        
-                        # SKIP trailing normale (già gestito qui)
-                        continue
+                            logging.info(f"🚀 {symbol} ({side}): PROFIT LOCK! SL → {new_sl:.4f} (profit: ${profit_usd:.2f}, {profit_risk_ratio:.1f}x risk)")
+                            
+                            # ===== NOTIFICA TELEGRAM =====
+                            if chat_id:
+                                try:
+                                    side_emoji = "🟢" if side == 'Buy' else "🔴"
+                                    
+                                    notification = f"<b>{side_emoji} 🚀 PROFIT LOCK! ({side})</b>\n\n"
+                                    notification += f"<b>Symbol:</b> {symbol} ({timeframe_entry})\n"
+                                    notification += f"<b>Profit:</b> ${profit_usd:.2f} ({profit_pct:.2f}%)\n"
+                                    notification += f"<b>Risk Ratio:</b> {profit_risk_ratio:.1f}x risk iniziale!\n\n"
+                                    notification += f"<b>🔒 Stop Loss Locked:</b>\n"
+                                    notification += f"• Prima: ${current_sl:.{get_price_decimals(current_sl)}f}\n"
+                                    notification += f"• Ora: ${new_sl:.{get_price_decimals(new_sl)}f}\n"
+                                    notification += f"• Profit protetto: ${locked_profit:.2f} ({PROFIT_LOCK_RETENTION*100:.0f}%)\n\n"
+                                    notification += f"💡 <b>Profit molto alto rilevato!</b>\n"
+                                    notification += f"Stop loss spostato IMMEDIATAMENTE per proteggere guadagni.\n"
+                                    notification += f"Trailing normale riprenderà da questo livello."
+                                    
+                                    await context.bot.send_message(
+                                        chat_id=chat_id,
+                                        text=notification,
+                                        parse_mode="HTML"
+                                    )
+                                except Exception as e:
+                                    logging.error(f"Errore invio notifica profit lock: {e}")
+                        else:
+                            logging.error(f"{symbol}: Errore profit lock: {result.get('retMsg')}")
+                    
+                    except Exception as e:
+                        logging.error(f"{symbol}: Errore set_trading_stop (profit lock): {e}")
+                    
+                    # SKIP trailing normale (già gestito qui)
+                    continue
             
             # ===== TROVA IL LIVELLO APPROPRIATO =====
             active_level = None
