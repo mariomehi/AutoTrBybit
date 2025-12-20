@@ -7291,8 +7291,10 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             
             # ===== CALCOLO PROFIT % (DIVERSO PER BUY/SELL) =====
             if side == 'Buy':
+                profit_usd = (current_price - entry_price) * pos_info['qty']
                 profit_pct = ((current_price - entry_price) / entry_price) * 100
             else:  # Sell
+                profit_usd = (entry_price - current_price) * pos_info['qty']
                 profit_pct = ((entry_price - current_price) / entry_price) * 100
 
             # ===== CALCOLO RISK INIZIALE =====
