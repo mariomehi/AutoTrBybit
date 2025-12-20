@@ -331,6 +331,20 @@ AVAILABLE_PATTERNS = {
         'side': 'Buy',
         'emoji': '🟢'
     },
+    'bud_pattern': {
+        'name': 'BUD Pattern',
+        'enabled': True,
+        'description': 'Breakout + 2 candele riposo nel range',
+        'side': 'Buy',
+        'emoji': '🌱'
+    },
+    'maxi_bud_pattern': {
+        'name': 'MAXI BUD Pattern',
+        'enabled': True,
+        'description': 'Breakout + 3+ candele riposo (setup più forte)',
+        'side': 'Buy',
+        'emoji': '🌟🌱'
+    },
     'hammer': {
         'name': 'Hammer',
         'enabled': False,  # ❌ DISABILITA (coperto da Pin Bar)
@@ -369,6 +383,20 @@ AVAILABLE_PATTERNS = {
         'description': 'Engulfing ribassista con EMA breakdown (Enhanced)',
         'side': 'Sell',
         'emoji': '🔴'
+    },
+    'bud_bearish_pattern': {
+        'name': 'BUD Bearish Pattern',
+        'enabled': True,
+        'description': 'Breakdown + 2 candele riposo nel range (SHORT)',
+        'side': 'Sell',
+        'emoji': '🔴🌱'
+    },
+    'maxi_bud_bearish_pattern': {
+        'name': 'MAXI BUD Bearish Pattern',
+        'enabled': True,
+        'description': 'Breakdown + 3+ candele riposo (SHORT forte)',
+        'side': 'Sell',
+        'emoji': '🌟🔴🌱'
     },
     'shooting_star': {
         'name': 'Shooting Star',
@@ -453,7 +481,6 @@ BYBIT_ENDPOINTS = {
 }
 BYBIT_PUBLIC_REST = 'https://api.bybit.com'  # Dati di mercato sempre da mainnet
 
-
 # ===== MARKET TIME FILTER =====
 MARKET_TIME_FILTER_ENABLED = True
 # Ore UTC bloccate (default: 01-04 UTC)
@@ -479,6 +506,14 @@ LIMIT_ORDER_CONFIG = {
     'offset_pct': 0.0015,  # Entry 0.15% SOTTO prezzo corrente
     'timeout_seconds': 60,  # Cancella se non fill in 60s
     'fallback_to_market': True,  # Se timeout → prova market
+}
+
+# ===== AGGRESSIVE PROFIT LOCK CONFIG =====
+PROFIT_LOCK_ENABLED = True  # Abilita/disabilita profit lock aggressivo
+PROFIT_LOCK_CONFIG = {
+    'multiplier': 5.0,        # Attiva quando profit >= 5x risk iniziale
+    'retention': 0.80,        # Trattieni 80% del profit raggiunto
+    'min_profit_usd': 20.0,   # Min profit in USD per attivare (evita micro-profit)
 }
 
 def is_good_trading_time_utc(now=None) -> tuple[bool, str]:
@@ -1965,7 +2000,7 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
             prev_vol_ratio = prev_vol / avg_vol_before
             
             # Se prev aveva volume panic (3x+), skip engulfing
-            if prev_vol_ratio > 3.0:
+            if prev_vol_ratio > 2.0:
                 logging.debug(f'Engulfing: Candela prev era capitulation (vol {prev_vol_ratio:.1f}x), skip')
                 return (False, None, None)
     
@@ -2180,6 +2215,538 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     }
     
     return (True, tier, pattern_data)
+
+
+def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
+    """
+    🌱 BUD PATTERN (Gemma + Riposo)
+    
+    Win Rate stimato: 58-68%
+    Risk:Reward: 1:2-2.5
+    
+    STRUTTURA:
+    ============================================
+    1. Candela BREAKOUT (verde):
+       - Rompe sopra EMA 10 al rialzo
+       - Corpo forte (>60% range)
+       - Close decisamente sopra EMA 10
+    
+    2. Candele di RIPOSO (2-5):
+       - High <= Breakout High
+       - Low >= Breakout Low
+       - "Compresse" nel range breakout
+       - Consolidamento/pausa
+    
+    3. SEGNALE:
+       - Dopo 2+ candele riposo → BUD
+       - Dopo 3+ candele riposo → MAXI BUD
+    
+    LOGICA:
+    ============================================
+    - Breakout forte = interesse buyers
+    - Riposo = accumulation, no panic sell
+    - Pattern "compresso" = energia per continuazione
+    
+    Entry: Close candela dopo riposo (breakout)
+    SL: Sotto low candela breakout
+    TP: High breakout + (range × 2)
+    
+    Args:
+        df: DataFrame OHLCV
+        require_maxi: True per MAXI BUD (3+ riposo), False per BUD (2+ riposo)
+    
+    Returns:
+        (found: bool, pattern_data: dict or None)
+    """
+    if len(df) < 10:
+        return (False, None)
+    
+    # ===== STEP 1: CALCOLA EMA 10 =====
+    ema_10 = df['close'].ewm(span=10, adjust=False).mean()
+    
+    # ===== STEP 2: CERCA CANDELA BREAKOUT =====
+    # Cerca negli ultimi 8 periodi (esclude corrente)
+    breakout_found = False
+    breakout_idx = None
+    breakout_candle = None
+    
+    for i in range(-8, -1):  # Da -8 a -2
+        if len(df) < abs(i):
+            continue
+        
+        candle = df.iloc[i]
+        prev_candle = df.iloc[i-1]
+        
+        # EMA al momento del breakout
+        ema10_at_break = ema_10.iloc[i]
+        ema10_prev = ema_10.iloc[i-1]
+        
+        # CHECK 1: Candela VERDE
+        is_green = candle['close'] > candle['open']
+        if not is_green:
+            continue
+        
+        # CHECK 2: BREAKOUT EMA 10
+        # Era sotto, ora sopra (o molto vicino sotto → sopra)
+        was_below = prev_candle['close'] < ema10_prev
+        now_above = candle['close'] > ema10_at_break
+        
+        # Oppure: già sopra ma con accelerazione
+        already_above_but_strong = (
+            prev_candle['close'] > ema10_prev and
+            candle['close'] > prev_candle['high']  # Breakout high precedente
+        )
+        
+        if not (was_below and now_above) and not already_above_but_strong:
+            continue
+        
+        # CHECK 3: CORPO FORTE (>60% range)
+        body = abs(candle['close'] - candle['open'])
+        total_range = candle['high'] - candle['low']
+        
+        if total_range == 0:
+            continue
+        
+        body_pct = body / total_range
+        
+        if body_pct < 0.60:
+            continue
+        
+        # CHECK 4: CLOSE DECISAMENTE SOPRA EMA 10
+        # Almeno 0.2% sopra
+        if candle['close'] < ema10_at_break * 1.002:
+            continue
+        
+        # CHECK 5: UPPER WICK PICCOLO (no rejection)
+        upper_wick = candle['high'] - candle['close']
+        upper_wick_pct = upper_wick / total_range
+        
+        if upper_wick_pct > 0.25:  # Max 25% ombra superiore
+            continue
+        
+        # BREAKOUT TROVATO!
+        breakout_found = True
+        breakout_candle = candle
+        breakout_idx = i
+        break
+    
+    if not breakout_found:
+        return (False, None)
+    
+    # Livelli chiave del breakout
+    breakout_high = breakout_candle['high']
+    breakout_low = breakout_candle['low']
+    breakout_close = breakout_candle['close']
+    
+    # ===== STEP 3: VERIFICA CANDELE DI RIPOSO =====
+    # Candele tra breakout e corrente
+    rest_start = breakout_idx + 1
+    rest_end = -1  # Fino a candela prima di corrente
+    
+    rest_candles = df.iloc[rest_start:rest_end]
+    
+    # Serve almeno 2 candele per BUD, 3+ per MAXI BUD
+    min_rest = 3 if require_maxi else 2
+    
+    if len(rest_candles) < min_rest:
+        return (False, None)
+    
+    # CHECK: Tutte le candele DENTRO il range breakout
+    all_inside = True
+    for _, candle in rest_candles.iterrows():
+        # High non deve superare breakout high
+        if candle['high'] > breakout_high * 1.002:  # Tolleranza 0.2%
+            all_inside = False
+            break
+        
+        # Low non deve rompere breakout low
+        if candle['low'] < breakout_low * 0.998:  # Tolleranza 0.2%
+            all_inside = False
+            break
+    
+    if not all_inside:
+        return (False, None)
+    
+    # CHECK: Range medio delle candele riposo deve essere piccolo
+    # (conferma che è davvero "riposo")
+    rest_ranges = []
+    for _, candle in rest_candles.iterrows():
+        r = candle['high'] - candle['low']
+        rest_ranges.append(r)
+    
+    avg_rest_range = sum(rest_ranges) / len(rest_ranges)
+    breakout_range = breakout_high - breakout_low
+    
+    # Range riposo deve essere < 60% del breakout range
+    if avg_rest_range > breakout_range * 0.60:
+        return (False, None)
+    
+    # ===== STEP 4: CANDELA CORRENTE (trigger) =====
+    curr = df.iloc[-1]
+    
+    # Candela corrente dovrebbe essere verde (continuazione)
+    is_curr_green = curr['close'] > curr['open']
+    
+    # Candela corrente dovrebbe rompere high del breakout
+    # (o almeno essere molto vicina)
+    breaks_high = curr['close'] > breakout_high * 0.998
+    
+    # Se non rompe high, almeno deve essere sopra EMA 10
+    curr_ema10 = ema_10.iloc[-1]
+    above_ema10 = curr['close'] > curr_ema10
+    
+    if not (breaks_high or above_ema10):
+        return (False, None)
+    
+    # ===== STEP 5: VOLUME CHECK (opzionale ma consigliato) =====
+    volume_ok = False
+    vol_ratio = 0
+    
+    if 'volume' in df.columns:
+        # Volume breakout vs average
+        vol_breakout = df['volume'].iloc[breakout_idx]
+        vol_avg_before = df['volume'].iloc[breakout_idx-20:breakout_idx].mean()
+        
+        if vol_avg_before > 0:
+            vol_ratio_break = vol_breakout / vol_avg_before
+            
+            # Volume breakout deve essere > 1.5x
+            if vol_ratio_break >= 1.5:
+                volume_ok = True
+                vol_ratio = vol_ratio_break
+    
+    # ===== STEP 6: EMA 60 CHECK (trend filter) =====
+    ema_60 = df['close'].ewm(span=60, adjust=False).mean()
+    curr_ema60 = ema_60.iloc[-1]
+    
+    # Breakout dovrebbe essere sopra EMA 60 (uptrend)
+    above_ema60 = breakout_close > curr_ema60
+    
+    # ===== PATTERN CONFERMATO! =====
+    
+    # Determina tipo
+    rest_count = len(rest_candles)
+    pattern_type = "MAXI BUD" if rest_count >= 3 else "BUD"
+    
+    # Calcola setup trading
+    entry_price = curr['close']
+    sl_price = breakout_low * 0.998  # Sotto low breakout
+    
+    # TP: Proiezione range breakout
+    risk = entry_price - sl_price
+    tp_price = entry_price + (risk * 2.0)  # 2R
+    
+    # Oppure: Usa range breakout
+    # tp_price = breakout_high + (breakout_range * 2)
+    
+    pattern_data = {
+        'pattern_type': pattern_type,
+        'rest_count': rest_count,
+        
+        # Breakout info
+        'breakout_high': breakout_high,
+        'breakout_low': breakout_low,
+        'breakout_close': breakout_close,
+        'breakout_range': breakout_range,
+        'breakout_body_pct': body_pct * 100,
+        
+        # Rest info
+        'avg_rest_range': avg_rest_range,
+        'rest_range_pct': (avg_rest_range / breakout_range * 100),
+        
+        # Current info
+        'current_price': entry_price,
+        'breaks_breakout_high': breaks_high,
+        'is_green': is_curr_green,
+        
+        # Volume
+        'volume_ok': volume_ok,
+        'volume_ratio': vol_ratio,
+        
+        # EMA
+        'ema10': curr_ema10,
+        'ema60': curr_ema60,
+        'above_ema60': above_ema60,
+        
+        # Trading setup
+        'suggested_entry': entry_price,
+        'suggested_sl': sl_price,
+        'suggested_tp': tp_price,
+        'risk_reward': 2.0,
+        
+        'tier': 1  # High probability pattern
+    }
+    
+    return (True, pattern_data)
+
+
+def is_maxi_bud_pattern(df: pd.DataFrame) -> tuple:
+    """
+    🌟 MAXI BUD Pattern (versione potenziata)
+    Richiede 3+ candele di riposo invece di 2
+    """
+    return is_bud_pattern(df, require_maxi=True)
+
+def is_bud_bearish_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
+    """
+    🔴🌱 BUD BEARISH PATTERN (Gemma Ribassista + Riposo)
+    
+    Win Rate stimato: 55-65% (short tipicamente più difficile)
+    Risk:Reward: 1:2-2.5
+    
+    STRUTTURA:
+    ============================================
+    1. Candela BREAKDOWN (rossa):
+       - Rompe sotto EMA 10 al ribasso
+       - Corpo forte (>60% range)
+       - Close decisamente sotto EMA 10
+    
+    2. Candele di RIPOSO (2-5):
+       - High <= Breakdown High
+       - Low >= Breakdown Low
+       - "Compresse" nel range breakdown
+       - Consolidamento/pausa ribassista
+    
+    3. SEGNALE:
+       - Dopo 2+ candele riposo → BUD BEARISH
+       - Dopo 3+ candele riposo → MAXI BUD BEARISH
+    
+    LOGICA:
+    ============================================
+    - Breakdown forte = sellers control
+    - Riposo = no panic buy (shorts confidenti)
+    - Pattern "compresso" = energia per continuazione ribasso
+    
+    Entry: Close candela dopo riposo (breakdown continuation)
+    SL: Sopra high candela breakdown
+    TP: Low breakdown - (range × 2)
+    
+    Args:
+        df: DataFrame OHLCV
+        require_maxi: True per MAXI BUD (3+ riposo), False per BUD (2+ riposo)
+    
+    Returns:
+        (found: bool, pattern_data: dict or None)
+    """
+    if len(df) < 10:
+        return (False, None)
+    
+    # ===== STEP 1: CALCOLA EMA 10 =====
+    ema_10 = df['close'].ewm(span=10, adjust=False).mean()
+    
+    # ===== STEP 2: CERCA CANDELA BREAKDOWN =====
+    # Cerca negli ultimi 8 periodi
+    breakdown_found = False
+    breakdown_idx = None
+    breakdown_candle = None
+    
+    for i in range(-8, -1):  # Da -8 a -2
+        if len(df) < abs(i):
+            continue
+        
+        candle = df.iloc[i]
+        prev_candle = df.iloc[i-1]
+        
+        # EMA al momento del breakdown
+        ema10_at_break = ema_10.iloc[i]
+        ema10_prev = ema_10.iloc[i-1]
+        
+        # CHECK 1: Candela ROSSA
+        is_red = candle['close'] < candle['open']
+        if not is_red:
+            continue
+        
+        # CHECK 2: BREAKDOWN EMA 10
+        # Era sopra, ora sotto
+        was_above = prev_candle['close'] > ema10_prev
+        now_below = candle['close'] < ema10_at_break
+        
+        # Oppure: già sotto ma con accelerazione ribasso
+        already_below_but_strong = (
+            prev_candle['close'] < ema10_prev and
+            candle['close'] < prev_candle['low']  # Breakdown low precedente
+        )
+        
+        if not (was_above and now_below) and not already_below_but_strong:
+            continue
+        
+        # CHECK 3: CORPO FORTE (>60% range)
+        body = abs(candle['close'] - candle['open'])
+        total_range = candle['high'] - candle['low']
+        
+        if total_range == 0:
+            continue
+        
+        body_pct = body / total_range
+        
+        if body_pct < 0.60:
+            continue
+        
+        # CHECK 4: CLOSE DECISAMENTE SOTTO EMA 10
+        # Almeno 0.2% sotto
+        if candle['close'] > ema10_at_break * 0.998:
+            continue
+        
+        # CHECK 5: LOWER WICK PICCOLO (no rejection)
+        lower_wick = candle['close'] - candle['low']
+        lower_wick_pct = lower_wick / total_range
+        
+        if lower_wick_pct > 0.25:  # Max 25% ombra inferiore
+            continue
+        
+        # BREAKDOWN TROVATO!
+        breakdown_found = True
+        breakdown_candle = candle
+        breakdown_idx = i
+        break
+    
+    if not breakdown_found:
+        return (False, None)
+    
+    # Livelli chiave del breakdown
+    breakdown_high = breakdown_candle['high']
+    breakdown_low = breakdown_candle['low']
+    breakdown_close = breakdown_candle['close']
+    
+    # ===== STEP 3: VERIFICA CANDELE DI RIPOSO =====
+    rest_start = breakdown_idx + 1
+    rest_end = -1
+    
+    rest_candles = df.iloc[rest_start:rest_end]
+    
+    # Serve almeno 2 candele per BUD, 3+ per MAXI BUD
+    min_rest = 3 if require_maxi else 2
+    
+    if len(rest_candles) < min_rest:
+        return (False, None)
+    
+    # CHECK: Tutte le candele DENTRO il range breakdown
+    all_inside = True
+    for _, candle in rest_candles.iterrows():
+        # High non deve superare breakdown high
+        if candle['high'] > breakdown_high * 1.002:
+            all_inside = False
+            break
+        
+        # Low non deve rompere breakdown low
+        if candle['low'] < breakdown_low * 0.998:
+            all_inside = False
+            break
+    
+    if not all_inside:
+        return (False, None)
+    
+    # CHECK: Range medio delle candele riposo deve essere piccolo
+    rest_ranges = []
+    for _, candle in rest_candles.iterrows():
+        r = candle['high'] - candle['low']
+        rest_ranges.append(r)
+    
+    avg_rest_range = sum(rest_ranges) / len(rest_ranges)
+    breakdown_range = breakdown_high - breakdown_low
+    
+    if avg_rest_range > breakdown_range * 0.60:
+        return (False, None)
+    
+    # ===== STEP 4: CANDELA CORRENTE (trigger) =====
+    curr = df.iloc[-1]
+    
+    # Candela corrente dovrebbe essere rossa (continuazione)
+    is_curr_red = curr['close'] < curr['open']
+    
+    # Candela corrente dovrebbe rompere low del breakdown
+    breaks_low = curr['close'] < breakdown_low * 1.002
+    
+    # Se non rompe low, almeno deve essere sotto EMA 10
+    curr_ema10 = ema_10.iloc[-1]
+    below_ema10 = curr['close'] < curr_ema10
+    
+    if not (breaks_low or below_ema10):
+        return (False, None)
+    
+    # ===== STEP 5: VOLUME CHECK =====
+    volume_ok = False
+    vol_ratio = 0
+    
+    if 'volume' in df.columns:
+        vol_breakdown = df['volume'].iloc[breakdown_idx]
+        vol_avg_before = df['volume'].iloc[breakdown_idx-20:breakdown_idx].mean()
+        
+        if vol_avg_before > 0:
+            vol_ratio_break = vol_breakdown / vol_avg_before
+            
+            if vol_ratio_break >= 1.5:
+                volume_ok = True
+                vol_ratio = vol_ratio_break
+    
+    # ===== STEP 6: EMA 60 CHECK (downtrend filter) =====
+    ema_60 = df['close'].ewm(span=60, adjust=False).mean()
+    curr_ema60 = ema_60.iloc[-1]
+    
+    # Breakdown dovrebbe essere sotto EMA 60 (downtrend)
+    below_ema60 = breakdown_close < curr_ema60
+    
+    # ===== PATTERN CONFERMATO! =====
+    
+    rest_count = len(rest_candles)
+    pattern_type = "MAXI BUD BEARISH" if rest_count >= 3 else "BUD BEARISH"
+    
+    # Calcola setup trading (SHORT)
+    entry_price = curr['close']
+    sl_price = breakdown_high * 1.002  # Sopra high breakdown
+    
+    # TP: Proiezione range breakdown al ribasso
+    risk = sl_price - entry_price
+    tp_price = entry_price - (risk * 2.0)  # 2R
+    
+    pattern_data = {
+        'pattern_type': pattern_type,
+        'rest_count': rest_count,
+        
+        # Breakdown info
+        'breakdown_high': breakdown_high,
+        'breakdown_low': breakdown_low,
+        'breakdown_close': breakdown_close,
+        'breakdown_range': breakdown_range,
+        'breakdown_body_pct': body_pct * 100,
+        
+        # Rest info
+        'avg_rest_range': avg_rest_range,
+        'rest_range_pct': (avg_rest_range / breakdown_range * 100),
+        
+        # Current info
+        'current_price': entry_price,
+        'breaks_breakdown_low': breaks_low,
+        'is_red': is_curr_red,
+        
+        # Volume
+        'volume_ok': volume_ok,
+        'volume_ratio': vol_ratio,
+        
+        # EMA
+        'ema10': curr_ema10,
+        'ema60': curr_ema60,
+        'below_ema60': below_ema60,
+        
+        # Trading setup
+        'suggested_entry': entry_price,
+        'suggested_sl': sl_price,
+        'suggested_tp': tp_price,
+        'risk_reward': 2.0,
+        
+        'side': 'Sell',
+        'tier': 1
+    }
+    
+    return (True, pattern_data)
+
+
+def is_maxi_bud_bearish_pattern(df: pd.DataFrame) -> tuple:
+    """
+    🌟🔴 MAXI BUD BEARISH Pattern
+    Richiede 3+ candele di riposo
+    """
+    return is_bud_bearish_pattern(df, require_maxi=True)
 
 
 def is_bearish_engulfing_enhanced(prev, curr, df):
@@ -2638,8 +3205,8 @@ def is_morning_star_enhanced(df):
     b_body = abs(b['close'] - b['open'])
     b_range = b['high'] - b['low']
     
-    # B deve essere piccola rispetto ad A (<30%)
-    if b_body >= a_body * 0.30:
+    # Per 5m, indecisione deve essere chiara
+    if b_body >= a_body * 0.20:  # Era 0.30 → max 20%
         return (False, None, None)
     
     # Candela C: rialzista
@@ -2657,7 +3224,7 @@ def is_morning_star_enhanced(df):
     recovery = c['close'] - a['close']
     recovery_pct = recovery / a_body if a_body > 0 else 0
     
-    if recovery_pct < 0.50:  # Minimo 50% recovery
+    if recovery_pct < 0.60:  # Minimo 60% recovery
         return (False, None, None)
     
     # ===== STEP 4: VOLUME CHECK =====
@@ -4027,7 +4594,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     vol_ratio = curr_vol / avg_vol
     
     # Minimum volume threshold (pin bar needs volume)
-    if vol_ratio < 1.5:
+    if vol_ratio < 0.5:
         return (False, None, None)
     
     # ===== STEP 3: CALCULATE EMAs =====
@@ -4140,7 +4707,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     elif (tail_distance_to_ema10 < 0.01 and 
           curr_price > curr_ema60 and 
           lower_wick_pct >= 0.55 and  # ← MODIFICATO da 0.60
-          vol_ratio >= 2.0):
+          vol_ratio >= 1.0):
         
         tier = 'GOOD'
         quality_score = 78
@@ -4148,7 +4715,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     # === TIER 3: OK (Generic Pin Bar) ===
     elif (curr_price > curr_ema60 and 
           lower_wick_pct >= 0.55 and  # ← MODIFICATO da 0.60
-          vol_ratio >= 1.5):
+          vol_ratio >= 0.5):
         
         tier = 'OK'
         quality_score = 62
@@ -5142,6 +5709,48 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.debug(f'{symbol}: Bullish Engulfing Enhanced - not found')
         except Exception as e:
             logging.error(f'Error in Bullish Engulfing Enhanced: {e}')
+
+    # 🌱 BUD Pattern
+    if AVAILABLE_PATTERNS.get('bud_pattern', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing BUD Pattern...')
+        try:
+            found, data = is_bud_pattern(df, require_maxi=False)
+            if found:
+                logging.info(f'✅ TIER 1: BUD Pattern ({data["rest_count"]} riposo)')
+                
+                # Caption personalizzato
+                caption = f"🌱 <b>BUD PATTERN</b>\n\n"
+                caption += f"📊 Candele Riposo: {data['rest_count']}\n"
+                caption += f"💥 Breakout High: ${data['breakout_high']:.{price_decimals}f}\n"
+                caption += f"📦 Range Breakout: {data['breakout_range']:.{price_decimals}f}\n"
+                caption += f"{'✅' if data['breaks_breakout_high'] else '⚠️'} Rompe breakout high\n\n"
+                
+                caption += f"💵 Entry: ${data['suggested_entry']:.{price_decimals}f}\n"
+                caption += f"🛑 SL: ${data['suggested_sl']:.{price_decimals}f}\n"
+                caption += f"🎯 TP: ${data['suggested_tp']:.{price_decimals}f} (2R)\n\n"
+                
+                if data['volume_ok']:
+                    caption += f"📊 Volume Breakout: {data['volume_ratio']:.1f}x ✅\n"
+                
+                return (True, 'Buy', 'BUD Pattern', data)
+        except Exception as e:
+            logging.error(f'Error in BUD Pattern: {e}')
+    
+    # 🌟 MAXI BUD Pattern
+    if AVAILABLE_PATTERNS.get('maxi_bud_pattern', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing MAXI BUD Pattern...')
+        try:
+            found, data = is_maxi_bud_pattern(df)
+            if found:
+                logging.info(f'✅ TIER 1: MAXI BUD Pattern ({data["rest_count"]} riposo)')
+                
+                caption = f"🌟🌱 <b>MAXI BUD PATTERN</b>\n\n"
+                caption += f"⭐ <b>Setup PREMIUM</b> ({data['rest_count']} candele riposo)\n\n"
+                # ... resto caption simile a BUD
+                
+                return (True, 'Buy', 'MAXI BUD Pattern', data)
+        except Exception as e:
+            logging.error(f'Error in MAXI BUD: {e}')
     
     # ═══════════════════════════════════════════
     # TIER 3: CLASSIC PATTERNS (45-55%)
@@ -5276,6 +5885,49 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
         
         except Exception as e:
             logging.error(f'Error in Bearish Engulfing Enhanced: {e}')
+
+    # 🔴🌱 BUD Bearish Pattern
+    if AVAILABLE_PATTERNS.get('bud_bearish_pattern', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing BUD Bearish Pattern...')
+        try:
+            found, data = is_bud_bearish_pattern(df, require_maxi=False)
+            if found:
+                logging.info(f'✅ TIER 1: BUD Bearish Pattern ({data["rest_count"]} riposo)')
+                
+                # Check trend filter per SHORT
+                if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                    trend_valid, trend_reason, _ = is_valid_trend_for_sell(
+                        df, mode=TREND_FILTER_MODE, symbol=symbol
+                    )
+                    
+                    if not trend_valid:
+                        logging.info(f'⚠️ BUD Bearish: trend blocked - {trend_reason}')
+                    else:
+                        return (True, 'Sell', 'BUD Bearish Pattern', data)
+                else:
+                    return (True, 'Sell', 'BUD Bearish Pattern', data)
+        except Exception as e:
+            logging.error(f'Error in BUD Bearish: {e}')
+    
+    # 🌟🔴 MAXI BUD Bearish Pattern
+    if AVAILABLE_PATTERNS.get('maxi_bud_bearish_pattern', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing MAXI BUD Bearish Pattern...')
+        try:
+            found, data = is_maxi_bud_bearish_pattern(df)
+            if found:
+                logging.info(f'✅ TIER 1: MAXI BUD Bearish ({data["rest_count"]} riposo)')
+                
+                if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                    trend_valid, _, _ = is_valid_trend_for_sell(
+                        df, mode=TREND_FILTER_MODE, symbol=symbol
+                    )
+                    
+                    if trend_valid:
+                        return (True, 'Sell', 'MAXI BUD Bearish Pattern', data)
+                else:
+                    return (True, 'Sell', 'MAXI BUD Bearish Pattern', data)
+        except Exception as e:
+            logging.error(f'Error in MAXI BUD Bearish: {e}')
     
     # Shooting Star
     if AVAILABLE_PATTERNS.get('shooting_star', {}).get('enabled', False):
@@ -6549,6 +7201,12 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
     """
     Advanced Trailing Stop Loss - Multi-Level Progressive
     SUPPORTA SIA BUY CHE SELL
+
+    NUOVO COMPORTAMENTO:
+    ====================
+    Quando il profit supera una soglia alta (es. 5x risk), 
+    BLOCCA IMMEDIATAMENTE il profitto spostando SL a break-even o superiore,
+    IGNORANDO temporaneamente l'EMA trailing normale.
     
     LOGICA:
     1. Per ogni posizione aperta, calcola profit %
@@ -6578,18 +7236,13 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
     for symbol, pos_info in positions_copy.items():
         try:
             side = pos_info.get('side')
-            
-            # ← RIMUOVI QUESTO CHECK (supporta entrambi)
-            # if side != 'Buy':
-            #     continue
-            
             entry_price = pos_info.get('entry_price')  # ← USA .get() per safety
+            
             if not entry_price:
                 logging.error(f"{symbol}: Missing entry_price in position data")
                 continue
 
-            # ===== AGGIUNGI QUESTO BLOCCO =====
-            # Verifica che la posizione esista REALMENTE su Bybit
+            # ===== VERIFICA POSIZIONE REALE SU BYBIT =====
             try:
                 session = create_bybit_session()
                 positions_response = session.get_positions(
@@ -6620,14 +7273,13 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logging.error(f"{symbol}: Error verifying position: {e}")
                 continue
-            # ===== FINE BLOCCO =====
                 
             current_sl = pos_info['sl']
             timeframe_entry = pos_info.get('timeframe', '15m')
             chat_id = pos_info.get('chat_id')
             
             # Determina timeframe EMA per trailing
-            ema_tf = TRAILING_EMA_TIMEFRAME.get(timeframe_entry, '15m')
+            ema_tf = TRAILING_EMA_TIMEFRAME.get(timeframe_entry, '5m')
             
             # Scarica dati per calcolare EMA 10
             df = bybit_get_klines(symbol, ema_tf, limit=20)
@@ -6642,6 +7294,99 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                 profit_pct = ((current_price - entry_price) / entry_price) * 100
             else:  # Sell
                 profit_pct = ((entry_price - current_price) / entry_price) * 100
+
+            # ===== CALCOLO RISK INIZIALE =====
+            if side == 'Buy':
+                initial_risk_per_unit = entry_price - current_sl
+            else:
+                initial_risk_per_unit = current_sl - entry_price
+            
+            initial_risk_usd = initial_risk_per_unit * pos_info['qty']
+            
+            # ===== 🚀 AGGRESSIVE PROFIT LOCK =====
+            # Se profit >= 5x risk iniziale → BLOCCA PROFIT SUBITO
+            #PROFIT_LOCK_MULTIPLIER = 5.0  # Cambia questo per regolare aggressività
+            #PROFIT_LOCK_RETENTION = 0.80   # Trattieni 80% del profit
+            PROFIT_LOCK_MULTIPLIER = PROFIT_LOCK_CONFIG['multiplier']
+            PROFIT_LOCK_RETENTION = PROFIT_LOCK_CONFIG['retention']
+            MIN_PROFIT_USD = PROFIT_LOCK_CONFIG['min_profit_usd']
+
+            if profit_risk_ratio >= PROFIT_LOCK_MULTIPLIER and profit_usd >= MIN_PROFIT_USD:
+            
+                if initial_risk_usd > 0:
+                    profit_risk_ratio = profit_usd / initial_risk_usd
+                    
+                    if profit_risk_ratio >= PROFIT_LOCK_MULTIPLIER:
+                        # PROFIT ALTO! Blocca subito
+                        
+                        if side == 'Buy':
+                            # Sposta SL a entry + (80% del profit)
+                            locked_profit = profit_usd * PROFIT_LOCK_RETENTION
+                            new_sl = entry_price + (locked_profit / pos_info['qty'])
+                            
+                            # Assicurati che sia miglioramento
+                            if new_sl <= current_sl:
+                                logging.debug(f"{symbol} (BUY): Profit lock SL {new_sl:.4f} <= current {current_sl:.4f}, skip")
+                                continue
+                            
+                        else:  # Sell
+                            # Sposta SL a entry - (80% del profit)
+                            locked_profit = profit_usd * PROFIT_LOCK_RETENTION
+                            new_sl = entry_price - (locked_profit / pos_info['qty'])
+                            
+                            if new_sl >= current_sl:
+                                logging.debug(f"{symbol} (SELL): Profit lock SL {new_sl:.4f} >= current {current_sl:.4f}, skip")
+                                continue
+                        
+                        # ===== AGGIORNA SU BYBIT (PROFIT LOCK) =====
+                        try:
+                            session = create_bybit_session()
+                            result = session.set_trading_stop(
+                                category="linear",
+                                symbol=symbol,
+                                stopLoss=str(round(new_sl, get_price_decimals(new_sl))),
+                                positionIdx=0
+                            )
+                            
+                            if result.get('retCode') == 0:
+                                with POSITIONS_LOCK:
+                                    if symbol in ACTIVE_POSITIONS:
+                                        ACTIVE_POSITIONS[symbol]['sl'] = new_sl
+                                
+                                logging.info(f"🚀 {symbol} ({side}): PROFIT LOCK! SL → {new_sl:.4f} (profit: ${profit_usd:.2f}, {profit_risk_ratio:.1f}x risk)")
+                                
+                                # ===== NOTIFICA TELEGRAM =====
+                                if chat_id:
+                                    try:
+                                        side_emoji = "🟢" if side == 'Buy' else "🔴"
+                                        
+                                        notification = f"<b>{side_emoji} 🚀 PROFIT LOCK! ({side})</b>\n\n"
+                                        notification += f"<b>Symbol:</b> {symbol} ({timeframe_entry})\n"
+                                        notification += f"<b>Profit:</b> ${profit_usd:.2f} ({profit_pct:.2f}%)\n"
+                                        notification += f"<b>Risk Ratio:</b> {profit_risk_ratio:.1f}x risk iniziale!\n\n"
+                                        notification += f"<b>🔒 Stop Loss Locked:</b>\n"
+                                        notification += f"• Prima: ${current_sl:.{get_price_decimals(current_sl)}f}\n"
+                                        notification += f"• Ora: ${new_sl:.{get_price_decimals(new_sl)}f}\n"
+                                        notification += f"• Profit protetto: ${locked_profit:.2f} ({PROFIT_LOCK_RETENTION*100:.0f}%)\n\n"
+                                        notification += f"💡 <b>Profit molto alto rilevato!</b>\n"
+                                        notification += f"Stop loss spostato IMMEDIATAMENTE per proteggere guadagni.\n"
+                                        notification += f"Trailing normale riprenderà da questo livello."
+                                        
+                                        await context.bot.send_message(
+                                            chat_id=chat_id,
+                                            text=notification,
+                                            parse_mode="HTML"
+                                        )
+                                    except Exception as e:
+                                        logging.error(f"Errore invio notifica profit lock: {e}")
+                            else:
+                                logging.error(f"{symbol}: Errore profit lock: {result.get('retMsg')}")
+                        
+                        except Exception as e:
+                            logging.error(f"{symbol}: Errore set_trading_stop (profit lock): {e}")
+                        
+                        # SKIP trailing normale (già gestito qui)
+                        continue
             
             # ===== TROVA IL LIVELLO APPROPRIATO =====
             active_level = None
@@ -7615,6 +8360,136 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     else:
                         caption += f"\n\n✅ <b>Ordine su Bybit {TRADING_MODE.upper()}</b>"
 
+            # 🌱 BUD PATTERN CAPTION
+            elif pattern == 'BUD Pattern' or pattern == 'MAXI BUD Pattern':
+                
+                tier = 'MAXI' if 'MAXI' in pattern else 'STANDARD'
+                entry_price = pattern_data['suggested_entry']
+                sl_price = pattern_data['suggested_sl']
+                tp_price = pattern_data['suggested_tp']
+                
+                caption = f"🌱 <b>{pattern.upper()}</b>\n\n"
+                
+                if tier == 'MAXI':
+                    caption += f"⭐ <b>Setup PREMIUM</b> ({pattern_data['rest_count']} candele riposo)\n\n"
+                else:
+                    caption += f"📊 <b>Setup VALIDO</b> ({pattern_data['rest_count']} candele riposo)\n\n"
+                
+                price_decimals = get_price_decimals(pattern_data['breakout_high'])
+                
+                caption += f"💥 <b>Breakout Phase:</b>\n"
+                caption += f"  High: ${pattern_data['breakout_high']:.{price_decimals}f}\n"
+                caption += f"  Low: ${pattern_data['breakout_low']:.{price_decimals}f}\n"
+                caption += f"  Range: ${pattern_data['breakout_range']:.{price_decimals}f}\n"
+                caption += f"  Body: {pattern_data['breakout_body_pct']:.1f}%\n\n"
+                
+                caption += f"🛌 <b>Rest Phase:</b>\n"
+                caption += f"  Candele: {pattern_data['rest_count']}\n"
+                caption += f"  Avg Range: {pattern_data['rest_range_pct']:.1f}% del breakout\n"
+                caption += f"  Status: {'✅ Compresse' if pattern_data['rest_range_pct'] < 60 else '⚠️'}\n\n"
+                
+                caption += f"💥 <b>Trigger:</b>\n"
+                caption += f"  {'✅' if pattern_data['breaks_breakout_high'] else '⚠️'} Rompe breakout high\n"
+                caption += f"  Candela: {'🟢 Verde' if pattern_data['is_green'] else '⚪'}\n\n"
+                
+                caption += f"📊 <b>Volume & EMA:</b>\n"
+                if pattern_data['volume_ok']:
+                    caption += f"  ✅ Volume: {pattern_data['volume_ratio']:.1f}x\n"
+                else:
+                    caption += f"  ⚠️ Volume: {pattern_data['volume_ratio']:.1f}x (< 1.5x)\n"
+                
+                caption += f"  EMA 10: ${pattern_data['ema10']:.{price_decimals}f}\n"
+                caption += f"  EMA 60: ${pattern_data['ema60']:.{price_decimals}f}\n"
+                caption += f"  {'✅' if pattern_data['above_ema60'] else '⚠️'} Sopra EMA 60 (uptrend)\n\n"
+                
+                caption += f"🎯 <b>Trade Setup:</b>\n"
+                caption += f"  Entry: ${entry_price:.{price_decimals}f}\n"
+                caption += f"  SL: ${sl_price:.{price_decimals}f}\n"
+                caption += f"     (sotto breakout low)\n"
+                caption += f"  TP: ${tp_price:.{price_decimals}f} (2R)\n\n"
+                
+                # ===== DYNAMIC RISK CALCULATION =====
+                risk_base = RISK_USD
+                if ema_analysis and 'score' in ema_analysis:
+                    ema_score = ema_analysis['score']
+                    risk_base = calculate_dynamic_risk(ema_score)
+                    logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
+                else:
+                    risk_base = RISK_USD
+                    logging.debug(f"No EMA analysis, using base risk ${RISK_USD}")
+                
+                # Apply symbol-specific override
+                if symbol in SYMBOL_RISK_OVERRIDE:
+                    risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+                    logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
+                else:
+                    risk_for_symbol = risk_base
+                
+                # ===== INTELLIGENT POSITION SIZING =====
+                lastatr = atr(df, period=14).iloc[-1]
+                if math.isnan(lastatr):
+                    lastatr = abs(entry_price - sl_price) * 0.01
+                
+                ema_score = ema_analysis['score'] if ema_analysis else 50
+                qty = calculate_optimal_position_size(
+                    entry_price=entry_price,
+                    sl_price=sl_price,
+                    symbol=symbol,
+                    volatility_atr=lastatr,
+                    ema_score=ema_score,
+                    risk_usd=risk_for_symbol
+                )
+                
+                caption += f"📊 <b>Risk Management:</b>\n"
+                caption += f"  Position Size: {qty:.4f}\n"
+                caption += f"  Risk per Trade: ${risk_for_symbol:.2f}\n"
+                
+                if ema_analysis:
+                    caption += f"  EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n"
+                    caption += f"  Risk Tier: "
+                    if ema_analysis['score'] >= 80:
+                        caption += "🌟 GOLD (Max Risk)\n"
+                    elif ema_analysis['score'] >= 60:
+                        caption += "✅ GOOD (Standard Risk)\n"
+                    elif ema_analysis['score'] >= 40:
+                        caption += "⚠️ OK (Reduced Risk)\n"
+                    else:
+                        caption += "❌ WEAK (Minimal Risk)\n"
+                
+                if lastatr > 0:
+                    volatility_pct = (lastatr / entry_price) * 100
+                    caption += f"  ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
+                
+                caption += f"\n💡 <b>Strategy Notes:</b>\n"
+                caption += f"  • Breakout + riposo = buyers confidenti\n"
+                caption += f"  • Pattern compresso = energia per pump\n"
+                if tier == 'MAXI':
+                    caption += f"  • ⭐ MAXI: 3+ riposo = setup superiore\n"
+                
+                # Position check
+                if position_exists:
+                    caption += "\n\n🚫 <b>Posizione già aperta</b>"
+                    caption += f"\nOrdine NON eseguito per {symbol}"
+                
+                # Autotrade
+                if job_ctx.get('autotrade') and qty > 0 and not position_exists:
+                    order_res = await place_bybit_order(
+                        symbol, 
+                        side, 
+                        qty, 
+                        sl_price, 
+                        tp_price,
+                        entry_price,
+                        timeframe,
+                        chat_id,
+                        pattern
+                    )
+                    
+                    if 'error' in order_res:
+                        caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
+                    else:
+                        caption += f"\n\n✅ <b>Ordine su Bybit {TRADING_MODE.upper()}</b>"
+
             elif pattern == 'Morning Star (GOLD)' or \
                  pattern == 'Morning Star (GOOD)' or \
                  pattern == 'Morning Star (OK)':
@@ -8134,6 +9009,114 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"  (sopra high candela)\n"
                 
                 caption += f"TP: ${tp_price:.{price_decimals}f} (2R)\n"
+
+                # ===== BUD BEARISH CAPTION =====
+            elif pattern.startswith('BUD Bearish') or pattern.startswith('MAXI BUD Bearish'):
+                
+                tier = 'MAXI' if 'MAXI' in pattern else 'STANDARD'
+                
+                caption = f"🔴🌱 <b>{pattern.upper()}</b>\n\n"
+                
+                if tier == 'MAXI':
+                    caption += f"⭐ <b>Setup PREMIUM</b> ({pattern_data['rest_count']} candele riposo)\n\n"
+                else:
+                    caption += f"📊 <b>Setup VALIDO</b> ({pattern_data['rest_count']} candele riposo)\n\n"
+                
+                price_decimals = get_price_decimals(pattern_data['breakdown_low'])
+                
+                caption += f"📉 <b>Breakdown Phase:</b>\n"
+                caption += f"  High: ${pattern_data['breakdown_high']:.{price_decimals}f}\n"
+                caption += f"  Low: ${pattern_data['breakdown_low']:.{price_decimals}f}\n"
+                caption += f"  Range: ${pattern_data['breakdown_range']:.{price_decimals}f}\n"
+                caption += f"  Body: {pattern_data['breakdown_body_pct']:.1f}%\n\n"
+                
+                caption += f"🛌 <b>Rest Phase:</b>\n"
+                caption += f"  Candele: {pattern_data['rest_count']}\n"
+                caption += f"  Avg Range: {pattern_data['rest_range_pct']:.1f}% del breakdown\n"
+                caption += f"  Status: {'✅ Compresse' if pattern_data['rest_range_pct'] < 60 else '⚠️'}\n\n"
+                
+                caption += f"💥 <b>Trigger:</b>\n"
+                caption += f"  {'✅' if pattern_data['breaks_breakdown_low'] else '⚠️'} Rompe breakdown low\n"
+                caption += f"  Candela: {'🔴 Rossa' if pattern_data['is_red'] else '⚪'}\n\n"
+                
+                caption += f"📊 <b>Volume & EMA:</b>\n"
+                if pattern_data['volume_ok']:
+                    caption += f"  ✅ Volume: {pattern_data['volume_ratio']:.1f}x\n"
+                else:
+                    caption += f"  ⚠️ Volume: {pattern_data['volume_ratio']:.1f}x (minore 1.5x)\n"
+                
+                caption += f"  EMA 10: ${pattern_data['ema10']:.{price_decimals}f}\n"
+                caption += f"  EMA 60: ${pattern_data['ema60']:.{price_decimals}f}\n"
+                caption += f"  {'✅' if pattern_data['below_ema60'] else '⚠️'} Sotto EMA 60 (downtrend)\n\n"
+                
+                caption += f"🎯 <b>SHORT Setup:</b>\n"
+                caption += f"  Entry: ${pattern_data['suggested_entry']:.{price_decimals}f}\n"
+                caption += f"  SL: ${pattern_data['suggested_sl']:.{price_decimals}f}\n"
+                caption += f"     (sopra breakdown high)\n"
+                caption += f"  TP: ${pattern_data['suggested_tp']:.{price_decimals}f} (2R)\n\n"
+                
+                # Risk calculation
+                risk_base = RISK_USD
+                if ema_analysis and 'score' in ema_analysis:
+                    ema_score = ema_analysis['score']
+                    risk_base = calculate_dynamic_risk(ema_score)
+                
+                if symbol in SYMBOL_RISK_OVERRIDE:
+                    risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+                else:
+                    risk_for_symbol = risk_base
+                
+                # Position sizing
+                lastatr = atr(df, period=14).iloc[-1]
+                if math.isnan(lastatr):
+                    lastatr = abs(entry_price - sl_price) * 0.01
+                
+                ema_score = ema_analysis['score'] if ema_analysis else 50
+                qty = calculate_optimal_position_size(
+                    entry_price=entry_price,
+                    sl_price=sl_price,
+                    symbol=symbol,
+                    volatility_atr=lastatr,
+                    ema_score=ema_score,
+                    risk_usd=risk_for_symbol
+                )
+                
+                caption += f"📊 <b>Risk Management:</b>\n"
+                caption += f"  Position Size: {qty:.4f}\n"
+                caption += f"  Risk per Trade: ${risk_for_symbol:.2f}\n"
+                
+                if ema_analysis:
+                    caption += f"  EMA Score: {ema_analysis['score']}/100\n"
+                
+                caption += f"\n💡 <b>Strategy Notes:</b>\n"
+                caption += f"  • Pattern compresso = shorts confidenti\n"
+                caption += f"  • Riposo = no panic buy = setup forte\n"
+                if tier == 'MAXI':
+                    caption += f"  • ⭐ MAXI: 3+ riposo = probabilità superiore\n"
+                
+                # Position check
+                if position_exists:
+                    caption += "\n\n🚫 <b>Posizione già aperta</b>"
+                    caption += f"\nOrdine SHORT NON eseguito per {symbol}"
+                
+                # Autotrade
+                if job_ctx.get('autotrade') and qty > 0 and not position_exists:
+                    order_res = await place_bybit_order(
+                        symbol, 
+                        side,  # 'Sell'
+                        qty, 
+                        sl_price, 
+                        tp_price,
+                        entry_price,
+                        timeframe,
+                        chat_id,
+                        pattern
+                    )
+                    
+                    if 'error' in order_res:
+                        caption += f"\n\n❌ <b>Errore ordine SHORT:</b>\n{order_res['error']}"
+                    else:
+                        caption += f"\n\n✅ <b>Ordine SHORT su Bybit {TRADING_MODE.upper()}</b>"
 
             # Check EMA filter per SELL (come per BUY)
             if EMA_FILTER_ENABLED and ema_analysis:
@@ -9414,256 +10397,225 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Comando /orders [LIMIT]
-    Mostra gli ultimi ordini chiusi con P&L da Bybit
-    CON DISTINZIONE BUY/SELL e metriche separate
+    Comando: /orders N
+    Mostra gli ultimi ordini chiusi con PnL da Bybit,
+    con statistiche separate LONG (Buy) e SHORT (Sell).
     """
-    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+    if not BYBIT_APIKEY or not BYBITAPISECRET:
         await update.message.reply_text(
-            '⚠️ API Bybit non configurate.\n'
-            'Configura BYBIT_API_KEY e BYBIT_API_SECRET nelle variabili d\'ambiente.'
+            "API Bybit non configurate.\n"
+            "Configura BYBIT_APIKEY e BYBIT_APISECRET nelle variabili d'ambiente."
         )
         return
-    
-    # Limita numero ordini da mostrare
+
     args = context.args
     limit = 10
     if args and args[0].isdigit():
         limit = min(int(args[0]), 50)  # Max 50 ordini
-    
-    await update.message.reply_text(f'🔍 Recupero ultimi {limit} ordini...')
-    
+
+    await update.message.reply_text(f"Recupero ultimi {limit} ordini chiusi...")
+
     try:
         session = create_bybit_session()
-        
-        # Ottieni closed P&L (ordini chiusi con profitti/perdite)
+
+        # Closed PnL = ordini/posizioni chiuse
         pnl_response = session.get_closed_pnl(
-            category='linear',
+            category="linear",
             limit=limit
         )
-        
-        logging.info(f'📊 Closed P&L response: {pnl_response}')
-        
-        if pnl_response.get('retCode') == 0:
-            result = pnl_response.get('result', {})
-            pnl_list = result.get('list', [])
-            
-            if not pnl_list:
-                await update.message.reply_text(
-                    '📭 <b>Nessun ordine chiuso trovato</b>\n\n'
-                    'Non ci sono ancora trade completati nel tuo account.',
-                    parse_mode='HTML'
-                )
-                return
-            
-            msg = f"📊 <b>Ultimi {len(pnl_list)} Ordini Chiusi ({TRADING_MODE.upper()})</b>\n\n"
-            
-            # Statistiche globali
-            total_pnl = 0
-            win_count = 0
-            loss_count = 0
-            
-            # Statistiche separate BUY/SELL
-            buy_stats = {
-                'count': 0,
-                'wins': 0,
-                'losses': 0,
-                'total_pnl': 0,
-                'total_volume': 0
-            }
-            
-            sell_stats = {
-                'count': 0,
-                'wins': 0,
-                'losses': 0,
-                'total_pnl': 0,
-                'total_volume': 0
-            }
-            
-            # Processa ogni ordine
-            for pnl_entry in pnl_list:
-                symbol = pnl_entry.get('symbol', 'N/A')
-                side = pnl_entry.get('side', 'N/A')
-                qty = float(pnl_entry.get('qty', 0))
-                avg_entry = float(pnl_entry.get('avgEntryPrice', 0))
-                avg_exit = float(pnl_entry.get('avgExitPrice', 0))
-                closed_pnl = float(pnl_entry.get('closedPnl', 0))
-                
-                # Timestamp chiusura (millisecondi)
-                updated_time = int(pnl_entry.get('updatedTime', 0))
+        logging.info(f"Closed PL response: {pnl_response}")
+
+        if pnl_response.get("retCode") != 0:
+            error_code = pnl_response.get("retCode", "NA")
+            error_msg = pnl_response.get("retMsg", "Errore sconosciuto")
+            msg = (
+                f"<b>Errore API Bybit</b>\n"
+                f"Codice: {error_code}\n"
+                f"Messaggio: {error_msg}"
+            )
+            await update.message.reply_text(msg, parse_mode="HTML")
+            return
+
+        result = pnl_response.get("result", {})
+        pnl_list = result.get("list", [])
+
+        if not pnl_list:
+            await update.message.reply_text(
+                "<b>Nessun ordine chiuso trovato</b>\n"
+                "Non ci sono ancora trade completati nel tuo account.",
+                parse_mode="HTML"
+            )
+            return
+
+        # Statistiche globali
+        total_pnl = 0.0
+        win_count = 0
+        loss_count = 0
+
+        # Statistiche LONG/SHORT
+        long_stats = {
+            "count": 0,
+            "wins": 0,
+            "losses": 0,
+            "total_pnl": 0.0,
+            "total_volume": 0.0,
+        }
+        short_stats = {
+            "count": 0,
+            "wins": 0,
+            "losses": 0,
+            "total_pnl": 0.0,
+            "total_volume": 0.0,
+        }
+
+        lines = []
+        lines.append(
+            f"<b>Ultimi {len(pnl_list)} Ordini Chiusi {TRADINGMODE.upper()}</b>"
+        )
+
+        for pnl_entry in pnl_list:
+            symbol = pnl_entry.get("symbol", "NA")
+
+            # Side: 'Buy' = long, 'Sell' = short
+            side_raw = pnl_entry.get("side", "NA")
+            side = str(side_raw).strip().capitalize()  # normalizza: 'buy' -> 'Buy', 'sell' -> 'Sell'
+
+            qty = float(pnl_entry.get("qty", 0) or 0)
+            avg_entry = float(pnl_entry.get("avgEntryPrice", 0) or 0)
+            avg_exit = float(pnl_entry.get("avgExitPrice", 0) or 0)
+            closed_pnl = float(pnl_entry.get("closedPnl", 0) or 0)
+
+            # Timestamp (ms -> datetime)
+            updated_time = int(pnl_entry.get("updatedTime", 0) or 0)
+            if updated_time > 0:
                 close_time = datetime.fromtimestamp(updated_time / 1000, tz=timezone.utc)
-                time_str = close_time.strftime('%d/%m %H:%M')
-                
-                # Aggiorna statistiche globali
-                total_pnl += closed_pnl
-                if closed_pnl > 0:
-                    win_count += 1
+                time_str = close_time.strftime("%d/%m %H:%M")
+            else:
+                time_str = "N/A"
+
+            # Aggiorna statistiche globali
+            total_pnl += closed_pnl
+            if closed_pnl >= 0:
+                win_count += 1
+            else:
+                loss_count += 1
+
+            # Calcolo PnL %
+            pnl_percent = 0.0
+            if avg_entry > 0:
+                if side == "Buy":
+                    # Long: guadagni se exit > entry
+                    pnl_percent = (avg_exit - avg_entry) / avg_entry * 100
+                elif side == "Sell":
+                    # Short: guadagni se exit < entry
+                    pnl_percent = (avg_entry - avg_exit) / avg_entry * 100
+
+            price_decimals = get_price_decimals(avg_entry)
+
+            # Emoji side
+            if side == "Buy":
+                side_emoji = "🟢"
+            elif side == "Sell":
+                side_emoji = "🔴"
+            else:
+                side_emoji = "⚪️"
+
+            # Emoji PnL
+            if closed_pnl > 0:
+                pnl_emoji = "✅"
+            elif closed_pnl < 0:
+                pnl_emoji = "❌"
+            else:
+                pnl_emoji = "➖"
+
+            # Aggiorna statistiche long/short
+            if side == "Buy":
+                long_stats["count"] += 1
+                long_stats["total_pnl"] += closed_pnl
+                long_stats["total_volume"] += qty * avg_entry  # valore nozionale
+                if closed_pnl >= 0:
+                    long_stats["wins"] += 1
                 else:
-                    loss_count += 1
-                
-                # Aggiorna statistiche per side
-                if side == 'Buy':
-                    buy_stats['count'] += 1
-                    buy_stats['total_pnl'] += closed_pnl
-                    buy_stats['total_volume'] += qty * avg_entry
-                    if closed_pnl > 0:
-                        buy_stats['wins'] += 1
-                    else:
-                        buy_stats['losses'] += 1
-                else:  # Sell
-                    sell_stats['count'] += 1
-                    sell_stats['total_pnl'] += closed_pnl
-                    sell_stats['total_volume'] += qty * avg_entry
-                    if closed_pnl > 0:
-                        sell_stats['wins'] += 1
-                    else:
-                        sell_stats['losses'] += 1
-                
-                # Emoji in base al risultato
-                side_emoji = "🟢" if side == 'Buy' else "🔴"
-                pnl_emoji = "✅" if closed_pnl > 0 else "❌"
-                
-                # Calcola P&L %
-                pnl_percent = 0
-                if avg_entry > 0:
-                    if side == 'Buy':
-                        pnl_percent = ((avg_exit - avg_entry) / avg_entry) * 100
-                    else:
-                        pnl_percent = ((avg_entry - avg_exit) / avg_entry) * 100
-                
-                # Decimali dinamici
-                price_decimals = get_price_decimals(avg_entry)
-                
-                # Costruisci messaggio ordine
-                msg += f"{side_emoji} <b>{symbol}</b> - {side}\n"
-                msg += f"  Qty: {qty:.4f}\n"
-                msg += f"  Entry: ${avg_entry:.{price_decimals}f}\n"
-                msg += f"  Exit: ${avg_exit:.{price_decimals}f}\n"
-                msg += f"  {pnl_emoji} PnL: ${closed_pnl:+.2f} ({pnl_percent:+.2f}%)\n"
-                msg += f"  Time: {time_str}\n\n"
-            
-            # ===== STATISTICHE FINALI CON SEPARAZIONE BUY/SELL =====
-            msg += "━━━━━━━━━━━━━━━━━━━\n\n"
-            
-            # Statistiche globali
-            msg += f"💰 <b>PnL Totale: ${total_pnl:+.2f}</b>\n"
-            msg += f"✅ Win: {win_count} | ❌ Loss: {loss_count}\n"
-            
-            if (win_count + loss_count) > 0:
-                win_rate = (win_count / (win_count + loss_count)) * 100
-                msg += f"📊 Win Rate: {win_rate:.1f}%\n\n"
-            
-            # ===== STATISTICHE BUY =====
-            if buy_stats['count'] > 0:
-                buy_win_rate = (buy_stats['wins'] / buy_stats['count']) * 100
-                avg_pnl_buy = buy_stats['total_pnl'] / buy_stats['count']
-                
-                msg += "🟢 <b>BUY Statistics:</b>\n"
-                msg += f"  Trades: {buy_stats['count']}\n"
-                msg += f"  Wins: {buy_stats['wins']} | Losses: {buy_stats['losses']}\n"
-                msg += f"  Win Rate: {buy_win_rate:.1f}%\n"
-                msg += f"  Total PnL: ${buy_stats['total_pnl']:+.2f}\n"
-                msg += f"  Avg PnL/Trade: ${avg_pnl_buy:+.2f}\n"
-                msg += f"  Volume: ${buy_stats['total_volume']:.0f}\n\n"
-            
-            # ===== STATISTICHE SELL =====
-            if sell_stats['count'] > 0:
-                sell_win_rate = (sell_stats['wins'] / sell_stats['count']) * 100
-                avg_pnl_sell = sell_stats['total_pnl'] / sell_stats['count']
-                
-                msg += "🔴 <b>SELL Statistics:</b>\n"
-                msg += f"  Trades: {sell_stats['count']}\n"
-                msg += f"  Wins: {sell_stats['wins']} | Losses: {sell_stats['losses']}\n"
-                msg += f"  Win Rate: {sell_win_rate:.1f}%\n"
-                msg += f"  Total PnL: ${sell_stats['total_pnl']:+.2f}\n"
-                msg += f"  Avg PnL/Trade: ${avg_pnl_sell:+.2f}\n"
-                msg += f"  Volume: ${sell_stats['total_volume']:.0f}\n\n"
-            
-            # ===== CONFRONTO PERFORMANCE =====
-            if buy_stats['count'] > 0 and sell_stats['count'] > 0:
-                msg += "📈 <b>Performance Comparison:</b>\n"
-                
-                # Win rate comparison
-                if buy_stats['wins'] / buy_stats['count'] > sell_stats['wins'] / sell_stats['count']:
-                    msg += f"  Best Win Rate: 🟢 BUY ({buy_win_rate:.1f}%)\n"
+                    long_stats["losses"] += 1
+            elif side == "Sell":
+                short_stats["count"] += 1
+                short_stats["total_pnl"] += closed_pnl
+                short_stats["total_volume"] += qty * avg_entry
+                if closed_pnl >= 0:
+                    short_stats["wins"] += 1
                 else:
-                    msg += f"  Best Win Rate: 🔴 SELL ({sell_win_rate:.1f}%)\n"
-                
-                # PnL comparison
-                if buy_stats['total_pnl'] > sell_stats['total_pnl']:
-                    msg += f"  Most Profitable: 🟢 BUY (${buy_stats['total_pnl']:+.2f})\n"
-                else:
-                    msg += f"  Most Profitable: 🔴 SELL (${sell_stats['total_pnl']:+.2f})\n"
-                
-                # Avg PnL comparison
-                avg_pnl_buy = buy_stats['total_pnl'] / buy_stats['count']
-                avg_pnl_sell = sell_stats['total_pnl'] / sell_stats['count']
-                
-                if avg_pnl_buy > avg_pnl_sell:
-                    msg += f"  Better Avg: 🟢 BUY (${avg_pnl_buy:+.2f}/trade)\n"
-                else:
-                    msg += f"  Better Avg: 🔴 SELL (${avg_pnl_sell:+.2f}/trade)\n"
-                
-                msg += "\n"
-            
-            # ===== INSIGHTS =====
-            msg += "💡 <b>Insights:</b>\n"
-            
-            # Identifica lato più profittevole
-            if buy_stats['count'] > 0 and sell_stats['count'] > 0:
-                if buy_stats['total_pnl'] > sell_stats['total_pnl'] * 1.5:
-                    msg += "  • BUY trades molto più profittevoli\n"
-                    msg += "  • Considera di tradare più BUY\n"
-                elif sell_stats['total_pnl'] > buy_stats['total_pnl'] * 1.5:
-                    msg += "  • SELL trades molto più profittevoli\n"
-                    msg += "  • Considera di tradare più SELL\n"
-                else:
-                    msg += "  • Performance BUY/SELL bilanciata\n"
-            
-            # Warning se un lato perde
-            if buy_stats['count'] > 0 and buy_stats['total_pnl'] < -10:
-                msg += "  • ⚠️ BUY trades in perdita netta\n"
-            if sell_stats['count'] > 0 and sell_stats['total_pnl'] < -10:
-                msg += "  • ⚠️ SELL trades in perdita netta\n"
-            
-            # Best side by win rate
-            if buy_stats['count'] > 0 and sell_stats['count'] > 0:
-                buy_wr = buy_stats['wins'] / buy_stats['count']
-                sell_wr = sell_stats['wins'] / sell_stats['count']
-                
-                if buy_wr > 0.6 and buy_wr > sell_wr:
-                    msg += f"  • ✅ BUY win rate eccellente ({buy_wr*100:.1f}%)\n"
-                elif sell_wr > 0.6 and sell_wr > buy_wr:
-                    msg += f"  • ✅ SELL win rate eccellente ({sell_wr*100:.1f}%)\n"
-            
-            msg += f"\n💡 Usa /orders [numero] per vedere più ordini\n"
-            msg += f"Esempio: /orders 20"
-            
-            await update.message.reply_text(msg, parse_mode='HTML')
-        else:
-            error_code = pnl_response.get('retCode', 'N/A')
-            error_msg = pnl_response.get('retMsg', 'Errore sconosciuto')
-            
-            msg = f"❌ <b>Errore API Bybit</b>\n\n"
-            msg += f"Codice: {error_code}\n"
-            msg += f"Messaggio: {error_msg}\n\n"
-            
-            await update.message.reply_text(msg, parse_mode='HTML')
-            
+                    short_stats["losses"] += 1
+
+            # Riga dettaglio ordine
+            lines.append(
+                f"{side_emoji} <b>{symbol}</b> - {side}\n"
+                f"Qty: {qty:.4f}\n"
+                f"Entry: {avg_entry:.{price_decimals}f}\n"
+                f"Exit: {avg_exit:.{price_decimals}f}\n"
+                f"{pnl_emoji} PnL: {closed_pnl:.2f} ({pnl_percent:.2f}%)\n"
+                f"Time: {time_str}\n"
+            )
+
+        # Statistiche globali
+        lines.append("<b>Statistiche Globali</b>")
+        lines.append(f"PnL Totale: {total_pnl:.2f}")
+        lines.append(f"Win: {win_count}  Loss: {loss_count}")
+        if (win_count + loss_count) > 0:
+            win_rate = win_count / (win_count + loss_count) * 100
+            lines.append(f"Win Rate: {win_rate:.1f}%")
+
+        # Statistiche LONG
+        if long_stats["count"] > 0:
+            buy_win_rate = (long_stats["wins"] / long_stats["count"]) * 100
+            avg_pnl_buy = long_stats["total_pnl"] / long_stats["count"]
+            lines.append("")
+            lines.append("<b>LONG (Buy) Statistics</b>")
+            lines.append(f"Trades: {long_stats['count']}")
+            lines.append(f"Wins: {long_stats['wins']}  Losses: {long_stats['losses']}")
+            lines.append(f"Win Rate: {buy_win_rate:.1f}%")
+            lines.append(f"Total PnL: {long_stats['total_pnl']:.2f}")
+            lines.append(f"Avg PnL/Trade: {avg_pnl_buy:.2f}")
+            lines.append(f"Volume: {long_stats['total_volume']:.0f}")
+
+        # Statistiche SHORT
+        if short_stats["count"] > 0:
+            sell_win_rate = (short_stats["wins"] / short_stats["count"]) * 100
+            avg_pnl_sell = short_stats["total_pnl"] / short_stats["count"]
+            lines.append("")
+            lines.append("<b>SHORT (Sell) Statistics</b>")
+            lines.append(f"Trades: {short_stats['count']}")
+            lines.append(f"Wins: {short_stats['wins']}  Losses: {short_stats['losses']}")
+            lines.append(f"Win Rate: {sell_win_rate:.1f}%")
+            lines.append(f"Total PnL: {short_stats['total_pnl']:.2f}")
+            lines.append(f"Avg PnL/Trade: {avg_pnl_sell:.2f}")
+            lines.append(f"Volume: {short_stats['total_volume']:.0f}")
+
+        # Confronto performance
+        if long_stats["count"] > 0 and short_stats["count"] > 0:
+            lines.append("")
+            lines.append("<b>Performance Comparison</b>")
+            buy_wr = long_stats["wins"] / long_stats["count"]
+            sell_wr = short_stats["wins"] / short_stats["count"]
+            if buy_wr > 0.6 and buy_wr > sell_wr:
+                lines.append(f"Best Win Rate: LONG (Buy) {buy_wr*100:.1f}%")
+            elif sell_wr > 0.6 and sell_wr > buy_wr:
+                lines.append(f"Best Win Rate: SHORT (Sell) {sell_wr*100:.1f}%")
+
+        lines.append("\nUsa <code>/orders N</code> per vedere più ordini.\nEsempio: <code>/orders 20</code>")
+
+        msg = "\n".join(lines)
+        if len(msg) > 4000:
+            msg = msg[:3900] + "\n... (troncato per lunghezza)"
+        await update.message.reply_text(msg, parse_mode="HTML")
+
     except Exception as e:
-        logging.exception('Errore in cmd_orders')
-        
+        logging.exception("Errore in cmd_orders")
         error_str = str(e)
-        msg = f"❌ <b>Errore nel recuperare gli ordini</b>\n\n"
-        msg += f"Dettagli: {error_str}\n\n"
-        
-        # Suggerimenti
-        if 'Invalid API' in error_str or 'authentication' in error_str.lower():
-            msg += "💡 Verifica le tue API keys:\n"
-            msg += "1. Hanno i permessi corretti?\n"
-            msg += "2. Non sono scadute?\n"
-        
-        await update.message.reply_text(msg, parse_mode='HTML')
+        msg = (
+            "<b>Errore nel recuperare gli ordini</b>\n"
+            f"Dettagli: {error_str}"
+        )
+        await update.message.reply_text(msg, parse_mode="HTML")
 
 
 async def cmd_analizza(update: Update, context: ContextTypes.DEFAULT_TYPE):
