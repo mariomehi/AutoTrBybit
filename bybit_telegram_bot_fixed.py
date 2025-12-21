@@ -12114,7 +12114,7 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if not hasattr(monitor_closed_positions, 'notified_orders'):
-        monitor_closed_positions.notified_orders = set()
+            monitor_closed_positions.notified_orders = set()
 
         session = create_bybit_session()
         
