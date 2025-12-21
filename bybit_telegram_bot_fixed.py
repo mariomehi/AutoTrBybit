@@ -10397,225 +10397,256 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Comando: /orders N
-    Mostra gli ultimi ordini chiusi con PnL da Bybit,
-    con statistiche separate LONG (Buy) e SHORT (Sell).
+    Comando /orders [LIMIT]
+    Mostra gli ultimi ordini chiusi con P&L da Bybit
+    CON DISTINZIONE BUY/SELL e metriche separate
     """
     if not BYBIT_API_KEY or not BYBIT_API_SECRET:
         await update.message.reply_text(
-            "API Bybit non configurate.\n"
-            "Configura BYBIT_API_KEY e BYBIT_API_SECRET nelle variabili d'ambiente."
+            '⚠️ API Bybit non configurate.\n'
+            'Configura BYBIT_API_KEY e BYBIT_API_SECRET nelle variabili d\'ambiente.'
         )
         return
-
+    
+    # Limita numero ordini da mostrare
     args = context.args
     limit = 10
     if args and args[0].isdigit():
         limit = min(int(args[0]), 50)  # Max 50 ordini
-
-    await update.message.reply_text(f"Recupero ultimi {limit} ordini chiusi...")
-
+    
+    await update.message.reply_text(f'🔍 Recupero ultimi {limit} ordini...')
+    
     try:
         session = create_bybit_session()
-
-        # Closed PnL = ordini/posizioni chiuse
+        
+        # Ottieni closed P&L (ordini chiusi con profitti/perdite)
         pnl_response = session.get_closed_pnl(
-            category="linear",
+            category='linear',
             limit=limit
         )
-        logging.info(f"Closed PL response: {pnl_response}")
-
-        if pnl_response.get("retCode") != 0:
-            error_code = pnl_response.get("retCode", "NA")
-            error_msg = pnl_response.get("retMsg", "Errore sconosciuto")
-            msg = (
-                f"<b>Errore API Bybit</b>\n"
-                f"Codice: {error_code}\n"
-                f"Messaggio: {error_msg}"
-            )
-            await update.message.reply_text(msg, parse_mode="HTML")
-            return
-
-        result = pnl_response.get("result", {})
-        pnl_list = result.get("list", [])
-
-        if not pnl_list:
-            await update.message.reply_text(
-                "<b>Nessun ordine chiuso trovato</b>\n"
-                "Non ci sono ancora trade completati nel tuo account.",
-                parse_mode="HTML"
-            )
-            return
-
-        # Statistiche globali
-        total_pnl = 0.0
-        win_count = 0
-        loss_count = 0
-
-        # Statistiche LONG/SHORT
-        long_stats = {
-            "count": 0,
-            "wins": 0,
-            "losses": 0,
-            "total_pnl": 0.0,
-            "total_volume": 0.0,
-        }
-        short_stats = {
-            "count": 0,
-            "wins": 0,
-            "losses": 0,
-            "total_pnl": 0.0,
-            "total_volume": 0.0,
-        }
-
-        lines = []
-        lines.append(
-            f"<b>Ultimi {len(pnl_list)} Ordini Chiusi {TRADING_MODE.upper()}</b>"
-        )
-
-        for pnl_entry in pnl_list:
-            symbol = pnl_entry.get("symbol", "NA")
-
-            # Side: 'Buy' = long, 'Sell' = short
-            side_raw = pnl_entry.get("side", "NA")
-            side = str(side_raw).strip().capitalize()  # normalizza: 'buy' -> 'Buy', 'sell' -> 'Sell'
-
-            qty = float(pnl_entry.get("qty", 0) or 0)
-            avg_entry = float(pnl_entry.get("avgEntryPrice", 0) or 0)
-            avg_exit = float(pnl_entry.get("avgExitPrice", 0) or 0)
-            closed_pnl = float(pnl_entry.get("closedPnl", 0) or 0)
-
-            # Timestamp (ms -> datetime)
-            updated_time = int(pnl_entry.get("updatedTime", 0) or 0)
-            if updated_time > 0:
+        
+        logging.info(f'📊 Closed P&L response: {pnl_response}')
+        
+        if pnl_response.get('retCode') == 0:
+            result = pnl_response.get('result', {})
+            pnl_list = result.get('list', [])
+            
+            if not pnl_list:
+                await update.message.reply_text(
+                    '📭 <b>Nessun ordine chiuso trovato</b>\n\n'
+                    'Non ci sono ancora trade completati nel tuo account.',
+                    parse_mode='HTML'
+                )
+                return
+            
+            msg = f"📊 <b>Ultimi {len(pnl_list)} Ordini Chiusi ({TRADING_MODE.upper()})</b>\n\n"
+            
+            # Statistiche globali
+            total_pnl = 0
+            win_count = 0
+            loss_count = 0
+            
+            # Statistiche separate BUY/SELL
+            buy_stats = {
+                'count': 0,
+                'wins': 0,
+                'losses': 0,
+                'total_pnl': 0,
+                'total_volume': 0
+            }
+            
+            sell_stats = {
+                'count': 0,
+                'wins': 0,
+                'losses': 0,
+                'total_pnl': 0,
+                'total_volume': 0
+            }
+            
+            # Processa ogni ordine
+            for pnl_entry in pnl_list:
+                symbol = pnl_entry.get('symbol', 'N/A')
+                side = pnl_entry.get('side', 'N/A')
+                qty = float(pnl_entry.get('qty', 0))
+                avg_entry = float(pnl_entry.get('avgEntryPrice', 0))
+                avg_exit = float(pnl_entry.get('avgExitPrice', 0))
+                closed_pnl = float(pnl_entry.get('closedPnl', 0))
+                
+                # Timestamp chiusura (millisecondi)
+                updated_time = int(pnl_entry.get('updatedTime', 0))
                 close_time = datetime.fromtimestamp(updated_time / 1000, tz=timezone.utc)
-                time_str = close_time.strftime("%d/%m %H:%M")
-            else:
-                time_str = "N/A"
-
-            # Aggiorna statistiche globali
-            total_pnl += closed_pnl
-            if closed_pnl >= 0:
-                win_count += 1
-            else:
-                loss_count += 1
-
-            # Calcolo PnL %
-            pnl_percent = 0.0
-            if avg_entry > 0:
-                if side == "Buy":
-                    # Long: guadagni se exit > entry
-                    pnl_percent = (avg_exit - avg_entry) / avg_entry * 100
-                elif side == "Sell":
-                    # Short: guadagni se exit < entry
-                    pnl_percent = (avg_entry - avg_exit) / avg_entry * 100
-
-            price_decimals = get_price_decimals(avg_entry)
-
-            # Emoji side
-            if side == "Buy":
-                side_emoji = "🟢"
-            elif side == "Sell":
-                side_emoji = "🔴"
-            else:
-                side_emoji = "⚪️"
-
-            # Emoji PnL
-            if closed_pnl > 0:
-                pnl_emoji = "✅"
-            elif closed_pnl < 0:
-                pnl_emoji = "❌"
-            else:
-                pnl_emoji = "➖"
-
-            # Aggiorna statistiche long/short
-            if side == "Buy":
-                long_stats["count"] += 1
-                long_stats["total_pnl"] += closed_pnl
-                long_stats["total_volume"] += qty * avg_entry  # valore nozionale
-                if closed_pnl >= 0:
-                    long_stats["wins"] += 1
+                time_str = close_time.strftime('%d/%m %H:%M')
+                
+                # Aggiorna statistiche globali
+                total_pnl += closed_pnl
+                if closed_pnl > 0:
+                    win_count += 1
                 else:
-                    long_stats["losses"] += 1
-            elif side == "Sell":
-                short_stats["count"] += 1
-                short_stats["total_pnl"] += closed_pnl
-                short_stats["total_volume"] += qty * avg_entry
-                if closed_pnl >= 0:
-                    short_stats["wins"] += 1
+                    loss_count += 1
+                
+                # Aggiorna statistiche per side
+                if side == 'Buy':
+                    buy_stats['count'] += 1
+                    buy_stats['total_pnl'] += closed_pnl
+                    buy_stats['total_volume'] += qty * avg_entry
+                    if closed_pnl > 0:
+                        buy_stats['wins'] += 1
+                    else:
+                        buy_stats['losses'] += 1
+                else:  # Sell
+                    sell_stats['count'] += 1
+                    sell_stats['total_pnl'] += closed_pnl
+                    sell_stats['total_volume'] += qty * avg_entry
+                    if closed_pnl > 0:
+                        sell_stats['wins'] += 1
+                    else:
+                        sell_stats['losses'] += 1
+                
+                # Emoji in base al risultato
+                side_emoji = "🟢" if side == 'Buy' else "🔴"
+                pnl_emoji = "✅" if closed_pnl > 0 else "❌"
+                
+                # Calcola P&L %
+                pnl_percent = 0
+                if avg_entry > 0:
+                    if side == 'Buy':
+                        pnl_percent = ((avg_exit - avg_entry) / avg_entry) * 100
+                    else:
+                        pnl_percent = ((avg_entry - avg_exit) / avg_entry) * 100
+                
+                # Decimali dinamici
+                price_decimals = get_price_decimals(avg_entry)
+                
+                # Costruisci messaggio ordine
+                msg += f"{side_emoji} <b>{symbol}</b> - {side}\n"
+                msg += f"  Qty: {qty:.4f}\n"
+                msg += f"  Entry: ${avg_entry:.{price_decimals}f}\n"
+                msg += f"  Exit: ${avg_exit:.{price_decimals}f}\n"
+                msg += f"  {pnl_emoji} PnL: ${closed_pnl:+.2f} ({pnl_percent:+.2f}%)\n"
+                msg += f"  Time: {time_str}\n\n"
+            
+            # ===== STATISTICHE FINALI CON SEPARAZIONE BUY/SELL =====
+            msg += "━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            # Statistiche globali
+            msg += f"💰 <b>PnL Totale: ${total_pnl:+.2f}</b>\n"
+            msg += f"✅ Win: {win_count} | ❌ Loss: {loss_count}\n"
+            
+            if (win_count + loss_count) > 0:
+                win_rate = (win_count / (win_count + loss_count)) * 100
+                msg += f"📊 Win Rate: {win_rate:.1f}%\n\n"
+            
+            # ===== STATISTICHE BUY =====
+            if buy_stats['count'] > 0:
+                buy_win_rate = (buy_stats['wins'] / buy_stats['count']) * 100
+                avg_pnl_buy = buy_stats['total_pnl'] / buy_stats['count']
+                
+                msg += "🟢 <b>BUY Statistics:</b>\n"
+                msg += f"  Trades: {buy_stats['count']}\n"
+                msg += f"  Wins: {buy_stats['wins']} | Losses: {buy_stats['losses']}\n"
+                msg += f"  Win Rate: {buy_win_rate:.1f}%\n"
+                msg += f"  Total PnL: ${buy_stats['total_pnl']:+.2f}\n"
+                msg += f"  Avg PnL/Trade: ${avg_pnl_buy:+.2f}\n"
+                msg += f"  Volume: ${buy_stats['total_volume']:.0f}\n\n"
+            
+            # ===== STATISTICHE SELL =====
+            if sell_stats['count'] > 0:
+                sell_win_rate = (sell_stats['wins'] / sell_stats['count']) * 100
+                avg_pnl_sell = sell_stats['total_pnl'] / sell_stats['count']
+                
+                msg += "🔴 <b>SELL Statistics:</b>\n"
+                msg += f"  Trades: {sell_stats['count']}\n"
+                msg += f"  Wins: {sell_stats['wins']} | Losses: {sell_stats['losses']}\n"
+                msg += f"  Win Rate: {sell_win_rate:.1f}%\n"
+                msg += f"  Total PnL: ${sell_stats['total_pnl']:+.2f}\n"
+                msg += f"  Avg PnL/Trade: ${avg_pnl_sell:+.2f}\n"
+                msg += f"  Volume: ${sell_stats['total_volume']:.0f}\n\n"
+            
+            # ===== CONFRONTO PERFORMANCE =====
+            if buy_stats['count'] > 0 and sell_stats['count'] > 0:
+                msg += "📈 <b>Performance Comparison:</b>\n"
+                
+                # Win rate comparison
+                if buy_stats['wins'] / buy_stats['count'] > sell_stats['wins'] / sell_stats['count']:
+                    msg += f"  Best Win Rate: 🟢 BUY ({buy_win_rate:.1f}%)\n"
                 else:
-                    short_stats["losses"] += 1
-
-            # Riga dettaglio ordine
-            lines.append(
-                f"{side_emoji} <b>{symbol}</b> - {side}\n"
-                f"Qty: {qty:.4f}\n"
-                f"Entry: {avg_entry:.{price_decimals}f}\n"
-                f"Exit: {avg_exit:.{price_decimals}f}\n"
-                f"{pnl_emoji} PnL: {closed_pnl:.2f} ({pnl_percent:.2f}%)\n"
-                f"Time: {time_str}\n"
-            )
-
-        # Statistiche globali
-        lines.append("<b>Statistiche Globali</b>")
-        lines.append(f"PnL Totale: {total_pnl:.2f}")
-        lines.append(f"Win: {win_count}  Loss: {loss_count}")
-        if (win_count + loss_count) > 0:
-            win_rate = win_count / (win_count + loss_count) * 100
-            lines.append(f"Win Rate: {win_rate:.1f}%")
-
-        # Statistiche LONG
-        if long_stats["count"] > 0:
-            buy_win_rate = (long_stats["wins"] / long_stats["count"]) * 100
-            avg_pnl_buy = long_stats["total_pnl"] / long_stats["count"]
-            lines.append("")
-            lines.append("<b>LONG (Buy) Statistics</b>")
-            lines.append(f"Trades: {long_stats['count']}")
-            lines.append(f"Wins: {long_stats['wins']}  Losses: {long_stats['losses']}")
-            lines.append(f"Win Rate: {buy_win_rate:.1f}%")
-            lines.append(f"Total PnL: {long_stats['total_pnl']:.2f}")
-            lines.append(f"Avg PnL/Trade: {avg_pnl_buy:.2f}")
-            lines.append(f"Volume: {long_stats['total_volume']:.0f}")
-
-        # Statistiche SHORT
-        if short_stats["count"] > 0:
-            sell_win_rate = (short_stats["wins"] / short_stats["count"]) * 100
-            avg_pnl_sell = short_stats["total_pnl"] / short_stats["count"]
-            lines.append("")
-            lines.append("<b>SHORT (Sell) Statistics</b>")
-            lines.append(f"Trades: {short_stats['count']}")
-            lines.append(f"Wins: {short_stats['wins']}  Losses: {short_stats['losses']}")
-            lines.append(f"Win Rate: {sell_win_rate:.1f}%")
-            lines.append(f"Total PnL: {short_stats['total_pnl']:.2f}")
-            lines.append(f"Avg PnL/Trade: {avg_pnl_sell:.2f}")
-            lines.append(f"Volume: {short_stats['total_volume']:.0f}")
-
-        # Confronto performance
-        if long_stats["count"] > 0 and short_stats["count"] > 0:
-            lines.append("")
-            lines.append("<b>Performance Comparison</b>")
-            buy_wr = long_stats["wins"] / long_stats["count"]
-            sell_wr = short_stats["wins"] / short_stats["count"]
-            if buy_wr > 0.6 and buy_wr > sell_wr:
-                lines.append(f"Best Win Rate: LONG (Buy) {buy_wr*100:.1f}%")
-            elif sell_wr > 0.6 and sell_wr > buy_wr:
-                lines.append(f"Best Win Rate: SHORT (Sell) {sell_wr*100:.1f}%")
-
-        lines.append("\nUsa <code>/orders N</code> per vedere più ordini.\nEsempio: <code>/orders 20</code>")
-
-        msg = "\n".join(lines)
-        if len(msg) > 4000:
-            msg = msg[:3900] + "\n... (troncato per lunghezza)"
-        await update.message.reply_text(msg, parse_mode="HTML")
-
+                    msg += f"  Best Win Rate: 🔴 SELL ({sell_win_rate:.1f}%)\n"
+                
+                # PnL comparison
+                if buy_stats['total_pnl'] > sell_stats['total_pnl']:
+                    msg += f"  Most Profitable: 🟢 BUY (${buy_stats['total_pnl']:+.2f})\n"
+                else:
+                    msg += f"  Most Profitable: 🔴 SELL (${sell_stats['total_pnl']:+.2f})\n"
+                
+                # Avg PnL comparison
+                avg_pnl_buy = buy_stats['total_pnl'] / buy_stats['count']
+                avg_pnl_sell = sell_stats['total_pnl'] / sell_stats['count']
+                
+                if avg_pnl_buy > avg_pnl_sell:
+                    msg += f"  Better Avg: 🟢 BUY (${avg_pnl_buy:+.2f}/trade)\n"
+                else:
+                    msg += f"  Better Avg: 🔴 SELL (${avg_pnl_sell:+.2f}/trade)\n"
+                
+                msg += "\n"
+            
+            # ===== INSIGHTS =====
+            msg += "💡 <b>Insights:</b>\n"
+            
+            # Identifica lato più profittevole
+            if buy_stats['count'] > 0 and sell_stats['count'] > 0:
+                if buy_stats['total_pnl'] > sell_stats['total_pnl'] * 1.5:
+                    msg += "  • BUY trades molto più profittevoli\n"
+                    msg += "  • Considera di tradare più BUY\n"
+                elif sell_stats['total_pnl'] > buy_stats['total_pnl'] * 1.5:
+                    msg += "  • SELL trades molto più profittevoli\n"
+                    msg += "  • Considera di tradare più SELL\n"
+                else:
+                    msg += "  • Performance BUY/SELL bilanciata\n"
+            
+            # Warning se un lato perde
+            if buy_stats['count'] > 0 and buy_stats['total_pnl'] < -10:
+                msg += "  • ⚠️ BUY trades in perdita netta\n"
+            if sell_stats['count'] > 0 and sell_stats['total_pnl'] < -10:
+                msg += "  • ⚠️ SELL trades in perdita netta\n"
+            
+            # Best side by win rate
+            if buy_stats['count'] > 0 and sell_stats['count'] > 0:
+                buy_wr = buy_stats['wins'] / buy_stats['count']
+                sell_wr = sell_stats['wins'] / sell_stats['count']
+                
+                if buy_wr > 0.6 and buy_wr > sell_wr:
+                    msg += f"  • ✅ BUY win rate eccellente ({buy_wr*100:.1f}%)\n"
+                elif sell_wr > 0.6 and sell_wr > buy_wr:
+                    msg += f"  • ✅ SELL win rate eccellente ({sell_wr*100:.1f}%)\n"
+            
+            msg += f"\n💡 Usa /orders [numero] per vedere più ordini\n"
+            msg += f"Esempio: /orders 20"
+            
+            await update.message.reply_text(msg, parse_mode='HTML')
+        else:
+            error_code = pnl_response.get('retCode', 'N/A')
+            error_msg = pnl_response.get('retMsg', 'Errore sconosciuto')
+            
+            msg = f"❌ <b>Errore API Bybit</b>\n\n"
+            msg += f"Codice: {error_code}\n"
+            msg += f"Messaggio: {error_msg}\n\n"
+            
+            await update.message.reply_text(msg, parse_mode='HTML')
+            
     except Exception as e:
-        logging.exception("Errore in cmd_orders")
+        logging.exception('Errore in cmd_orders')
+        
         error_str = str(e)
-        msg = (
-            "<b>Errore nel recuperare gli ordini</b>\n"
-            f"Dettagli: {error_str}"
-        )
-        await update.message.reply_text(msg, parse_mode="HTML")
+        msg = f"❌ <b>Errore nel recuperare gli ordini</b>\n\n"
+        msg += f"Dettagli: {error_str}\n\n"
+        
+        # Suggerimenti
+        if 'Invalid API' in error_str or 'authentication' in error_str.lower():
+            msg += "💡 Verifica le tue API keys:\n"
+            msg += "1. Hanno i permessi corretti?\n"
+            msg += "2. Non sono scadute?\n"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
 
 
 async def cmd_analizza(update: Update, context: ContextTypes.DEFAULT_TYPE):
