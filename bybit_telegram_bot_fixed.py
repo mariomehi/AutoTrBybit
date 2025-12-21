@@ -1390,12 +1390,6 @@ def is_volume_spike_breakout(df: pd.DataFrame) -> tuple:
     
     if volume_ratio < min_volume_ratio:
         return (False, None)
-
-    # ===== AGGIUNGI: Check overextension da EMA 10 =====
-    distance_from_ema10 = abs(curr['close'] - curr_ema10) / curr_ema10
-    if distance_from_ema10 > 0.008:  # Max 0.8% da EMA 10
-        logging.debug(f'Volume Spike: Prezzo troppo esteso da EMA 10 ({distance_from_ema10*100:.2f}%)')
-        return (False, None)
     
     # ===== AGGIUNGI: Verifica che non sia già pump esaurito =====
     # Ultimi 3 prezzi NON devono essere tutti in salita verticale
@@ -1438,6 +1432,12 @@ def is_volume_spike_breakout(df: pd.DataFrame) -> tuple:
     curr_ema10 = ema_10.iloc[-1]
     curr_ema60 = ema_60.iloc[-1]
     prev_ema10 = ema_10.iloc[-2]
+
+    # ===== AGGIUNGI: Check overextension da EMA 10 =====
+    distance_from_ema10 = abs(curr['close'] - curr_ema10) / curr_ema10
+    if distance_from_ema10 > 0.008:  # Max 0.8% da EMA 10
+        logging.debug(f'Volume Spike: Prezzo troppo esteso da EMA 10 ({distance_from_ema10*100:.2f}%)')
+        return (False, None)
     
     # Era sotto EMA 10, ora sopra (breakout)
     was_below_ema10 = prev['close'] < prev_ema10
@@ -4061,12 +4061,6 @@ def is_breakout_retest(df: pd.DataFrame) -> tuple:
     touches_support = (consolidation['low'] <= support + tolerance_s).sum()
     
     if touches_resistance < 3 or touches_support < 3:
-        return (False, None)
-
-    # ===== AGGIUNGI: Volatilità consolidamento deve essere BASSA =====
-    # Per 5m, consolidamento valido = range < 0.5%
-    if timeframe == '5m' and consolidation_range_pct > 0.5:
-        logging.debug(f'Breakout+Retest: Range consolidamento troppo ampio per 5m ({consolidation_range_pct:.2f}%)')
         return (False, None)
     
     # ===== FASE 2: IDENTIFICA BREAKOUT =====
@@ -8450,6 +8444,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 entry_price = pattern_data['suggested_entry']
                 sl_price = pattern_data['suggested_sl']
                 tp_price = pattern_data['suggested_tp']
+
+                price_decimals = get_price_decimals(pattern_data['breakout_high'])
                 
                 caption = f"🌱 <b>{pattern.upper()}</b>\n\n"
                 
@@ -8457,8 +8453,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"⭐ <b>Setup PREMIUM</b> ({pattern_data['rest_count']} candele riposo)\n\n"
                 else:
                     caption += f"📊 <b>Setup VALIDO</b> ({pattern_data['rest_count']} candele riposo)\n\n"
-                
-                price_decimals = get_price_decimals(pattern_data['breakout_high'])
                 
                 caption += f"💥 <b>Breakout Phase:</b>\n"
                 caption += f"  High: ${pattern_data['breakout_high']:.{price_decimals}f}\n"
