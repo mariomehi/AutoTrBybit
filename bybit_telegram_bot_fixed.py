@@ -10913,83 +10913,6 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="HTML")
 
 
-async def cmd_test_volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Comando /test_volume SYMBOL TIMEFRAME
-    Testa specificamente il pattern Volume Spike
-    """
-    args = context.args
-    
-    if len(args) < 2:
-        await update.message.reply_text(
-            '❌ Uso: /test_volume SYMBOL TIMEFRAME\n'
-            'Esempio: /test_volume BTCUSDT 5m'
-        )
-        return
-    
-    symbol = args[0].upper()
-    timeframe = args[1].lower()
-    
-    await update.message.reply_text(f'🔍 Testing Volume Spike pattern su {symbol} {timeframe}...')
-    
-    try:
-        # Ottieni dati
-        df = bybit_get_klines(symbol, timeframe, limit=100)
-        if df.empty:
-            await update.message.reply_text(f'❌ Nessun dato per {symbol}')
-            return
-        
-        # Test filtri globali
-        vol_ok = volume_confirmation(df, min_ratio=1.5)
-        atr_ok = atr_expanding(df)
-        trend_ok = is_uptrend_structure(df)
-        
-        # Test pattern
-        found, data = is_volume_spike_breakout(df)
-        
-        # Costruisci report
-        msg = f"📊 <b>Volume Spike Test: {symbol} {timeframe}</b>\n\n"
-        
-        msg += "<b>🔍 Filtri Globali:</b>\n"
-        msg += f"{'✅' if vol_ok else '❌'} Volume OK (>1.5x media)\n"
-        msg += f"{'✅' if atr_ok else '❌'} ATR Expanding\n"
-        msg += f"{'✅' if trend_ok else '❌'} Uptrend Structure\n\n"
-        
-        if found:
-            msg += "🎯 <b>PATTERN TROVATO!</b>\n\n"
-            msg += f"📈 Volume Ratio: <b>{data['volume_ratio']:.1f}x</b>\n"
-            msg += f"💪 Body %: <b>{data['body_pct']*100:.1f}%</b>\n"
-            msg += f"📊 EMA 10: ${data['ema10']:.2f}\n"
-            msg += f"📊 EMA 60: ${data['ema60']:.2f}\n"
-            msg += f"💵 Price: ${data['price']:.2f}\n"
-            msg += f"{'✅' if data['breakout_confirmed'] else '⚠️'} Breakout Confermato\n\n"
-            msg += "🟢 <b>Pattern VALIDO per entry</b>"
-        else:
-            msg += "❌ <b>Pattern NON trovato</b>\n\n"
-            
-            # Debug info
-            curr = df.iloc[-1]
-            vol = df['volume']
-            avg_vol = vol.iloc[-20:-1].mean()
-            vol_ratio = vol.iloc[-1] / avg_vol if avg_vol > 0 else 0
-            
-            msg += "<b>Dettagli candela corrente:</b>\n"
-            msg += f"Volume Ratio: {vol_ratio:.1f}x (serve 3x+)\n"
-            msg += f"Candela: {'🟢 Verde' if curr['close'] > curr['open'] else '🔴 Rossa'}\n"
-            
-            body = abs(curr['close'] - curr['open'])
-            total_range = curr['high'] - curr['low']
-            if total_range > 0:
-                body_pct = body / total_range
-                msg += f"Body %: {body_pct*100:.1f}% (serve 60%+)\n"
-        
-        await update.message.reply_text(msg, parse_mode='HTML')
-        
-    except Exception as e:
-        logging.exception('Errore in cmd_test_volume')
-        await update.message.reply_text(f'❌ Errore: {str(e)}')
-
-
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /list - mostra analisi attive con dettagli completi
@@ -11167,121 +11090,6 @@ async def cmd_test_compression(update: Update, context: ContextTypes.DEFAULT_TYP
         
     except Exception as e:
         logging.exception('Errore in cmd_test_compression')
-        await update.message.reply_text(f'❌ Errore: {str(e)}')
-
-
-async def cmd_test_sweep(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Comando /test_sweep SYMBOL TIMEFRAME
-    Testa specificamente il pattern Liquidity Sweep
-    """
-    args = context.args
-    
-    if len(args) < 2:
-        await update.message.reply_text(
-            '❌ Uso: /test_sweep SYMBOL TIMEFRAME\n'
-            'Esempio: /test_sweep BTCUSDT 5m'
-        )
-        return
-    
-    symbol = args[0].upper()
-    timeframe = args[1].lower()
-    
-    await update.message.reply_text(f'🔍 Testing Liquidity Sweep su {symbol} {timeframe}...')
-    
-    try:
-        # Ottieni dati
-        df = bybit_get_klines(symbol, timeframe, limit=100)
-        if df.empty:
-            await update.message.reply_text(f'❌ Nessun dato per {symbol}')
-            return
-        
-        # Test pattern
-        found, data = is_liquidity_sweep_reversal(df)
-        
-        # Costruisci report
-        msg = f"💎 <b>Liquidity Sweep Test: {symbol} {timeframe}</b>\n\n"
-        
-        if found:
-            msg += "🎯 <b>PATTERN TROVATO!</b>\n\n"
-            
-            price_decimals = get_price_decimals(data['breakout_price'])
-            
-            msg += f"📉 <b>Sweep Phase:</b>\n"
-            msg += f"  Previous Low: ${data['previous_low']:.{price_decimals}f}\n"
-            msg += f"  Sweep Low: ${data['sweep_low']:.{price_decimals}f}\n"
-            msg += f"  Distance: {((data['previous_low'] - data['sweep_low']) / data['previous_low'] * 100):.2f}%\n\n"
-            
-            msg += f"📈 <b>Recovery Phase:</b>\n"
-            msg += f"  Recovery: <b>{data['recovery_pct']:.1f}%</b>\n"
-            msg += f"  Volume: <b>{data['volume_ratio']:.1f}x</b>\n"
-            msg += f"  Recovery High: ${data['recovery_high']:.{price_decimals}f}\n\n"
-            
-            msg += f"💥 <b>Breakout Phase:</b>\n"
-            msg += f"  Breakout Price: ${data['breakout_price']:.{price_decimals}f}\n"
-            msg += f"  EMA 10: ${data['ema10']:.{price_decimals}f}\n"
-            msg += f"  EMA 60: ${data['ema60']:.{price_decimals}f}\n\n"
-            
-            msg += f"🎯 <b>Trade Setup:</b>\n"
-            msg += f"  Entry: ${data['suggested_entry']:.{price_decimals}f}\n"
-            msg += f"  SL: ${data['suggested_sl']:.{price_decimals}f}\n"
-            
-            # Calcola TP suggerito
-            risk = data['suggested_entry'] - data['suggested_sl']
-            tp = data['suggested_entry'] + (risk * 2.0)
-            msg += f"  TP (2R): ${tp:.{price_decimals}f}\n\n"
-            
-            msg += "🟢 <b>Pattern VALIDO per entry</b>"
-            
-        else:
-            msg += "❌ <b>Pattern NON trovato</b>\n\n"
-            
-            # Debug: verifica dove fallisce
-            msg += "<b>Checklist:</b>\n"
-            
-            # Check 1: Previous low
-            lookback = 15
-            recent_lows = df['low'].iloc[-lookback:-3]
-            if len(recent_lows) >= 5:
-                previous_low = recent_lows.min()
-                touches = (recent_lows <= previous_low * 1.002).sum()
-                msg += f"{'✅' if touches >= 2 else '❌'} Previous low valido (touches: {touches})\n"
-            else:
-                msg += "❌ Dati insufficienti\n"
-            
-            # Check 2: Sweep
-            if len(df) >= 3:
-                sweep = df.iloc[-3]
-                if len(recent_lows) >= 5:
-                    breaks = sweep['low'] < previous_low
-                    msg += f"{'✅' if breaks else '❌'} Sweep rompe previous low\n"
-            
-            # Check 3: Recovery
-            if len(df) >= 2:
-                recovery = df.iloc[-2]
-                is_green = recovery['close'] > recovery['open']
-                msg += f"{'✅' if is_green else '❌'} Recovery candle verde\n"
-                
-                # Volume
-                vol = df['volume']
-                if len(vol) >= 20:
-                    avg_vol = vol.iloc[-20:-2].mean()
-                    recovery_vol = vol.iloc[-2]
-                    if avg_vol > 0:
-                        vol_ratio = recovery_vol / avg_vol
-                        msg += f"{'✅' if vol_ratio >= 2.0 else '❌'} Volume recovery: {vol_ratio:.1f}x (serve 2x+)\n"
-            
-            # Check 4: Breakout
-            if len(df) >= 2:
-                current = df.iloc[-1]
-                recovery = df.iloc[-2]
-                breaks = current['close'] > recovery['high']
-                msg += f"{'✅' if breaks else '❌'} Breakout recovery high\n"
-        
-        await update.message.reply_text(msg, parse_mode='HTML')
-        
-    except Exception as e:
-        logging.exception('Errore in cmd_test_sweep')
         await update.message.reply_text(f'❌ Errore: {str(e)}')
 
 
@@ -12674,13 +12482,10 @@ def main():
     application.add_handler(CommandHandler('pattern_info', cmd_pattern_info))
     application.add_handler(CommandHandler('ema_filter', cmd_ema_filter))
     application.add_handler(CommandHandler('ema_sl', cmd_ema_sl))
-    application.add_handler(CommandHandler('test_volume', cmd_test_volume))
-    application.add_handler(CommandHandler('test_sweep', cmd_test_sweep))
     application.add_handler(CommandHandler('test_sr', cmd_test_sr))
     application.add_handler(CommandHandler('test_compression', cmd_test_compression))
     application.add_handler(CommandHandler('debug_volume', cmd_debug_volume))
     application.add_handler(CommandHandler('test_flag', cmd_test_flag))
-    application.add_handler(CommandHandler('test_br', cmd_test_breakout_retest))
     application.add_handler(CommandHandler('trend_filter', cmd_trend_filter))
     application.add_handler(CommandHandler("timefilter", cmd_time_filter))
     application.add_handler(CommandHandler('debug_filters', cmd_debug_filters))
