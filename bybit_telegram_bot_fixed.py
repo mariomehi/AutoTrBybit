@@ -11,7 +11,7 @@ import os
 import time
 import math
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import threading
 import io
 import tempfile
@@ -527,7 +527,10 @@ def is_good_trading_time_utc(now=None) -> tuple[bool, str]:
     h = now.hour
 
     if h in MARKET_TIME_FILTER_BLOCKED_UTC_HOURS:
-        return (False, f"Blocked low-liquidity hour UTC={h:02d}")
+        reason = f"Blocked low-liquidity hour UTC={h:02d}"
+        logging.warning(f'🚫 MARKET TIME FILTER: {reason}')  # ← AGGIUNGI QUESTO
+        return (False, reason)
+    
     return (True, f"OK hour UTC={h:02d}")
 
 
@@ -6709,6 +6712,26 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     - sl_price: prezzo stop loss
     - tp_price: prezzo take profit
     """
+
+    # ===== CRITICAL: Check Market Time Filter PRIMA di piazzare ordine =====
+    if MARKET_TIME_FILTER_ENABLED:
+        time_ok, time_reason = is_good_trading_time_utc()
+        
+        if not time_ok:
+            now_utc = datetime.now(timezone.utc)
+            current_hour = now_utc.hour
+            
+            logging.warning(
+                f'🚫 {symbol}: Order blocked by Market Time Filter '
+                f'(UTC hour {current_hour:02d})'
+            )
+            
+            return {
+                'error': 'market_time_blocked',
+                'message': f'Trading blocked during UTC hour {current_hour:02d}',
+                'reason': time_reason
+            }
+            
     # Determina tipo ordine
     order_type = 'Market'  # Default
 
@@ -7623,6 +7646,58 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     
     # Check se auto-discovered
     is_auto = job_ctx.get('auto_discovered', False)
+
+    # ===== MARKET TIME FILTER (PRIORITY CHECK) =====
+    if MARKET_TIME_FILTER_ENABLED:
+        time_ok, time_reason = is_good_trading_time_utc()
+        
+        if not time_ok:
+            now_utc = datetime.now(timezone.utc)
+            current_hour = now_utc.hour
+            
+            logging.info(
+                f'⏰ {symbol} {timeframe}: Market time filter active '
+                f'(UTC hour {current_hour:02d})'
+            )
+            
+            if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
+                # Blocca SOLO autotrade, analisi continua
+                logging.info(f'   Mode: AUTOTRADE_ONLY - Analysis continues, trading disabled')
+                
+                # Forza autotrade = False per questo ciclo
+                job_ctx['autotrade'] = False
+                
+                # IMPORTANTE: Continua con l'analisi ma senza trading
+                # Non fare return qui, lascia che il codice prosegua
+            else:
+                # Blocca TUTTO (analisi + trading)
+                logging.info(f'   Mode: ALL_ANALYSIS - Skipping analysis completely')
+                
+                # Invia notifica opzionale (solo 1 volta per ciclo di blocco)
+                if not hasattr(analyze_job, f'notified_{symbol}_{timeframe}'):
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=(
+                                f"⏰ <b>Market Time Filter Active</b>\n\n"
+                                f"Symbol: {symbol} {timeframe}\n"
+                                f"UTC Hour: {current_hour:02d}\n"
+                                f"Blocked Hours: {sorted(MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)}\n\n"
+                                f"Analysis paused during low liquidity hours.\n"
+                                f"Will resume automatically."
+                            ),
+                            parse_mode='HTML'
+                        )
+                        # Marca come notificato per questa sessione
+                        setattr(analyze_job, f'notified_{symbol}_{timeframe}', True)
+                    except:
+                        pass
+                
+                return  # STOP: Skip analysis completamente
+        else:
+            # Reset flag notifica quando orario torna OK
+            if hasattr(analyze_job, f'notified_{symbol}_{timeframe}'):
+                delattr(analyze_job, f'notified_{symbol}_{timeframe}')
 
     # Verifica se le notifiche complete sono attive
     with FULL_NOTIFICATIONS_LOCK:
