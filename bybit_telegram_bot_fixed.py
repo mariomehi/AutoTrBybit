@@ -12113,6 +12113,9 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
+        if not hasattr(monitor_closed_positions, 'notified_orders'):
+        monitor_closed_positions.notified_orders = set()
+
         session = create_bybit_session()
         
         # Ottieni posizioni chiuse recenti (ultima ora)
@@ -12142,10 +12145,6 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
             
             # Verifica se abbiamo già notificato (usa timestamp)
             order_id = pnl_entry.get('orderId', '')
-            
-            # Storage per ordini già notificati (in memoria)
-            if not hasattr(monitor_closed_positions, 'notified_orders'):
-                monitor_closed_positions.notified_orders = set()
             
             if order_id in monitor_closed_positions.notified_orders:
                 continue  # Già notificato
@@ -12261,14 +12260,12 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
                             logging.error(f'Errore invio notifica chiusura: {e}')
         
         # Cleanup vecchie notifiche (mantieni solo ultime 200)
-        if len(monitor_closed_positions.notified_orders) > 200:
-            monitor_closed_positions.notified_orders = set(
-                list(monitor_closed_positions.notified_orders)[-200:]
-            )
+        orders = monitor_closed_positions.notified_orders
+        if len(orders) > 200:
+            monitor_closed_positions.notified_orders = set(list(orders)[-200:])
     
     except Exception as e:
         logging.exception('Errore in monitor_closed_positions')
-
 
 # ----------------------------- MAIN -----------------------------
 
