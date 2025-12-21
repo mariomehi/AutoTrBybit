@@ -7787,17 +7787,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             logging.info(f'✅ {symbol} {timeframe} - Pattern FOUND: {pattern} ({side})')
             # Log pattern-specific data se disponibile
             if pattern_data:
-                if 'quality_score' in pattern_data:
-                    logging.info(f'   Quality Score: {pattern_data["quality_score"]}/100')
-                if 'tier' in pattern_data:
-                    logging.info(f'   Tier: {pattern_data["tier"]}')
-                if 'volume_ratio' in pattern_data:
-                    logging.info(f'   Volume: {pattern_data["volume_ratio"]:.1f}x')
+                    logging.info(f'   {symbol} - Quality Score: {pattern_data["quality_score"]}/100 - Tier: {pattern_data["tier"]} - Volume: {pattern_data["volume_ratio"]:.1f}x')
         else:
             logging.info(f'❌ {symbol} {timeframe} - NO pattern detected')
             # Log perché non ha trovato pattern (se EMA era OK)
             if ema_analysis and ema_analysis['passed']:
-                logging.info(f'   EMA was OK ({ema_analysis["quality"]}) but no pattern matched')
+                logging.info(f'  {symbol} - EMA was OK ({ema_analysis["quality"]}) but no pattern matched')
 
         
         # Se NON pattern e NON full_mode → Skip notifica
