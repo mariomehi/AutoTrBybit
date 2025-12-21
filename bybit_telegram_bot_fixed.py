@@ -7787,7 +7787,20 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             logging.info(f'✅ {symbol} {timeframe} - Pattern FOUND: {pattern} ({side})')
             # Log pattern-specific data se disponibile
             if pattern_data:
-                    logging.info(f'   {symbol} - Quality Score: {pattern_data["quality_score"]}/100 - Tier: {pattern_data["tier"]} - Volume: {pattern_data["volume_ratio"]:.1f}x')
+                    #logging.info(f'   {symbol} - Quality Score: {pattern_data["quality_score"]}/100 - Tier: {pattern_data["tier"]} - Volume: {pattern_data["volume_ratio"]:.1f}x')
+                    # ===== FIX: Check sicuro per quality_score =====
+                    quality_score = pattern_data.get('quality_score', 'N/A')
+                    tier = pattern_data.get('tier', 'N/A')
+                    volume_ratio = pattern_data.get('volume_ratio', 0)
+                    
+                    if quality_score != 'N/A' and tier != 'N/A' and volume_ratio > 0:
+                        logging.info(
+                            f'   {symbol} - Quality Score: {quality_score}/100 - '
+                            f'Tier: {tier} - Volume: {volume_ratio:.1f}x'
+                        )
+                    else:
+                        # Fallback per pattern senza questi dati
+                        logging.info(f'   {symbol} - Pattern: {pattern} (data structure varies)')
         else:
             logging.info(f'❌ {symbol} {timeframe} - NO pattern detected')
             # Log perché non ha trovato pattern (se EMA era OK)
@@ -11938,91 +11951,6 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def cmd_test_breakout_retest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Comando /test_br SYMBOL TIMEFRAME
-    Testa Breakout + Retest pattern
-    """
-    args = context.args
-    
-    if len(args) < 2:
-        await update.message.reply_text(
-            '❌ Uso: /test_br SYMBOL TIMEFRAME\n'
-            'Esempio: /test_br BTCUSDT 5m'
-        )
-        return
-    
-    symbol = args[0].upper()
-    timeframe = args[1].lower()
-    
-    await update.message.reply_text(
-        f'🔍 Testing Breakout + Retest su {symbol} {timeframe}...'
-    )
-    
-    try:
-        df = bybit_get_klines(symbol, timeframe, limit=50)
-        
-        if df.empty:
-            await update.message.reply_text(f'❌ Nessun dato per {symbol}')
-            return
-        
-        # Test pattern
-        found, data = is_breakout_retest(df)
-        
-        msg = f"🔄 <b>Breakout + Retest Test: {symbol} {timeframe}</b>\n\n"
-        
-        if found:
-            price_decimals = get_price_decimals(data['resistance'])
-            
-            msg += "🎯 <b>PATTERN TROVATO!</b>\n\n"
-            
-            msg += f"<b>📊 Consolidamento:</b>\n"
-            msg += f"  Range: {data['range_pct']:.2f}%\n"
-            msg += f"  Resistance: ${data['resistance']:.{price_decimals}f}\n"
-            msg += f"  Support: ${data['support']:.{price_decimals}f}\n"
-            msg += f"  Touches R/S: {data['touches_resistance']}/{data['touches_support']}\n\n"
-            
-            msg += f"<b>💥 Breakout:</b>\n"
-            msg += f"  Price: ${data['breakout_price']:.{price_decimals}f}\n"
-            msg += f"  Volume: {data['breakout_vol_ratio']:.1f}x\n"
-            msg += f"  Body: {data['breakout_body_pct']:.1f}%\n\n"
-            
-            msg += f"<b>🔄 Retest:</b>\n"
-            msg += f"  Low: ${data['retest_low']:.{price_decimals}f}\n"
-            msg += f"  Distance to R: ${data['distance_to_resistance']:.{price_decimals}f}\n"
-            msg += f"  Rejection: {data['retest_rejection_pct']:.1f}%\n"
-            msg += f"  Volume: {data['retest_vol_ratio']:.1f}x\n"
-            msg += f"  Pullback: {data['pullback_duration']} candele\n\n"
-            
-            msg += f"<b>🎯 Trade Setup:</b>\n"
-            msg += f"  Entry: ${data['suggested_entry']:.{price_decimals}f}\n"
-            msg += f"  SL: ${data['suggested_sl']:.{price_decimals}f}\n"
-            msg += f"  TP: ${data['suggested_tp']:.{price_decimals}f}\n\n"
-            
-            # Calcola R:R
-            risk = data['suggested_entry'] - data['suggested_sl']
-            reward = data['suggested_tp'] - data['suggested_entry']
-            rr = reward / risk if risk > 0 else 0
-            
-            msg += f"📏 R:R: {rr:.2f}:1\n\n"
-            msg += "🟢 <b>Pattern VALIDO per entry</b>"
-            
-        else:
-            msg += "❌ <b>Pattern NON trovato</b>\n\n"
-            msg += "<b>Possibili motivi:</b>\n"
-            msg += "• Nessun consolidamento valido (5-10 candele)\n"
-            msg += "• Breakout debole (volume <2x, corpo <60%)\n"
-            msg += "• Pullback invalido (rompe resistance)\n"
-            msg += "• Retest assente o troppo lontano\n"
-            msg += "• No rejection sul retest (wick <40%)\n"
-            msg += "• Prezzo sotto EMA 10 o 60\n"
-        
-        await update.message.reply_text(msg, parse_mode='HTML')
-        
-    except Exception as e:
-        logging.exception('Errore in cmd_test_breakout_retest')
-        await update.message.reply_text(f'❌ Errore: {str(e)}')
-
 async def cmd_trend_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /trend_filter [mode]
@@ -12521,6 +12449,171 @@ async def cmd_force_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.exception('Errore in cmd_force_test')
         await update.message.reply_text(f'❌ Errore: {str(e)}')
 
+async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Job che monitora posizioni chiuse e invia notifiche
+    Eseguito ogni 30 secondi
+    """
+    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+        return
+    
+    try:
+        session = create_bybit_session()
+        
+        # Ottieni posizioni chiuse recenti (ultima ora)
+        now = datetime.now(timezone.utc)
+        one_hour_ago = int((now - timedelta(hours=1)).timestamp() * 1000)
+        
+        pnl_response = session.get_closed_pnl(
+            category='linear',
+            limit=50,
+            startTime=one_hour_ago
+        )
+        
+        if pnl_response.get('retCode') != 0:
+            return
+        
+        pnl_list = pnl_response.get('result', {}).get('list', [])
+        
+        with POSITIONS_LOCK:
+            tracked_symbols = set(ACTIVE_POSITIONS.keys())
+        
+        for pnl_entry in pnl_list:
+            symbol = pnl_entry.get('symbol', 'N/A')
+            
+            # Verifica se era una posizione che stavamo tracciando
+            if symbol not in tracked_symbols:
+                continue
+            
+            # Verifica se abbiamo già notificato (usa timestamp)
+            order_id = pnl_entry.get('orderId', '')
+            
+            # Storage per ordini già notificati (in memoria)
+            if not hasattr(monitor_closed_positions, 'notified_orders'):
+                monitor_closed_positions.notified_orders = set()
+            
+            if order_id in monitor_closed_positions.notified_orders:
+                continue  # Già notificato
+            
+            # Marca come notificato
+            monitor_closed_positions.notified_orders.add(order_id)
+            
+            # Estrai dati
+            closed_size = float(pnl_entry.get('closedSize', 0))
+            avg_entry = float(pnl_entry.get('avgEntryPrice', 0))
+            avg_exit = float(pnl_entry.get('avgExitPrice', 0))
+            closed_pnl = float(pnl_entry.get('closedPnl', 0))
+            qty = float(pnl_entry.get('qty', 0))
+            
+            # Determina direzione
+            if closed_size > 0:
+                trade_direction = 'LONG'
+                side_emoji = "🟢"
+            elif closed_size < 0:
+                trade_direction = 'SHORT'
+                side_emoji = "🔴"
+            else:
+                if avg_exit > avg_entry:
+                    trade_direction = 'LONG'
+                    side_emoji = "🟢"
+                else:
+                    trade_direction = 'SHORT'
+                    side_emoji = "🔴"
+            
+            # Calcola PnL %
+            if avg_entry > 0:
+                if trade_direction == 'LONG':
+                    pnl_percent = ((avg_exit - avg_entry) / avg_entry) * 100
+                else:
+                    pnl_percent = ((avg_entry - avg_exit) / avg_entry) * 100
+            else:
+                pnl_percent = 0
+            
+            # Determina tipo chiusura
+            if closed_pnl > 0:
+                result_emoji = "✅"
+                result_text = "PROFIT"
+                result_color = "🟢"
+            else:
+                result_emoji = "❌"
+                result_text = "LOSS"
+                result_color = "🔴"
+            
+            # Decimali dinamici
+            price_decimals = get_price_decimals(avg_entry)
+            
+            # Costruisci messaggio
+            msg = f"{result_emoji} <b>POSIZIONE CHIUSA - {result_text}</b>\n\n"
+            msg += f"{side_emoji} <b>{symbol}</b> - {trade_direction}\n\n"
+            
+            msg += f"<b>📊 Trade Details:</b>\n"
+            msg += f"Qty: {abs(qty):.4f}\n"
+            msg += f"Entry: ${avg_entry:.{price_decimals}f}\n"
+            msg += f"Exit: ${avg_exit:.{price_decimals}f}\n\n"
+            
+            msg += f"<b>{result_color} Risultato:</b>\n"
+            msg += f"PnL: <b>${closed_pnl:+.2f}</b> ({pnl_percent:+.2f}%)\n\n"
+            
+            # Recupera info posizione originale se disponibile
+            with POSITIONS_LOCK:
+                if symbol in ACTIVE_POSITIONS:
+                    pos_info = ACTIVE_POSITIONS[symbol]
+                    
+                    entry_original = pos_info.get('entry_price', avg_entry)
+                    sl_original = pos_info.get('sl', 0)
+                    tp_original = pos_info.get('tp', 0)
+                    timeframe = pos_info.get('timeframe', 'N/A')
+                    
+                    msg += f"<b>📈 Setup Originale:</b>\n"
+                    msg += f"Timeframe: {timeframe}\n"
+                    msg += f"Entry Plan: ${entry_original:.{price_decimals}f}\n"
+                    msg += f"SL: ${sl_original:.{price_decimals}f}\n"
+                    msg += f"TP: ${tp_original:.{price_decimals}f}\n\n"
+                    
+                    # Determina tipo chiusura (SL/TP/Manual)
+                    if abs(avg_exit - tp_original) < (tp_original * 0.002):
+                        msg += "🎯 <b>Tipo chiusura: TAKE PROFIT</b>\n"
+                    elif abs(avg_exit - sl_original) < (sl_original * 0.002):
+                        msg += "🛑 <b>Tipo chiusura: STOP LOSS</b>\n"
+                    else:
+                        msg += "👤 <b>Tipo chiusura: MANUAL</b>\n"
+                    
+                    # Rimuovi dal tracking
+                    del ACTIVE_POSITIONS[symbol]
+                    logging.info(f'📝 Rimossa {symbol} dal tracking dopo chiusura')
+            
+            # Timestamp
+            updated_time = int(pnl_entry.get('updatedTime', 0))
+            close_time = datetime.fromtimestamp(updated_time / 1000, tz=timezone.utc)
+            time_str = close_time.strftime('%d/%m/%Y %H:%M UTC')
+            msg += f"\n⏰ Chiuso: {time_str}"
+            
+            # Invia notifica a tutte le chat che stanno tracciando questo symbol
+            with ACTIVE_ANALYSES_LOCK:
+                for chat_id, analyses in ACTIVE_ANALYSES.items():
+                    # Verifica se questa chat stava analizzando questo symbol
+                    is_tracking = any(key.startswith(f'{symbol}-') for key in analyses.keys())
+                    
+                    if is_tracking:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=msg,
+                                parse_mode='HTML'
+                            )
+                            logging.info(f'📨 Notifica chiusura inviata a chat {chat_id} per {symbol}')
+                        except Exception as e:
+                            logging.error(f'Errore invio notifica chiusura: {e}')
+        
+        # Cleanup vecchie notifiche (mantieni solo ultime 200)
+        if len(monitor_closed_positions.notified_orders) > 200:
+            monitor_closed_positions.notified_orders = set(
+                list(monitor_closed_positions.notified_orders)[-200:]
+            )
+    
+    except Exception as e:
+        logging.exception('Errore in monitor_closed_positions')
+
 
 # ----------------------------- MAIN -----------------------------
 
@@ -12595,6 +12688,16 @@ def main():
 
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
+
+    # ===== NUOVO: Schedula monitoring posizioni chiuse =====
+    if BYBIT_API_KEY and BYBIT_API_SECRET:
+        application.job_queue.run_repeating(
+            monitor_closed_positions,
+            interval=30,  # Ogni 30 secondi
+            first=10,     # Primo check dopo 10 secondi
+            name='monitor_closed_positions'
+        )
+        logging.info('✅ Monitoring posizioni chiuse attivato (ogni 30s)')
     
     # Avvia bot
     mode_emoji = "🎮" if TRADING_MODE == 'demo' else "⚠️💰"
