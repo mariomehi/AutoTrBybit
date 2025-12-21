@@ -320,18 +320,7 @@ AVAILABLE_PATTERNS = {
         'side': 'Buy',
         'emoji': '📈🔺'
     },
-    
-    # ═══════════════════════════════════════════
-    # TIER 3: CLASSIC PATTERNS - USA ENHANCED
-    # ═══════════════════════════════════════════
-    'bullish_engulfing': {
-        'name': 'Bullish Engulfing',
-        'enabled': True,  # ✅ MA USA ENHANCED VERSION
-        'description': 'Engulfing su EMA (Enhanced)',
-        'side': 'Buy',
-        'emoji': '🟢'
-    },
-    'bud_pattern': {
+        'bud_pattern': {
         'name': 'BUD Pattern',
         'enabled': True,
         'description': 'Breakout + 2 candele riposo nel range',
@@ -344,6 +333,17 @@ AVAILABLE_PATTERNS = {
         'description': 'Breakout + 3+ candele riposo (setup più forte)',
         'side': 'Buy',
         'emoji': '🌟🌱'
+    },
+    
+    # ═══════════════════════════════════════════
+    # TIER 3: CLASSIC PATTERNS - USA ENHANCED
+    # ═══════════════════════════════════════════
+    'bullish_engulfing': {
+        'name': 'Bullish Engulfing',
+        'enabled': True,  # ✅ MA USA ENHANCED VERSION
+        'description': 'Engulfing su EMA (Enhanced)',
+        'side': 'Buy',
+        'emoji': '🟢'
     },
     'hammer': {
         'name': 'Hammer',
@@ -5664,6 +5664,48 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.debug(f'{symbol}: Compression Breakout - not found')
         except Exception as e:
             logging.error(f'Error in Compression: {e}')
+
+        # 🌱 BUD Pattern
+    if AVAILABLE_PATTERNS.get('bud_pattern', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing BUD Pattern...')
+        try:
+            found, data = is_bud_pattern(df, require_maxi=False)
+            if found:
+                logging.info(f'✅ TIER 1: BUD Pattern ({data["rest_count"]} riposo)')
+                
+                # Caption personalizzato
+                caption = f"🌱 <b>BUD PATTERN</b>\n\n"
+                caption += f"📊 Candele Riposo: {data['rest_count']}\n"
+                caption += f"💥 Breakout High: ${data['breakout_high']:.{price_decimals}f}\n"
+                caption += f"📦 Range Breakout: {data['breakout_range']:.{price_decimals}f}\n"
+                caption += f"{'✅' if data['breaks_breakout_high'] else '⚠️'} Rompe breakout high\n\n"
+                
+                caption += f"💵 Entry: ${data['suggested_entry']:.{price_decimals}f}\n"
+                caption += f"🛑 SL: ${data['suggested_sl']:.{price_decimals}f}\n"
+                caption += f"🎯 TP: ${data['suggested_tp']:.{price_decimals}f} (2R)\n\n"
+                
+                if data['volume_ok']:
+                    caption += f"📊 Volume Breakout: {data['volume_ratio']:.1f}x ✅\n"
+                
+                return (True, 'Buy', 'BUD Pattern', data)
+        except Exception as e:
+            logging.error(f'Error in BUD Pattern: {e}')
+    
+    # 🌟 MAXI BUD Pattern
+    if AVAILABLE_PATTERNS.get('maxi_bud_pattern', {}).get('enabled'):
+        logging.debug(f'{symbol}: Testing MAXI BUD Pattern...')
+        try:
+            found, data = is_maxi_bud_pattern(df)
+            if found:
+                logging.info(f'✅ TIER 1: MAXI BUD Pattern ({data["rest_count"]} riposo)')
+                
+                caption = f"🌟🌱 <b>MAXI BUD PATTERN</b>\n\n"
+                caption += f"⭐ <b>Setup PREMIUM</b> ({data['rest_count']} candele riposo)\n\n"
+                # ... resto caption simile a BUD
+                
+                return (True, 'Buy', 'MAXI BUD Pattern', data)
+        except Exception as e:
+            logging.error(f'Error in MAXI BUD: {e}')
     
     # ⭐ Morning Star Enhanced
     if AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled', False):
@@ -5709,48 +5751,6 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.debug(f'{symbol}: Bullish Engulfing Enhanced - not found')
         except Exception as e:
             logging.error(f'Error in Bullish Engulfing Enhanced: {e}')
-
-    # 🌱 BUD Pattern
-    if AVAILABLE_PATTERNS.get('bud_pattern', {}).get('enabled'):
-        logging.debug(f'{symbol}: Testing BUD Pattern...')
-        try:
-            found, data = is_bud_pattern(df, require_maxi=False)
-            if found:
-                logging.info(f'✅ TIER 1: BUD Pattern ({data["rest_count"]} riposo)')
-                
-                # Caption personalizzato
-                caption = f"🌱 <b>BUD PATTERN</b>\n\n"
-                caption += f"📊 Candele Riposo: {data['rest_count']}\n"
-                caption += f"💥 Breakout High: ${data['breakout_high']:.{price_decimals}f}\n"
-                caption += f"📦 Range Breakout: {data['breakout_range']:.{price_decimals}f}\n"
-                caption += f"{'✅' if data['breaks_breakout_high'] else '⚠️'} Rompe breakout high\n\n"
-                
-                caption += f"💵 Entry: ${data['suggested_entry']:.{price_decimals}f}\n"
-                caption += f"🛑 SL: ${data['suggested_sl']:.{price_decimals}f}\n"
-                caption += f"🎯 TP: ${data['suggested_tp']:.{price_decimals}f} (2R)\n\n"
-                
-                if data['volume_ok']:
-                    caption += f"📊 Volume Breakout: {data['volume_ratio']:.1f}x ✅\n"
-                
-                return (True, 'Buy', 'BUD Pattern', data)
-        except Exception as e:
-            logging.error(f'Error in BUD Pattern: {e}')
-    
-    # 🌟 MAXI BUD Pattern
-    if AVAILABLE_PATTERNS.get('maxi_bud_pattern', {}).get('enabled'):
-        logging.debug(f'{symbol}: Testing MAXI BUD Pattern...')
-        try:
-            found, data = is_maxi_bud_pattern(df)
-            if found:
-                logging.info(f'✅ TIER 1: MAXI BUD Pattern ({data["rest_count"]} riposo)')
-                
-                caption = f"🌟🌱 <b>MAXI BUD PATTERN</b>\n\n"
-                caption += f"⭐ <b>Setup PREMIUM</b> ({data['rest_count']} candele riposo)\n\n"
-                # ... resto caption simile a BUD
-                
-                return (True, 'Buy', 'MAXI BUD Pattern', data)
-        except Exception as e:
-            logging.error(f'Error in MAXI BUD: {e}')
     
     # ═══════════════════════════════════════════
     # TIER 3: CLASSIC PATTERNS (45-55%)
@@ -10988,234 +10988,6 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(msg, parse_mode='HTML')
 
-async def cmd_test_compression(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Comando /test_compression SYMBOL TIMEFRAME
-    Testa Compression Breakout Enhanced
-    """
-    args = context.args
-    
-    if len(args) < 2:
-        await update.message.reply_text(
-            '❌ Uso: /test_compression SYMBOL TIMEFRAME\n'
-            'Esempio: /test_compression BTCUSDT 5m'
-        )
-        return
-    
-    symbol = args[0].upper()
-    timeframe = args[1].lower()
-    
-    await update.message.reply_text(f'🔍 Testing Compression Breakout Enhanced su {symbol} {timeframe}...')
-    
-    try:
-        # Ottieni dati
-        df = bybit_get_klines(symbol, timeframe, limit=250)
-        if df.empty:
-            await update.message.reply_text(f'❌ Nessun dato per {symbol}')
-            return
-        
-        # Test filtri globali
-        vol_ok = volume_confirmation(df, min_ratio=1.5)
-        atr_ok = atr_expanding(df)
-        trend_ok = is_uptrend_structure(df)
-        
-        # Test pattern
-        found = is_compression_breakout(df)
-        
-        # Test HTF resistance
-        last_close = df['close'].iloc[-1]
-        htf_block = check_compression_htf_resistance(symbol, timeframe, last_close)
-        
-        # Costruisci report
-        msg = f"💥 <b>Compression Breakout Test: {symbol} {timeframe}</b>\n\n"
-        
-        msg += "<b>🔍 Filtri Globali:</b>\n"
-        msg += f"{'✅' if vol_ok else '❌'} Volume OK (>1.5x media)\n"
-        msg += f"{'✅' if atr_ok else '❌'} ATR Expanding\n"
-        msg += f"{'✅' if trend_ok else '❌'} Uptrend Structure\n\n"
-        
-        if found:
-            msg += "🎯 <b>PATTERN BASE TROVATO!</b>\n\n"
-            
-            # Calcola metriche enhanced
-            vol = df['volume']
-            consolidation_vol = vol.iloc[-4:-1].mean()
-            breakout_vol = vol.iloc[-2]
-            vol_ratio = breakout_vol / consolidation_vol if consolidation_vol > 0 else 0
-            
-            # RSI
-            close = df['close']
-            delta = close.diff()
-            gain = delta.where(delta > 0, 0)
-            loss = -delta.where(delta < 0, 0)
-            avg_gain = gain.rolling(window=14).mean()
-            avg_loss = loss.rolling(window=14).mean()
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
-            curr_rsi = rsi.iloc[-1]
-            
-            # Distance to EMA 10
-            ema_10 = df['close'].ewm(span=10, adjust=False).mean()
-            curr_ema10 = ema_10.iloc[-1]
-            distance = abs(last_close - curr_ema10) / curr_ema10
-            
-            msg += f"<b>📊 Metriche Enhanced:</b>\n"
-            msg += f"Volume Breakout: {vol_ratio:.1f}x {'✅' if vol_ratio >= 1.8 else '❌ (serve 1.8x+)'}\n"
-            msg += f"RSI: {curr_rsi:.1f} {'✅' if 50 <= curr_rsi <= 70 else '❌ (serve 50-70)'}\n"
-            msg += f"Distance EMA 10: {distance*100:.2f}% {'✅' if distance <= 0.01 else '❌ (max 1%)'}\n\n"
-            
-            # HTF Check
-            msg += f"<b>🔍 HTF Resistance Check:</b>\n"
-            if htf_block['blocked']:
-                msg += f"❌ BLOCCATO da {htf_block['htf']}\n"
-                msg += f"{htf_block['details']}\n\n"
-                msg += "🔴 <b>Pattern NON VALIDO (HTF resistance)</b>"
-            else:
-                msg += f"✅ No resistenza HTF\n\n"
-                
-                # Verifica TUTTI gli enhancement
-                all_checks = (vol_ratio >= 1.8 and 
-                            50 <= curr_rsi <= 70 and 
-                            distance <= 0.01)
-                
-                if all_checks:
-                    msg += "🟢 <b>Pattern VALIDO (Enhanced)</b>"
-                else:
-                    msg += "⚠️ <b>Pattern BASE valido MA enhancement falliti</b>"
-        else:
-            msg += "❌ <b>Pattern BASE NON trovato</b>\n\n"
-            msg += "Verifica compressione EMA 5, 10, 223"
-        
-        await update.message.reply_text(msg, parse_mode='HTML')
-        
-    except Exception as e:
-        logging.exception('Errore in cmd_test_compression')
-        await update.message.reply_text(f'❌ Errore: {str(e)}')
-
-
-async def cmd_test_sr(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Comando /test_sr SYMBOL TIMEFRAME
-    Testa specificamente il pattern S/R Bounce
-    """
-    args = context.args
-    
-    if len(args) < 2:
-        await update.message.reply_text(
-            '❌ Uso: /test_sr SYMBOL TIMEFRAME\n'
-            'Esempio: /test_sr BTCUSDT 5m'
-        )
-        return
-    
-    symbol = args[0].upper()
-    timeframe = args[1].lower()
-    
-    await update.message.reply_text(f'🔍 Testing S/R Bounce su {symbol} {timeframe}...')
-    
-    try:
-        # Ottieni dati
-        df = bybit_get_klines(symbol, timeframe, limit=100)
-        if df.empty:
-            await update.message.reply_text(f'❌ Nessun dato per {symbol}')
-            return
-        
-        # Test filtri globali
-        vol_ok = volume_confirmation(df, min_ratio=1.5)
-        atr_ok = atr_expanding(df)
-        trend_ok = is_uptrend_structure(df)
-        
-        # Test pattern
-        found, data = is_support_resistance_bounce(df)
-        
-        # Costruisci report
-        msg = f"🎯 <b>S/R Bounce Test: {symbol} {timeframe}</b>\n\n"
-        
-        msg += "<b>🔍 Filtri Globali:</b>\n"
-        msg += f"{'✅' if vol_ok else '❌'} Volume OK (>1.5x media)\n"
-        msg += f"{'✅' if atr_ok else '❌'} ATR Expanding\n"
-        msg += f"{'✅' if trend_ok else '❌'} Uptrend Structure\n\n"
-        
-        if found:
-            price_decimals = get_price_decimals(data['support_level'])
-            
-            msg += "🎯 <b>PATTERN TROVATO!</b>\n\n"
-            
-            msg += f"📊 <b>Support Level:</b>\n"
-            msg += f"  Level: ${data['support_level']:.{price_decimals}f}\n"
-            msg += f"  Touches: <b>{data['touches']}</b> volte\n"
-            msg += f"  Distance: ${data['distance_to_support']:.{price_decimals}f}\n\n"
-            
-            msg += f"🕯️ <b>Candela:</b>\n"
-            msg += f"  Body: {data['body_pct']*100:.1f}% del range\n"
-            msg += f"  Lower Wick: {data['lower_wick_pct']*100:.1f}% del range\n"
-            msg += f"  Rejection: <b>{data['rejection_strength']:.2f}x</b> corpo\n\n"
-            
-            msg += f"📈 <b>Volume & EMA:</b>\n"
-            msg += f"  Volume: <b>{data['volume_ratio']:.1f}x</b> media\n"
-            msg += f"  EMA 10: ${data['ema10']:.{price_decimals}f}\n"
-            msg += f"  EMA 60: ${data['ema60']:.{price_decimals}f}\n"
-            msg += f"  Near EMA 60: {'✅ Yes' if data['near_ema60'] else '⚠️ No'}\n\n"
-            
-            # Calcola setup
-            curr_price = df['close'].iloc[-1]
-            sl = data['support_level'] * 0.998
-            risk = curr_price - sl
-            tp = curr_price + (risk * 1.6)
-            
-            msg += f"🎯 <b>Trade Setup:</b>\n"
-            msg += f"  Entry: ${curr_price:.{price_decimals}f}\n"
-            msg += f"  SL: ${sl:.{price_decimals}f}\n"
-            msg += f"  TP: ${tp:.{price_decimals}f} (1.6R)\n\n"
-            
-            msg += "🟢 <b>Pattern VALIDO per entry</b>"
-            
-        else:
-            msg += "❌ <b>Pattern NON trovato</b>\n\n"
-            
-            # Debug
-            curr = df.iloc[-1]
-            lookback_lows = df['low'].iloc[-50:-1]
-            sorted_lows = lookback_lows.nsmallest(5)
-            support_level = sorted_lows.mean()
-            
-            msg += "<b>Checklist:</b>\n"
-            
-            # Check 1: Support valido
-            tolerance = support_level * 0.005
-            touches = (lookback_lows <= support_level + tolerance).sum()
-            msg += f"{'✅' if touches >= 3 else '❌'} Support valido ({touches} touches, serve 3+)\n"
-            
-            # Check 2: Tocca support
-            touches_support = abs(curr['low'] - support_level) <= tolerance
-            distance_pct = abs(curr['low'] - support_level) / support_level * 100
-            msg += f"{'✅' if touches_support else '❌'} Tocca support (dist: {distance_pct:.2f}%, max 0.5%)\n"
-            
-            # Check 3: Candela verde
-            is_green = curr['close'] > curr['open']
-            msg += f"{'✅' if is_green else '❌'} Candela verde\n"
-            
-            # Check 4: Rejection
-            if is_green:
-                lower_wick = min(curr['open'], curr['close']) - curr['low']
-                body = abs(curr['close'] - curr['open'])
-                has_rejection = lower_wick >= body if body > 0 else False
-                msg += f"{'✅' if has_rejection else '❌'} Rejection (wick >= corpo)\n"
-            
-            # Check 5: Volume
-            vol = df['volume']
-            if len(vol) >= 20:
-                avg_vol = vol.iloc[-20:-1].mean()
-                curr_vol = vol.iloc[-1]
-                vol_ratio = curr_vol / avg_vol if avg_vol > 0 else 0
-                msg += f"{'✅' if vol_ratio >= 1.2 else '❌'} Volume: {vol_ratio:.1f}x (serve 1.2x+)\n"
-        
-        await update.message.reply_text(msg, parse_mode='HTML')
-        
-    except Exception as e:
-        logging.exception('Errore in cmd_test_sr')
-        await update.message.reply_text(f'❌ Errore: {str(e)}')
-
-
 async def cmd_debug_volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /debug_volume SYMBOL TIMEFRAME
@@ -12481,9 +12253,6 @@ def main():
     application.add_handler(CommandHandler('pattern_off', cmd_pattern_off))
     application.add_handler(CommandHandler('pattern_info', cmd_pattern_info))
     application.add_handler(CommandHandler('ema_filter', cmd_ema_filter))
-    application.add_handler(CommandHandler('ema_sl', cmd_ema_sl))
-    application.add_handler(CommandHandler('test_sr', cmd_test_sr))
-    application.add_handler(CommandHandler('test_compression', cmd_test_compression))
     application.add_handler(CommandHandler('debug_volume', cmd_debug_volume))
     application.add_handler(CommandHandler('test_flag', cmd_test_flag))
     application.add_handler(CommandHandler('trend_filter', cmd_trend_filter))
