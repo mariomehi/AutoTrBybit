@@ -7928,7 +7928,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 return  # BLOCCA segnale
 
-            # Variabili comuni (default)
+            # Inizializza variabili default per evitare UnboundLocalError
             entry_price = last_close
             sl_price = None
             tp_price = None
@@ -8445,7 +8445,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 sl_price = pattern_data['suggested_sl']
                 tp_price = pattern_data['suggested_tp']
 
-                price_decimals = get_price_decimals(pattern_data['breakout_high'])
+                price_decimals = get_price_decimals(entry_price)
                 
                 caption = f"🌱 <b>{pattern.upper()}</b>\n\n"
                 
