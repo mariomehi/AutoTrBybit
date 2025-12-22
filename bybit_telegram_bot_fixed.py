@@ -12125,15 +12125,22 @@ def main():
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
 
-    # Schedula salvataggio periodico statistiche
+    async def save_pattern_stats_job(context: ContextTypes.DEFAULT_TYPE):
+        """Salva le statistiche pattern periodicamente"""
+        try:
+            track_patterns.save_pattern_stats()
+            logging.debug("Pattern stats saved successfully")
+        except Exception as e:
+            logging.error(f"Error saving pattern stats: {e}")
+    
+    # Poi, nella sezione di scheduling:
     if True:  # Sempre attivo
         application.job_queue.run_repeating(
-            lambda context: track_patterns.save_pattern_stats(),
-            interval=300,  # Ogni 5 minuti
+            save_pattern_stats_job,  # ← Usa funzione async invece di lambda
+            interval=300,
             first=60,
             name='save_pattern_stats'
         )
-        logging.info('✅ Salvataggio automatico statistiche attivato (ogni 5 min)')
 
     # ===== NUOVO: Schedula monitoring posizioni chiuse =====
     if BYBIT_API_KEY and BYBIT_API_SECRET:
