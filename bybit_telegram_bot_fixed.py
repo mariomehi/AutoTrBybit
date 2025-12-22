@@ -4603,7 +4603,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
         "volume_ratio": vol_ratio,
         "near_ema10": near_ema10,
         "near_ema60": near_ema60,
-        "swept_liquidity": swept_liquidity
+        "swept_liquidity": swept_liquidity,
         "tail_distance_to_ema60": tail_distance_to_ema60 * 100,  # ← AGGIUNTO
     }
 
