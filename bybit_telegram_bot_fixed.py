@@ -2431,7 +2431,7 @@ def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
     ema60_at_break = ema_60.iloc[breakout_idx]
 
     if breakout_close <= ema60_at_break:
-    return (False, None)
+        return (False, None)
     
     # ===== PATTERN CONFERMATO! =====
     
