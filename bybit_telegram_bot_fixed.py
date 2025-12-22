@@ -4589,6 +4589,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
 
     data = {
         "tier": tier,
+        'quality_score': score,
         "score": score,
         "entry": curr_price,
         "sl": sl,
@@ -8527,7 +8528,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                         caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
                     else:
                         caption += f"\n\n✅ <b>Ordine su Bybit {TRADING_MODE.upper()}</b>"
-
 
             
             # === LOGICA STANDARD per altri pattern ===
