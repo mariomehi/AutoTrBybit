@@ -1,8 +1,28 @@
 # ----------------------------- PATTERN STATISTICS SYSTEM -----------------------------
 
+"""
+Pattern Statistics Tracking System
+Traccia performance di ogni pattern: win rate, PnL, best/worst trade, etc.
+"""
+
 import json
+import logging
+import threading
 from collections import defaultdict
 from pathlib import Path
+from datetime import datetime, timezone
+
+# ← AGGIUNGI QUESTI IMPORT (servono per le integrazioni):
+from typing import Optional, Dict, Any
+
+# ← AGGIUNGI QUESTI IMPORT:
+try:
+    from telegram import Update
+    from telegram.ext import ContextTypes
+except ImportError:
+    logging.warning("telegram imports not available - commands will not work")
+    Update = None
+    ContextTypes = None
 
 # Storage per statistiche pattern (in memoria + file)
 PATTERN_STATS = defaultdict(lambda: {
@@ -23,7 +43,7 @@ PATTERN_STATS = defaultdict(lambda: {
 })
 
 PATTERN_STATS_LOCK = threading.Lock()
-STATS_FILE_PATH = Path('/tmp/pattern_stats.json')  # Railway-compatible
+STATS_FILE_PATH = Path('/tmp/pattern_stats.json')  # Railway-compatible3
 
 def load_pattern_stats():
     """Carica statistiche pattern da file"""
