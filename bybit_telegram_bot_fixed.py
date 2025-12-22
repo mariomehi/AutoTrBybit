@@ -36,6 +36,9 @@ except Exception as e:
     logging.warning(f'pybit import failed: {e}')
     BybitHTTP = None
 
+# Import pattern statistics tracker
+import track_patterns
+
 # ----------------------------- CONFIG -----------------------------
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '')
 BYBIT_API_KEY = os.environ.get('BYBIT_API_KEY', '')
@@ -6684,6 +6687,7 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                     'order_id': order.get('result', {}).get('orderId'),
                     'timestamp': datetime.now(timezone.utc).isoformat(),
                     'timeframe': timeframe,  # 👈 AGGIUNGI (pass come parametro)
+                    'pattern_name': pattern_name,  # ← AGGIUNGI
                     'trailing_active': False,
                     'highest_price': entry_price,  # 👈 AGGIUNGI
                     'chat_id': chat_id  # 👈 AGGIUNGI
@@ -7614,6 +7618,19 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         if found:
             #logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
             logging.info(f'✅ {symbol} {timeframe} - Pattern FOUND: {pattern} ({side})')
+
+            # Registra segnale nelle statistiche
+            try:
+                track_patterns.integrate_pattern_stats_on_signal(
+                    pattern_name=pattern,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    side=side,
+                    autotrade=job_ctx.get('autotrade', False)
+                )
+            except Exception as e:
+                logging.error(f'Errore tracking pattern signal: {e}')
+    
             # Log pattern-specific data se disponibile
             if pattern_data:
                     #logging.info(f'   {symbol} - Quality Score: {pattern_data["quality_score"]}/100 - Tier: {pattern_data["tier"]} - Volume: {pattern_data["volume_ratio"]:.1f}x')
@@ -11970,6 +11987,19 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
                     sl_original = pos_info.get('sl', 0)
                     tp_original = pos_info.get('tp', 0)
                     timeframe = pos_info.get('timeframe', 'N/A')
+
+                    # Registra risultato nelle statistiche
+                    try:
+                        track_patterns.integrate_pattern_stats_on_close(
+                            symbol=symbol,
+                            entry_price=pos_info.get('entry_price', avg_entry),
+                            exit_price=avg_exit,
+                            pnl=closed_pnl,
+                            open_timestamp=pos_info.get('timestamp'),
+                            close_timestamp=datetime.now(timezone.utc).isoformat()
+                        )
+                    except Exception as e:
+                        logging.error(f'Errore tracking trade result: {e}')
                     
                     msg += f"<b>📈 Setup Originale:</b>\n"
                     msg += f"Timeframe: {timeframe}\n"
@@ -12035,6 +12065,10 @@ def main():
         # Nota: Serve chat_id, quindi auto-discovery sarà attivato
         # dal primo utente che usa /autodiscover on
         logging.info('🔍 Auto-Discovery configurato (attiva con /autodiscover on)')
+
+    # Carica statistiche pattern
+    logging.info('📊 Caricamento statistiche pattern...')
+    track_patterns.load_pattern_stats()
     
     # Verifica variabili d'ambiente
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == '':
@@ -12084,9 +12118,22 @@ def main():
     application.add_handler(CommandHandler("timefilter", cmd_time_filter))
     application.add_handler(CommandHandler('debug_filters', cmd_debug_filters))
     application.add_handler(CommandHandler('force_test', cmd_force_test))
+    application.add_handler(CommandHandler('pattern_stats', track_patterns.cmd_pattern_stats))
+    application.add_handler(CommandHandler('reset_pattern_stats', track_patterns.cmd_reset_pattern_stats))
+    application.add_handler(CommandHandler('export_pattern_stats', track_patterns.cmd_export_pattern_stats))
 
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
+
+    # Schedula salvataggio periodico statistiche
+    if True:  # Sempre attivo
+        application.job_queue.run_repeating(
+            lambda context: track_patterns.save_pattern_stats(),
+            interval=300,  # Ogni 5 minuti
+            first=60,
+            name='save_pattern_stats'
+        )
+        logging.info('✅ Salvataggio automatico statistiche attivato (ogni 5 min)')
 
     # ===== NUOVO: Schedula monitoring posizioni chiuse =====
     if BYBIT_API_KEY and BYBIT_API_SECRET:
