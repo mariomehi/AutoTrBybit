@@ -50,7 +50,7 @@ BYBIT_API_SECRET = os.environ.get('BYBIT_API_SECRET', '')
 TRADING_MODE = os.environ.get('TRADING_MODE', 'demo')
 
 # Strategy parameters
-VOLUME_FILTER = True
+#VOLUME_FILTER = True
 ATR_MULT_SL = 1.5
 ATR_MULT_TP = 2.0
 RISK_USD = 10.0
@@ -1834,7 +1834,7 @@ def is_higher_low_consolidation_breakout(df: pd.DataFrame) -> tuple:
     vol_ratio = curr_vol / consolidation_vol_avg
     
     # Volume breakout > 2x consolidamento
-    if vol_ratio < 0.0:
+    if vol_ratio < 0.5:
         return (False, None)
     
     # ===== EMA CHECKS (opzionali) =====
@@ -2854,7 +2854,7 @@ def is_bearish_engulfing_enhanced(prev, curr, df):
     vol_ratio = curr_vol / avg_vol
     
     # Minimum volume threshold
-    if vol_ratio < 0.0:  # ← Più permissivo per SHORT
+    if vol_ratio < 0.5:  # ← Più permissivo per SHORT
         return (False, None, None)
     
     # ===== STEP 3: CALCULATE EMAs =====
@@ -3909,7 +3909,7 @@ def is_triple_touch_breakout(df: pd.DataFrame) -> tuple:
     vol_ratio = curr_vol / cons_vol_avg
     
     # Volume breakout DEVE essere > 2x consolidamento
-    if vol_ratio < 0.0:
+    if vol_ratio < 0.5:
         logging.debug(f'🚫 Triple Touch: Volume insufficiente ({vol_ratio:.1f}x)')
         return (False, None)
     
@@ -4126,7 +4126,7 @@ def is_breakout_retest(df: pd.DataFrame) -> tuple:
             
             vol_ratio = breakout_vol / consolidation_vol
             
-            if vol_ratio < 0.0:
+            if vol_ratio < 0.5:
                 continue
         else:
             return (False, None)  # Volume essenziale per questo pattern
@@ -4957,7 +4957,7 @@ def is_compression_breakout(df: pd.DataFrame):
     vol_ratio = breakout_vol / consolidation_vol
     
     # Volume breakout deve essere > 1.8x consolidamento
-    if vol_ratio < 0.0:
+    if vol_ratio < 0.5:
         logging.debug(f'❌ Compression Breakout: Volume insufficiente ({vol_ratio:.1f}x, serve 1.8x+)')
         return False
     
