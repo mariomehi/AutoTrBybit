@@ -454,12 +454,15 @@ def integrate_pattern_stats_on_close(
     exit_price: float,
     pnl: float,
     open_timestamp: str,
-    close_timestamp: str
+    close_timestamp: str,
+    pattern_name: str = None,  # ← AGGIUNGI parametro diretto
+    timeframe: str = None,
+    side: str = None
 ):
     """
     Chiama questa quando una posizione si chiude
     
-    Nota: Devi recuperare il pattern_name dal tracking posizione
+    NOTA: Ora accetta pattern_name direttamente invece di cercare in POSITIONS_LOCK
     """
     try:
         # Calcola durata
@@ -467,29 +470,23 @@ def integrate_pattern_stats_on_close(
         close_time = datetime.fromisoformat(close_timestamp)
         duration = (close_time - open_time).total_seconds() / 60  # minuti
         
-        # Recupera pattern dal tracking (se salvato)
-        # Per ora assumiamo di averlo nel tracking posizione
-        with POSITIONS_LOCK:
-            if symbol in ACTIVE_POSITIONS:
-                pos_info = ACTIVE_POSITIONS[symbol]
-                pattern_name = pos_info.get('pattern_name')
-                timeframe = pos_info.get('timeframe')
-                side = pos_info.get('side')
-                
-                if pattern_name:
-                    record_pattern_trade_result(
-                        pattern_name=pattern_name,
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        side=side,
-                        entry_price=entry_price,
-                        exit_price=exit_price,
-                        pnl=pnl,
-                        duration_minutes=int(duration)
-                    )
+        # Se mancano dati, skip
+        if not pattern_name or not timeframe or not side:
+            logging.debug(f'Pattern stats skip: missing data for {symbol}')
+            return
+        
+        record_pattern_trade_result(
+            pattern_name=pattern_name,
+            symbol=symbol,
+            timeframe=timeframe,
+            side=side,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            pnl=pnl,
+            duration_minutes=int(duration)
+        )
     except Exception as e:
         logging.error(f'Errore integrate_pattern_stats_on_close: {e}')
-
 
 # ----------------------------- TELEGRAM COMMANDS -----------------------------
 
