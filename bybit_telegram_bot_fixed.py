@@ -4525,6 +4525,15 @@ def is_pin_bar_bullish_enhanced(candle, df):
     curr_ema10 = ema10.iloc[-1]
     curr_ema60 = ema60.iloc[-1]
 
+    # Tail distance to EMA
+    tail_distance_to_ema10 = abs(tail_low - curr_ema10) / curr_ema10
+    # ← AGGIUNGI QUESTA RIGA MANCANTE:
+    tail_distance_to_ema60 = abs(tail_low - curr_ema60) / curr_ema60
+    
+    # Check se tail tocca le EMA
+    tail_near_ema10 = tail_distance_to_ema10 < 0.01  # Entro 1%
+    tail_near_ema60 = tail_distance_to_ema60 < 0.005  # Entro 0.5%
+
     # Trend filter
     if curr_price <= curr_ema60 * 0.995:
         return (False, None, None)
@@ -7119,6 +7128,42 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                         if new_sl >= current_sl:
                             logging.debug(f"{symbol} (SELL): Profit lock SL {new_sl:.4f} >= current {current_sl:.4f}, skip")
                             continue
+
+                    # ===== VERIFICA POSIZIONE REALE SU BYBIT =====
+                    try:
+                        session = create_bybit_session()
+                        
+                        # ← AGGIUNGI QUESTO BLOCCO:
+                        # Check se posizione esiste ancora
+                        positions_response = session.get_positions(
+                            category='linear',
+                            symbol=symbol
+                        )
+                        
+                        if positions_response.get('retCode') == 0:
+                            pos_list = positions_response.get('result', {}).get('list', [])
+                            
+                            # Cerca posizione attiva
+                            real_position = None
+                            for p in pos_list:
+                                if float(p.get('size', 0)) > 0:
+                                    real_position = p
+                                    break
+                            
+                            if not real_position:
+                                logging.warning(f"{symbol}: No active position on Bybit, removing from tracking")
+                                with POSITIONS_LOCK:
+                                    if symbol in ACTIVE_POSITIONS:
+                                        del ACTIVE_POSITIONS[symbol]
+                                continue  # Skip to next position
+                        
+                        # Ora aggiorna SL (posizione confermata esistere)
+                        result = session.set_trading_stop(
+                            category="linear",
+                            symbol=symbol,
+                            stopLoss=str(round(new_sl, get_price_decimals(new_sl))),
+                            positionIdx=0
+                        )
                     
                     # ===== AGGIORNA SU BYBIT (PROFIT LOCK) =====
                     try:
@@ -7707,7 +7752,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 return  # BLOCCA segnale
 
             # Inizializza variabili default per evitare UnboundLocalError
-            entry_price = last_close
+            entry_price = last_close  # ← AGGIUNGI all'inizio del blocco BUY
             sl_price = None
             tp_price = None
             ema_used = 'ATR'
@@ -8219,10 +8264,11 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             elif pattern == 'BUD Pattern' or pattern == 'MAXI BUD Pattern':
                 
                 tier = 'MAXI' if 'MAXI' in pattern else 'STANDARD'
-                entry_price = pattern_data['suggested_entry']
-                sl_price = pattern_data['suggested_sl']
-                tp_price = pattern_data['suggested_tp']
-
+                # ← AGGIUNGI fallback sicuro:
+                entry_price = pattern_data.get('suggested_entry', last_close)
+                sl_price = pattern_data.get('suggested_sl', last_close * 0.98)
+                tp_price = pattern_data.get('suggested_tp', last_close * 1.02)
+                
                 price_decimals = get_price_decimals(entry_price)
                 
                 caption = f"🌱 <b>{pattern.upper()}</b>\n\n"
@@ -11997,7 +12043,10 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
                             exit_price=avg_exit,
                             pnl=closed_pnl,
                             open_timestamp=pos_info.get('timestamp'),
-                            close_timestamp=datetime.now(timezone.utc).isoformat()
+                            close_timestamp=datetime.now(timezone.utc).isoformat(),
+                            pattern_name=pos_info.get('pattern_name'),  # ← AGGIUNGI
+                            timeframe=pos_info.get('timeframe'),  # ← AGGIUNGI
+                            side=pos_info.get('side')  # ← AGGIUNGI
                         )
                     except Exception as e:
                         logging.error(f'Errore tracking trade result: {e}')
