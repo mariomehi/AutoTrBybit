@@ -7164,16 +7164,6 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                             stopLoss=str(round(new_sl, get_price_decimals(new_sl))),
                             positionIdx=0
                         )
-                    
-                    # ===== AGGIORNA SU BYBIT (PROFIT LOCK) =====
-                    try:
-                        session = create_bybit_session()
-                        result = session.set_trading_stop(
-                            category="linear",
-                            symbol=symbol,
-                            stopLoss=str(round(new_sl, get_price_decimals(new_sl))),
-                            positionIdx=0
-                        )
                         
                         if result.get('retCode') == 0:
                             with POSITIONS_LOCK:
