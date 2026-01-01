@@ -4525,6 +4525,9 @@ def is_pin_bar_bullish_enhanced(candle, df):
     curr_ema10 = ema10.iloc[-1]
     curr_ema60 = ema60.iloc[-1]
 
+    # Definisci tail_low (punto più basso della tail)
+    tail_low = candle['low']
+
     # Tail distance to EMA
     tail_distance_to_ema10 = abs(tail_low - curr_ema10) / curr_ema10
     # ← AGGIUNGI QUESTA RIGA MANCANTE:
@@ -5938,6 +5941,12 @@ def calculate_optimal_position_size(
         return 0
     
     qty = adjusted_risk / risk_per_unit
+    
+    # ===== SANITY CHECK: Absolute maximum per evitare qty folli =====
+    MAX_CONTRACTS_ABSOLUTE = 1_000_000  # Max 1M contracts per qualsiasi symbol
+    if qty > MAX_CONTRACTS_ABSOLUTE:
+        logging.warning(f"{symbol}: Calculated qty {qty:.0f} exceeds absolute max, capping to {MAX_CONTRACTS_ABSOLUTE}")
+        qty = MAX_CONTRACTS_ABSOLUTE
     
     # ===== STEP 4: Applica limiti per symbol =====
     qty_limits = get_symbol_qty_limits(symbol)
