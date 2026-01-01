@@ -6011,7 +6011,7 @@ def get_symbol_qty_limits(symbol: str) -> dict:
         # Coin a basso prezzo
         return {
             'min': 1.0,
-            'max': 1000000.0,
+            'max': 500000.0,  # Max 500K contracts (era 1M)
             'step': 1.0,
             'description': 'Low-price coin'
         }
