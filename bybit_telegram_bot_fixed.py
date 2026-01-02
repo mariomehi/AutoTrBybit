@@ -147,12 +147,23 @@ TRAILING_CONFIG = {
 TRAILING_EMA_TIMEFRAME = {
     '1m': '5m',   # Entry su 1m → EMA 10 da 5m
     '3m': '5m',   # Entry su 3m → EMA 10 da 5m
-    '5m': '3m',  # Entry su 5m → EMA 10 da 15m
+    '5m': '15m',  # Entry su 5m → EMA 10 da 15m
     '15m': '30m', # Entry su 15m → EMA 10 da 30m
     '30m': '1h',  # Entry su 30m → EMA 10 da 1h
     '1h': '4h',   # Entry su 1h → EMA 10 da 4h
     '4h': '4h',   # Entry su 4h → EMA 10 da 4h stesso
 }
+
+# ✅ VALIDAZIONE: Verifica che trailing TF sia >= entry TF
+for entry_tf, trailing_tf in TRAILING_EMA_TIMEFRAME.items():
+    entry_seconds = INTERVAL_SECONDS.get(entry_tf, 0)
+    trailing_seconds = INTERVAL_SECONDS.get(trailing_tf, 0)
+    
+    if trailing_seconds < entry_seconds:
+        logging.warning(
+            f"⚠️ CONFIG WARNING: Trailing TF '{trailing_tf}' è PIÙ VELOCE di entry TF '{entry_tf}'. "
+            f"Questo aumenta il rischio di whipsaw!"
+        )
 
 # Buffer EMA Stop Loss (% sotto l'EMA per evitare falsi breakout)
 EMA_SL_BUFFER = 0.002  # 0.2% sotto l'EMA
@@ -1833,8 +1844,8 @@ def is_higher_low_consolidation_breakout(df: pd.DataFrame) -> tuple:
     
     vol_ratio = curr_vol / consolidation_vol_avg
     
-    # Volume breakout > 2x consolidamento
-    if vol_ratio < 0.5:
+    # Volume breakout > 1.5x consolidamento
+    if vol_ratio < 1.5:
         return (False, None)
     
     # ===== EMA CHECKS (opzionali) =====
@@ -2093,6 +2104,14 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     lower_wick_pct = lower_wick / total_range
     upper_wick_pct = upper_wick / total_range
     rejection_strength = lower_wick / curr_body if curr_body > 0 else 0
+
+    # ✅ FIX PUNTO #4: Verifica che calcoli siano stati eseguiti
+    assert total_range >= 0, "total_range deve essere >= 0"
+    assert lower_wick_pct >= 0 and lower_wick_pct <= 1, f"lower_wick_pct invalido: {lower_wick_pct}"
+    assert upper_wick_pct >= 0 and upper_wick_pct <= 1, f"upper_wick_pct invalido: {upper_wick_pct}"
+    assert rejection_strength >= 0, f"rejection_strength invalido: {rejection_strength}"
+    
+    logging.debug(f"Engulfing: rejection={rejection_strength:.2f}, lower_wick={lower_wick_pct:.2%}, upper_wick={upper_wick_pct:.2%}")
     
     # ===== STEP 6: PULLBACK DETECTION =====
     # Check se c'è stato pullback (prezzo era più alto 3-10 periodi fa)
@@ -2176,6 +2195,17 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
     # TP: Risk/Reward 2:1 minimo
     risk = curr_price - sl_price
     tp_price = curr_price + (risk * 2.0)
+
+    # ✅ FIX PUNTO #4: Validazione dati prima di creare pattern_data
+    if total_range == 0:
+        logging.warning("Bullish Engulfing: total_range = 0, calcolo rejection fallito")
+        rejection_strength = 0.0
+        lower_wick_pct = 0.0
+        upper_wick_pct = 0.0
+
+    if curr_body == 0:
+        logging.warning("Bullish Engulfing: curr_body = 0, rejection_strength non affidabile")
+        rejection_strength = 0.0
     
     pattern_data = {
         # Tier info
@@ -2820,6 +2850,7 @@ def is_bearish_engulfing_enhanced(prev, curr, df):
     below_ema60 = False
     close_position = 0.0
     ema_anti_aligned = False
+    breakdown_strength = 0.0
     
     # ===== STEP 1: ENGULFING BASE CHECK =====
     prev_body_top = max(prev['open'], prev['close'])
@@ -4484,6 +4515,11 @@ def is_pin_bar_bullish_enhanced(candle, df):
 
     if len(df) < 60 or 'volume' not in df.columns:
         return (False, None, None)
+
+    # ✅ FIX: Inizializza variabili all'inizio
+    tail_distance_to_ema60 = 0.0
+    lower_wick_pct = 0.0
+    rejection_strength = 0.0
 
     # ===== ANATOMIA CANDELA =====
     body = abs(candle['close'] - candle['open'])
@@ -6521,7 +6557,12 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     
     # SINCRONIZZA con Bybit prima di controllare
     await sync_positions_with_bybit()
-    
+
+    # ✅ FIX PUNTO #3: Check con lock prima di verificare su Bybit
+    with POSITIONS_LOCK:
+        if symbol in ACTIVE_POSITIONS:
+            logging.warning(f'{symbol}: Position already tracked locally')
+            return {'error': 'position_exists', 'message': f'Posizione già tracciata per {symbol}'}
     # Controlla se esiste VERAMENTE una posizione aperta per questo symbol
     real_positions = await get_open_positions_from_bybit(symbol)
     
@@ -6627,6 +6668,18 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
             )
             
             if order.get('retCode') == 0:
+                with POSITIONS_LOCK:
+                    # ✅ DOUBLE-CHECK dopo ordine eseguito (pattern standard)
+                    if symbol in ACTIVE_POSITIONS:
+                        logging.warning(f'{symbol}: Race condition detected, position already added')
+                    else:
+                        ACTIVE_POSITIONS[symbol] = {
+                            'side': side,
+                            'qty': qty,
+                            'entry_price': entry_price,
+                            # ... altri campi
+                        }
+                
                 order_id = order.get('result', {}).get('orderId')
                 
                 # ===== WAIT FOR FILL (con timeout) =====
@@ -7038,8 +7091,9 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             side = pos_info.get('side')
             entry_price = pos_info.get('entry_price')  # ← USA .get() per safety
             
-            if not entry_price:
-                logging.error(f"{symbol}: Missing entry_price in position data")
+            # ✅ FIX: Verifica che entry_price esista prima di continuare
+            if not entry_price or entry_price <= 0:
+                logging.error(f"{symbol}: Missing or invalid entry_price ({entry_price}), skipping trailing stop")
                 continue
 
             # ===== VERIFICA POSIZIONE REALE SU BYBIT =====
@@ -7555,7 +7609,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         last_time = df.index[-1]
         timestamp_str = last_time.strftime('%Y-%m-%d %H:%M UTC')
 
-        position_exists = symbol in ACTIVE_POSITIONS
+        # ✅ FIX PUNTO #3: Lock per lettura thread-safe
+        with POSITIONS_LOCK:
+            position_exists = symbol in ACTIVE_POSITIONS
 
         # Log per debug
         if position_exists:
@@ -9365,14 +9421,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ----------------------------- TELEGRAM COMMANDS -----------------------------
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /start"""
-    bot_username = (await context.bot.get_me()).username
-    
-    # Emoji per la modalità
-    mode_emoji = "🎮" if TRADING_MODE == 'demo' else "💰"
-    mode_text = "DEMO (fondi virtuali)" if TRADING_MODE == 'demo' else "LIVE (SOLDI REALI!)"
     
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /start"""
@@ -9386,41 +9434,101 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🤖 <b>Bot Pattern Detection Attivo!</b>\n"
         f"👤 Username: @{bot_username}\n"
         f"{mode_emoji} <b>Modalità: {mode_text}</b>\n\n"
-        "📊 <b>Comandi Analisi:</b>\n"
-        "/analizza SYMBOL TF [autotrade] - Inizia analisi\n"
+        
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "📊 <b>ANALISI PATTERN</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "/analizza SYMBOL TF [autotrade] - Avvia analisi\n"
         "/stop SYMBOL - Ferma analisi\n"
-        "/list - Analisi attive\n"
+        "/list - Mostra analisi attive\n"
+        "/test SYMBOL TF - Test completo pattern\n\n"
+        
+        "🔔 <b>NOTIFICHE</b>\n"
         "/abilita SYMBOL TF - Notifiche complete\n"
-        "/pausa SYMBOL TF - Solo pattern (default)\n"
-        "/test SYMBOL TF - Test pattern\n\n"
-        "/timefilter - Gestisci filtro orari\n\n"
-        "💼 <b>Comandi Trading:</b>\n"
-        "/balance - Mostra saldo\n"
+        "/pausa SYMBOL TF - Solo pattern (default)\n\n"
+        
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "💼 <b>TRADING & POSIZIONI</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "/balance - Mostra saldo wallet\n"
         "/posizioni - Posizioni aperte\n"
-        "/orders [N] - Ultimi ordini e P&L\n"
-        "/trailing - Status trailing stop\n"
+        "/orders [N] - Ultimi ordini + P&L\n"
+        "/chiudi SYMBOL - Rimuovi da tracking\n"
         "/sync - Sincronizza con Bybit\n"
-        "/chiudi SYMBOL - Rimuovi dal tracking\n\n"
-        "🎯 <b>Comandi Pattern:</b>\n"
-        "/patterns - Lista pattern\n"
+        "/trailing - Status trailing stop\n\n"
+        
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🎯 <b>GESTIONE PATTERN</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "/patterns - Lista tutti i pattern\n"
         "/pattern_on NOME - Abilita pattern\n"
         "/pattern_off NOME - Disabilita pattern\n"
-        "/pattern_info NOME - Info pattern\n\n"
-        "📈 <b>Comandi EMA:</b>\n"
-        "/trend_filter - trend filter mode\n"
-        "/ema_filter [MODE] - strict/loose/off\n"
-        "/ema_sl [on|off] - EMA Stop Loss\n\n"
-        "🔍 <b>Auto-Discovery:</b>\n"
+        "/pattern_info NOME - Info dettagliate\n"
+        "/pattern_stats - Statistiche pattern\n"
+        "/reset_pattern_stats - Reset statistiche\n"
+        "/export_pattern_stats - Esporta CSV\n\n"
+        
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "📈 <b>FILTRI & CONFIGURAZIONE</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "/trend_filter [mode] - Trend filter\n"
+        "  • structure | ema_based | hybrid | pattern_only\n"
+        "/ema_filter [mode] - EMA filter\n"
+        "  • strict | loose | off\n"
+        "/ema_sl [on|off] - EMA Stop Loss\n"
+        "/timefilter - Gestisci filtro orari\n\n"
+        
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🔍 <b>AUTO-DISCOVERY</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
         "/autodiscover [on|off|now|status]\n"
-        "→ Top symbols automatici\n\n"
-        "📝 <b>Esempi:</b>\n"
-        "/analizza BTCUSDT 15m\n"
-        "/analizza ETHUSDT 5m yes (con autotrade)\n\n"
+        "→ Analizza automaticamente top symbols\n\n"
+        
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "🐛 <b>DEBUG & TEST</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "/test SYMBOL TF - Test pattern completo\n"
+        "/test_flag SYMBOL TF - Test Bullish Flag\n"
+        "/debug_volume SYMBOL TF - Debug volume\n"
+        "/debug_filters SYMBOL TF - Debug filtri\n"
+        "/force_test SYMBOL TF - Test NO filtri\n\n"
+        
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "💡 <b>ESEMPI RAPIDI</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "• Analisi base:\n"
+        "  /analizza BTCUSDT 15m\n\n"
+        "• Con autotrade:\n"
+        "  /analizza ETHUSDT 5m yes\n\n"
+        "• Test pattern:\n"
+        "  /test SOLUSDT 15m\n\n"
+        "• Debug completo:\n"
+        "  /debug_filters BTCUSDT 5m\n\n"
+        
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚙️ <b>CONFIGURAZIONE ATTUALE</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
         f"⏱️ Timeframes: {', '.join(ENABLED_TFS)}\n"
-        f"💰 Rischio default: ${RISK_USD}\n"
-        f"🔕 <b>Default:</b> Solo notifiche con pattern\n"
-        f"⚠️ <b>NOTA:</b> Solo segnali BUY attivi"
+        f"💰 Risk default: ${RISK_USD}\n"
+        f"📊 Trend: {TREND_FILTER_MODE.upper()}\n"
+        f"📈 EMA: {EMA_FILTER_MODE.upper() if EMA_FILTER_ENABLED else 'OFF'}\n"
+        f"🔕 Default: Solo pattern (non tutte)\n"
+        f"🛑 EMA SL: {'ON' if USE_EMA_STOP_LOSS else 'OFF'}\n"
+        f"🔄 Trailing: {'ON' if TRAILING_STOP_ENABLED else 'OFF'}\n\n"
+        
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ <b>NOTE IMPORTANTI</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        "• Solo segnali BUY e SELL attivi\n"
+        "• Pattern tier 1-2 prioritari\n"
+        "• Filtri intelligenti anti-noise\n"
+        "• Position sizing dinamico\n"
+        "• Trailing stop multi-level\n\n"
+        
+        "❓ Usa /start per rivedere comandi\n"
+        "💬 Feedback: thumbs down su messaggi"
     )
+    
     await update.message.reply_text(welcome_text, parse_mode='HTML')
 
 async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
