@@ -154,17 +154,6 @@ TRAILING_EMA_TIMEFRAME = {
     '4h': '4h',   # Entry su 4h → EMA 10 da 4h stesso
 }
 
-# ✅ VALIDAZIONE: Verifica che trailing TF sia >= entry TF
-for entry_tf, trailing_tf in TRAILING_EMA_TIMEFRAME.items():
-    entry_seconds = INTERVAL_SECONDS.get(entry_tf, 0)
-    trailing_seconds = INTERVAL_SECONDS.get(trailing_tf, 0)
-    
-    if trailing_seconds < entry_seconds:
-        logging.warning(
-            f"⚠️ CONFIG WARNING: Trailing TF '{trailing_tf}' è PIÙ VELOCE di entry TF '{entry_tf}'. "
-            f"Questo aumenta il rischio di whipsaw!"
-        )
-
 # Buffer EMA Stop Loss (% sotto l'EMA per evitare falsi breakout)
 EMA_SL_BUFFER = 0.002  # 0.2% sotto l'EMA
 # Esempio: se EMA 10 = $100, SL = $100 * (1 - 0.002) = $99.80
