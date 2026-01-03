@@ -49,6 +49,12 @@ BYBIT_API_SECRET = os.environ.get('BYBIT_API_SECRET', '')
 # 'live' = Trading Reale (ATTENZIONE: soldi veri!)
 TRADING_MODE = os.environ.get('TRADING_MODE', 'demo')
 
+# ======================== CACHE INSTRUMENT INFO ========================
+# Cache globale per evitare chiamate API ripetitive
+INSTRUMENT_INFO_CACHE = {}
+INSTRUMENT_CACHE_LOCK = threading.Lock()
+CACHE_EXPIRY_HOURS = 24  # Le info dei symbol cambiano raramente
+
 # Strategy parameters
 #VOLUME_FILTER = True
 ATR_MULT_SL = 1.5
@@ -618,6 +624,99 @@ def bybit_get_klines(symbol: str, interval: str, limit: int = 200):
     except Exception as e:
         logging.error(f'Errore nel parsing klines: {e}')
         return pd.DataFrame()
+
+
+def get_instrument_info_cached(session, symbol: str) -> dict:
+    """
+    Ottiene le informazioni sul symbol (min_qty, max_qty, qty_step, price_decimals)
+    con sistema di caching intelligente per eliminare latenza.
+    
+    Cache valida per 24h (le spec dei symbol non cambiano quasi mai).
+    """
+    now = datetime.now()
+    
+    with INSTRUMENT_CACHE_LOCK:
+        # Controlla se esiste in cache e non è scaduta
+        if symbol in INSTRUMENT_INFO_CACHE:
+            cached_data = INSTRUMENT_INFO_CACHE[symbol]
+            cache_time = cached_data['timestamp']
+            
+            # Se cache valida (< 24h), restituisci subito
+            if now - cache_time < timedelta(hours=CACHE_EXPIRY_HOURS):
+                logging.debug(f"{symbol} - Using cached instrument info (age: {(now - cache_time).seconds}s)")
+                return cached_data['info']
+        
+        # Cache mancante o scaduta: scarica da Bybit
+        logging.info(f"{symbol} - Downloading fresh instrument info from Bybit...")
+        
+        try:
+            instrument_info = session.get_instruments_info(category='linear', symbol=symbol)
+            
+            if instrument_info.get('retCode') == 0:
+                instruments = instrument_info.get('result', {}).get('list', [])
+                
+                if instruments:
+                    lotsize_filter = instruments[0].get('lotSizeFilter', {})
+                    price_filter = instruments[0].get('priceFilter', {})
+                    
+                    # Estrai informazioni critiche
+                    info = {
+                        'min_order_qty': float(lotsize_filter.get('minOrderQty', 0.001)),
+                        'max_order_qty': float(lotsize_filter.get('maxOrderQty', 1000000)),
+                        'qty_step': float(lotsize_filter.get('qtyStep', 0.001)),
+                        'tick_size': float(price_filter.get('tickSize', 0.01)),
+                    }
+                    
+                    # Calcola decimali qty (per arrotondamento)
+                    info['qty_decimals'] = len(str(info['qty_step']).split('.')[-1]) if '.' in str(info['qty_step']) else 0
+                    
+                    # Calcola decimali prezzo
+                    info['price_decimals'] = len(str(info['tick_size']).split('.')[-1]) if '.' in str(info['tick_size']) else 0
+                    
+                    # Salva in cache con timestamp
+                    INSTRUMENT_INFO_CACHE[symbol] = {
+                        'info': info,
+                        'timestamp': now
+                    }
+                    
+                    logging.info(f"{symbol} - Cached: min_qty={info['min_order_qty']}, step={info['qty_step']}, decimals={info['qty_decimals']}")
+                    return info
+                else:
+                    logging.warning(f"{symbol} - No instrument data found, using defaults")
+                    return _get_default_instrument_info()
+            else:
+                logging.error(f"Bybit API error: {instrument_info.get('retMsg')}")
+                return _get_default_instrument_info()
+                
+        except Exception as e:
+            logging.error(f"Error fetching instrument info for {symbol}: {e}")
+            return _get_default_instrument_info()
+
+
+def _get_default_instrument_info() -> dict:
+    """Fallback con valori di default sicuri"""
+    return {
+        'min_order_qty': 0.001,
+        'max_order_qty': 1000000,
+        'qty_step': 0.001,
+        'tick_size': 0.01,
+        'qty_decimals': 3,
+        'price_decimals': 2
+    }
+
+
+def clear_instrument_cache(symbol: str = None):
+    """Pulisce la cache (utile per debug o aggiornamenti manuali)"""
+    with INSTRUMENT_CACHE_LOCK:
+        if symbol:
+            if symbol in INSTRUMENT_INFO_CACHE:
+                del INSTRUMENT_INFO_CACHE[symbol]
+                logging.info(f"Cache cleared for {symbol}")
+        else:
+            INSTRUMENT_INFO_CACHE.clear()
+            logging.info("全 cache cleared")
+
+
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """Calcola Average True Range"""
@@ -6664,18 +6763,16 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         
         # Ottieni info sul symbol per determinare qty corretta
         try:
-            instrument_info = session.get_instruments_info(
-                category='linear',
-                symbol=symbol
-            )
+            instrument_info = get_instrument_info_cached(session, symbol)
             
             if instrument_info.get('retCode') == 0:
                 instruments = instrument_info.get('result', {}).get('list', [])
                 if instruments:
                     lot_size_filter = instruments[0].get('lotSizeFilter', {})
-                    min_order_qty = float(lot_size_filter.get('minOrderQty', 0.001))
-                    max_order_qty = float(lot_size_filter.get('maxOrderQty', 1000000))
-                    qty_step = float(lot_size_filter.get('qtyStep', 0.001))
+                    min_order_qty = instrument_info['min_order_qty']
+                    max_order_qty = instrument_info['max_order_qty']
+                    qty_step = instrument_info['qty_step']
+                    qty_decimals = instrument_info['qty_decimals']
                     
                     logging.info(f'📊 {symbol} - Min: {min_order_qty}, Max: {max_order_qty}, Step: {qty_step}')
                     
@@ -6706,7 +6803,7 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
             return {'error': f'Qty troppo piccola ({qty}). Aumenta RISK_USD o riduci ATR.'}
         
         # Arrotonda prezzi con decimali dinamici
-        price_decimals = get_price_decimals(sl_price)
+        price_decimals = instrument_info['price_decimals']
         sl_price = round(sl_price, price_decimals)
         tp_price = round(tp_price, price_decimals)
         
@@ -12377,6 +12474,35 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.exception('Errore in monitor_closed_positions')
 
+async def cmd_testcache(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test della cache instrument info"""
+    import time
+    symbol = "BTCUSDT"
+    
+    session = create_bybit_session()
+    
+    # Primo accesso (dovrebbe scaricare)
+    start = time.time()
+    info1 = get_instrument_info_cached(session, symbol)
+    time1 = (time.time() - start) * 1000
+    
+    # Secondo accesso (dovrebbe usare cache)
+    start = time.time()
+    info2 = get_instrument_info_cached(session, symbol)
+    time2 = (time.time() - start) * 1000
+    
+    await update.message.reply_text(
+        f"<b>Cache Test Results:</b>\n"
+        f"1st call: {time1:.2f}ms (download)\n"
+        f"2nd call: {time2:.2f}ms (cached)\n"
+        f"Speedup: {time1/time2:.1f}x\n\n"
+        f"<b>Info:</b>\n"
+        f"Min Qty: {info2['min_order_qty']}\n"
+        f"Qty Step: {info2['qty_step']}\n"
+        f"Decimals: {info2['qty_decimals']}",
+        parse_mode='HTML'
+    )
+
 # ----------------------------- MAIN -----------------------------
 
 def main():
@@ -12448,6 +12574,7 @@ def main():
     application.add_handler(CommandHandler('pattern_stats', track_patterns.cmd_pattern_stats))
     application.add_handler(CommandHandler('reset_pattern_stats', track_patterns.cmd_reset_pattern_stats))
     application.add_handler(CommandHandler('export_pattern_stats', track_patterns.cmd_export_pattern_stats))
+    application.add_handler(CommandHandler('testcache', cmd_testcache))
 
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
