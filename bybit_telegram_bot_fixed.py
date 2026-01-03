@@ -7126,6 +7126,105 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             )
         except:
             pass
+
+async def execute_profit_lock(
+    context,
+    symbol: str,
+    side: str,
+    new_sl: float,
+    current_sl: float,
+    profit_usd: float,
+    profit_pct: float,
+    profit_risk_ratio: float,
+    locked_profit: float,
+    entry_price: float,
+    pos_info: dict,
+    timeframe_entry: str,
+    chat_id: int
+) -> bool:
+    """
+    Esegue il Profit Lock: sposta stop loss per proteggere profitti elevati
+    
+    Returns:
+        bool: True se eseguito con successo, False se fallito
+    """
+    try:
+        # ✅ STEP 1: Verifica posizione su Bybit
+        session = create_bybit_session()
+        positions_response = session.get_positions(category="linear", symbol=symbol)
+        
+        if positions_response.get('retCode') != 0:
+            logging.error(f"{symbol}: Error checking position: {positions_response.get('retMsg')}")
+            return False
+        
+        pos_list = positions_response.get('result', {}).get('list', [])
+        
+        # Cerca posizione attiva
+        real_position = None
+        for p in pos_list:
+            if float(p.get('size', 0)) > 0:
+                real_position = p
+                break
+        
+        if not real_position:
+            logging.warning(f"{symbol}: No active position on Bybit, removing from tracking")
+            with POSITIONS_LOCK:
+                if symbol in ACTIVE_POSITIONS:
+                    del ACTIVE_POSITIONS[symbol]
+            return False
+        
+        # ✅ STEP 2: Aggiorna SL su Bybit
+        result = session.set_trading_stop(
+            category="linear",
+            symbol=symbol,
+            stopLoss=str(round(new_sl, get_price_decimals(new_sl))),
+            positionIdx=0
+        )
+        
+        if result.get('retCode') == 0:
+            # ✅ SUCCESS: Aggiorna tracking locale
+            with POSITIONS_LOCK:
+                if symbol in ACTIVE_POSITIONS:
+                    ACTIVE_POSITIONS[symbol]['sl'] = new_sl
+            
+            logging.info(
+                f"🔒 {symbol} {side} PROFIT LOCK! "
+                f"SL {new_sl:.4f} (profit ${profit_usd:.2f}, {profit_risk_ratio:.1f}x risk)"
+            )
+            
+            # ✅ STEP 3: Notifica Telegram
+            if chat_id:
+                try:
+                    side_emoji = '🟢' if side == 'Buy' else '🔴'
+                    
+                    notification = f"{side_emoji} <b>🔒 PROFIT LOCK!</b> ({side})\n\n"
+                    notification += f"<b>Symbol:</b> {symbol} ({timeframe_entry})\n"
+                    notification += f"<b>Profit:</b> ${profit_usd:.2f} (+{profit_pct:.2f}%)\n"
+                    notification += f"<b>Risk Ratio:</b> {profit_risk_ratio:.1f}x risk iniziale!\n\n"
+                    notification += f"<b>🔒 Stop Loss Locked:</b>\n"
+                    notification += f"• Prima: {current_sl:.{get_price_decimals(current_sl)}f}\n"
+                    notification += f"• <b>Ora: {new_sl:.{get_price_decimals(new_sl)}f}</b>\n"
+                    notification += f"• Profit protetto: ${locked_profit:.2f} ({PROFIT_LOCK_CONFIG['retention']*100:.0f}%)\n\n"
+                    notification += f"<b>⚡ Profit molto alto rilevato!</b>\n"
+                    notification += f"Stop loss spostato IMMEDIATAMENTE per proteggere guadagni.\n"
+                    notification += f"Trailing normale riprenderà da questo livello."
+                    
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=notification,
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    logging.error(f"Errore invio notifica profit lock: {e}")
+            
+            return True
+        else:
+            logging.error(f"{symbol}: Errore profit lock: {result.get('retMsg')}")
+            return False
+    
+    except Exception as e:
+        logging.error(f"{symbol}: Errore set_trading_stop profit lock: {e}")
+        return False
             
 async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
     """
