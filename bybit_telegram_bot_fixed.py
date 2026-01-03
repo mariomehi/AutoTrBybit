@@ -5337,6 +5337,8 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     # ═══════════════════════════════════════════
     logging.debug(f'{symbol}: Testing TIER 1 patterns...')
     
+    allowed_pattern_side = 'Buy'
+    
     # 🥇 #1: Volume Spike Breakout
     if AVAILABLE_PATTERNS.get('volume_spike_breakout', {}).get('enabled', False):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Volume Spike Breakout'):
