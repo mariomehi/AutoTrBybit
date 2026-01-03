@@ -7246,25 +7246,25 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                 if profit_risk_ratio >= PROFIT_LOCK_MULTIPLIER and profit_usd >= MIN_PROFIT_USD:
                 # PROFIT ALTO! Blocca subito
                 
-                if side == 'Buy':
-                    # Sposta SL a entry + (80% del profit)
-                    locked_profit = profit_usd * PROFIT_LOCK_RETENTION
-                    new_sl = entry_price + (locked_profit / pos_info['qty'])
-                    
-                    # Assicurati che sia miglioramento
-                    if new_sl <= current_sl:
-                        logging.debug(f"{symbol} (BUY): Profit lock SL {new_sl:.4f} <= current {current_sl:.4f}, skip")
-                        continue
-                    
-                else:  # Sell
-                    # Sposta SL a entry - (80% del profit)
-                    locked_profit = profit_usd * PROFIT_LOCK_RETENTION
-                    new_sl = entry_price - (locked_profit / pos_info['qty'])
-                    
-                    # Per SHORT: nuovo SL deve essere PIÙ BASSO (miglioramento)
-                    if new_sl >= current_sl:
-                        logging.debug(f"{symbol} (SELL): Profit lock SL {new_sl:.4f} >= current {current_sl:.4f}, skip")
-                        continue
+                    if side == 'Buy':
+                        # Sposta SL a entry + (80% del profit)
+                        locked_profit = profit_usd * PROFIT_LOCK_RETENTION
+                        new_sl = entry_price + (locked_profit / pos_info['qty'])
+                        
+                        # Assicurati che sia miglioramento
+                        if new_sl <= current_sl:
+                            logging.debug(f"{symbol} (BUY): Profit lock SL {new_sl:.4f} <= current {current_sl:.4f}, skip")
+                            continue
+                        
+                    else:  # Sell
+                        # Sposta SL a entry - (80% del profit)
+                        locked_profit = profit_usd * PROFIT_LOCK_RETENTION
+                        new_sl = entry_price - (locked_profit / pos_info['qty'])
+                        
+                        # Per SHORT: nuovo SL deve essere PIÙ BASSO (miglioramento)
+                        if new_sl >= current_sl:
+                            logging.debug(f"{symbol} (SELL): Profit lock SL {new_sl:.4f} >= current {current_sl:.4f}, skip")
+                            continue
 
                     # ===== VERIFICA POSIZIONE REALE SU BYBIT =====
                     try:
