@@ -5717,6 +5717,8 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     # ═══════════════════════════════════════════
     # PATTERN SELL (se abilitati)
     # ═══════════════════════════════════════════
+
+    allowed_pattern_side = 'Sell'
     
     # Bearish Engulfing Enhanced
     if AVAILABLE_PATTERNS.get('bearish_engulfing', {}).get('enabled', False):
@@ -7101,7 +7103,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             
             msg += f"\n⏱️ Timeframe: {timeframe}\n"
             msg += f"🤖 Autotrade: {'ON' if autotrade else 'OFF'}\n"
-            msg += f"🔄 Prossimo update tra 4 ore"
+            msg += f"🔄 Prossimo update tra 2 ore"
         else:
             msg += "✅ Nessun cambiamento\n\n"
             msg += f"Top {len(top_symbols)} symbols confermati:\n"
@@ -7234,117 +7236,110 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             
             initial_risk_usd = initial_risk_per_unit * pos_info['qty']
             
-            # ===== 🚀 AGGRESSIVE PROFIT LOCK =====
-            # Se profit >= 5x risk iniziale → BLOCCA PROFIT SUBITO
-            #PROFIT_LOCK_MULTIPLIER = 5.0  # Cambia questo per regolare aggressività
-            #PROFIT_LOCK_RETENTION = 0.80   # Trattieni 80% del profit
-            PROFIT_LOCK_MULTIPLIER = PROFIT_LOCK_CONFIG['multiplier']
-            PROFIT_LOCK_RETENTION = PROFIT_LOCK_CONFIG['retention']
-            MIN_PROFIT_USD = PROFIT_LOCK_CONFIG['min_profit_usd']
+            if not PROFIT_LOCK_ENABLED:
+                # Skip profit lock se disabilitato
+                logging.debug(f"{symbol}: Profit lock DISABLED, skip to normal trailing")
+            else:
+                # Carica config
+                PROFIT_LOCK_MULTIPLIER = PROFIT_LOCK_CONFIG['multiplier']
+                PROFIT_LOCK_RETENTION = PROFIT_LOCK_CONFIG['retention']
+                MIN_PROFIT_USD = PROFIT_LOCK_CONFIG['min_profit_usd']
 
-            if initial_risk_usd > 0:
-                profit_risk_ratio = profit_usd / initial_risk_usd
+                # Calcola profit/risk ratio
+                if initial_risk_usd > 0:
+                    profit_risk_ratio = profit_usd / initial_risk_usd
+                else:
+                    profit_risk_ratio = 0.0
                 
+                # ✅ CHECK 1: Profit >= 5x risk iniziale?
+                # ✅ CHECK 2: Profit assoluto >= min_profit_usd?
                 if profit_risk_ratio >= PROFIT_LOCK_MULTIPLIER and profit_usd >= MIN_PROFIT_USD:
-                # PROFIT ALTO! Blocca subito
-                
+                    logging.info(
+                        f"🔒 {symbol}: PROFIT LOCK TRIGGER! "
+                        f"Profit={profit_usd:.2f} USD ({profit_risk_ratio:.1f}x risk), "
+                        f"Threshold={PROFIT_LOCK_MULTIPLIER}x"
+                    )
+                    
+                    # ✅ CALCOLA NUOVO SL CON RETENTION
                     if side == 'Buy':
-                        # Sposta SL a entry + (80% del profit)
+                        # LONG: Blocca 80% del profit raggiunto
                         locked_profit = profit_usd * PROFIT_LOCK_RETENTION
                         new_sl = entry_price + (locked_profit / pos_info['qty'])
                         
-                        # Assicurati che sia miglioramento
+                        # Assicurati che SL sia miglioramento (mai indietro)
                         if new_sl <= current_sl:
-                            logging.debug(f"{symbol} (BUY): Profit lock SL {new_sl:.4f} <= current {current_sl:.4f}, skip")
-                            continue
-                        
-                    else:  # Sell
-                        # Sposta SL a entry - (80% del profit)
+                            logging.debug(
+                                f"{symbol}: Profit lock SL {new_sl:.4f} <= current {current_sl:.4f}, skip"
+                            )
+                            # Non fare nulla, continua al trailing normale
+                        else:
+                            # ✅ ESEGUI PROFIT LOCK
+                            profit_lock_executed = await execute_profit_lock(
+                                context=context,
+                                symbol=symbol,
+                                side=side,
+                                new_sl=new_sl,
+                                current_sl=current_sl,
+                                profit_usd=profit_usd,
+                                profit_pct=profit_pct,
+                                profit_risk_ratio=profit_risk_ratio,
+                                locked_profit=locked_profit,
+                                entry_price=entry_price,
+                                pos_info=pos_info,
+                                timeframe_entry=timeframe_entry,
+                                chat_id=chat_id
+                            )
+                            
+                            if profit_lock_executed:
+                                # Profit lock eseguito con successo, skip trailing normale
+                                logging.info(f"{symbol}: Profit lock SUCCESS, skip normal trailing")
+                                continue  # Vai alla prossima posizione
+                            else:
+                                # Profit lock fallito, continua al trailing normale
+                                logging.warning(f"{symbol}: Profit lock FAILED, fallback to normal trailing")
+                    
+                    else:  # Sell (SHORT)
+                        # SHORT: Blocca 80% del profit raggiunto
                         locked_profit = profit_usd * PROFIT_LOCK_RETENTION
                         new_sl = entry_price - (locked_profit / pos_info['qty'])
                         
-                        # Per SHORT: nuovo SL deve essere PIÙ BASSO (miglioramento)
+                        # Assicurati che SL sia miglioramento (mai peggio per SHORT)
                         if new_sl >= current_sl:
-                            logging.debug(f"{symbol} (SELL): Profit lock SL {new_sl:.4f} >= current {current_sl:.4f}, skip")
-                            continue
-
-                    # ===== VERIFICA POSIZIONE REALE SU BYBIT =====
-                    try:
-                        session = create_bybit_session()
-                        
-                        # ← AGGIUNGI QUESTO BLOCCO:
-                        # Check se posizione esiste ancora
-                        positions_response = session.get_positions(
-                            category='linear',
-                            symbol=symbol
-                        )
-                        
-                        if positions_response.get('retCode') == 0:
-                            pos_list = positions_response.get('result', {}).get('list', [])
-                            
-                            # Cerca posizione attiva
-                            real_position = None
-                            for p in pos_list:
-                                if float(p.get('size', 0)) > 0:
-                                    real_position = p
-                                    break
-                            
-                            if not real_position:
-                                logging.warning(f"{symbol}: No active position on Bybit, removing from tracking")
-                                with POSITIONS_LOCK:
-                                    if symbol in ACTIVE_POSITIONS:
-                                        del ACTIVE_POSITIONS[symbol]
-                                continue  # Skip to next position
-                        
-                        # Ora aggiorna SL (posizione confermata esistere)
-                        result = session.set_trading_stop(
-                            category="linear",
-                            symbol=symbol,
-                            stopLoss=str(round(new_sl, get_price_decimals(new_sl))),
-                            positionIdx=0
-                        )
-                        
-                        if result.get('retCode') == 0:
-                            with POSITIONS_LOCK:
-                                if symbol in ACTIVE_POSITIONS:
-                                    ACTIVE_POSITIONS[symbol]['sl'] = new_sl
-                            
-                            logging.info(f"🚀 {symbol} ({side}): PROFIT LOCK! SL → {new_sl:.4f} (profit: ${profit_usd:.2f}, {profit_risk_ratio:.1f}x risk)")
-                            
-                            # ===== NOTIFICA TELEGRAM =====
-                            if chat_id:
-                                try:
-                                    side_emoji = "🟢" if side == 'Buy' else "🔴"
-                                    
-                                    notification = f"<b>{side_emoji} 🚀 PROFIT LOCK! ({side})</b>\n\n"
-                                    notification += f"<b>Symbol:</b> {symbol} ({timeframe_entry})\n"
-                                    notification += f"<b>Profit:</b> ${profit_usd:.2f} ({profit_pct:.2f}%)\n"
-                                    notification += f"<b>Risk Ratio:</b> {profit_risk_ratio:.1f}x risk iniziale!\n\n"
-                                    notification += f"<b>🔒 Stop Loss Locked:</b>\n"
-                                    notification += f"• Prima: ${current_sl:.{get_price_decimals(current_sl)}f}\n"
-                                    notification += f"• Ora: ${new_sl:.{get_price_decimals(new_sl)}f}\n"
-                                    notification += f"• Profit protetto: ${locked_profit:.2f} ({PROFIT_LOCK_RETENTION*100:.0f}%)\n\n"
-                                    notification += f"💡 <b>Profit molto alto rilevato!</b>\n"
-                                    notification += f"Stop loss spostato IMMEDIATAMENTE per proteggere guadagni.\n"
-                                    notification += f"Trailing normale riprenderà da questo livello."
-                                    
-                                    await context.bot.send_message(
-                                        chat_id=chat_id,
-                                        text=notification,
-                                        parse_mode="HTML"
-                                    )
-                                except Exception as e:
-                                    logging.error(f"Errore invio notifica profit lock: {e}")
+                            logging.debug(
+                                f"{symbol}: SHORT Profit lock SL {new_sl:.4f} >= current {current_sl:.4f}, skip"
+                            )
+                            # Non fare nulla, continua al trailing normale
                         else:
-                            logging.error(f"{symbol}: Errore profit lock: {result.get('retMsg')}")
-                    
-                    except Exception as e:
-                        logging.error(f"{symbol}: Errore set_trading_stop (profit lock): {e}")
-                    
-                    # SKIP trailing normale (già gestito qui)
-                    continue
+                            # ✅ ESEGUI PROFIT LOCK
+                            profit_lock_executed = await execute_profit_lock(
+                                context=context,
+                                symbol=symbol,
+                                side=side,
+                                new_sl=new_sl,
+                                current_sl=current_sl,
+                                profit_usd=profit_usd,
+                                profit_pct=profit_pct,
+                                profit_risk_ratio=profit_risk_ratio,
+                                locked_profit=locked_profit,
+                                entry_price=entry_price,
+                                pos_info=pos_info,
+                                timeframe_entry=timeframe_entry,
+                                chat_id=chat_id
+                            )
+                            
+                            if profit_lock_executed:
+                                logging.info(f"{symbol}: SHORT Profit lock SUCCESS, skip normal trailing")
+                                continue  # Vai alla prossima posizione
+                            else:
+                                logging.warning(f"{symbol}: SHORT Profit lock FAILED, fallback to normal trailing")
+                else:
+                    # Profit non abbastanza alto per profit lock
+                    logging.debug(
+                        f"{symbol}: Profit {profit_usd:.2f} USD ({profit_risk_ratio:.1f}x) "
+                        f"< threshold ({PROFIT_LOCK_MULTIPLIER}x) or < min ${MIN_PROFIT_USD}"
+                    )
             
-            # ===== TROVA IL LIVELLO APPROPRIATO =====
+            # ✅ CONTINUA AL TRAILING NORMALE (se profit lock non eseguito)
             active_level = None
             for level in TRAILING_CONFIG_ADVANCED['levels']:
                 if profit_pct >= level['profit_pct']:
@@ -7571,7 +7566,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     timeframe = job_ctx['timeframe']
     key = f'{symbol}-{timeframe}'
 
-    logging.info(f'🔍 Analyzing {symbol} {timeframe}...')
+    #logging.info(f'🔍 Analyzing {symbol} {timeframe}...')
     logging.debug(f'   Volume mode: {VOLUME_FILTER_MODE}')
     logging.debug(f'   Trend mode: {TREND_FILTER_MODE}')
     logging.debug(f'   EMA mode: {EMA_FILTER_MODE if EMA_FILTER_ENABLED else "OFF"}')
@@ -7825,7 +7820,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                         # Fallback per pattern senza questi dati
                         logging.info(f'   {symbol} - Pattern: {pattern} (data structure varies)')
         else:
-            logging.info(f'❌ {symbol} {timeframe} - NO pattern detected')
+            logging.debug(f'❌ {symbol} {timeframe} - NO pattern detected')
             # Log perché non ha trovato pattern (se EMA era OK)
             if ema_analysis and ema_analysis['passed']:
                 logging.info(f'  {symbol} - EMA was OK ({ema_analysis["quality"]}) but no pattern matched')
