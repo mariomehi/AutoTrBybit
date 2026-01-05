@@ -6765,34 +6765,27 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         try:
             instrument_info = get_instrument_info_cached(session, symbol)
             
-            if instrument_info.get('retCode') == 0:
-                instruments = instrument_info.get('result', {}).get('list', [])
-                if instruments:
-                    lot_size_filter = instruments[0].get('lotSizeFilter', {})
-                    min_order_qty = instrument_info['min_order_qty']
-                    max_order_qty = instrument_info['max_order_qty']
-                    qty_step = instrument_info['qty_step']
-                    qty_decimals = instrument_info['qty_decimals']
-                    
-                    logging.info(f'📊 {symbol} - Min: {min_order_qty}, Max: {max_order_qty}, Step: {qty_step}')
-                    
-                    # Arrotonda qty al qty_step più vicino
-                    qty = round(qty / qty_step) * qty_step
-                    
-                    # Limita qty tra min e max
-                    qty = max(min_order_qty, min(qty, max_order_qty))
-                    
-                    # Assicurati che qty rispetti il formato
-                    # Conta decimali in qty_step
-                    decimals = len(str(qty_step).split('.')[-1]) if '.' in str(qty_step) else 0
-                    qty = round(qty, decimals)
-                else:
-                    logging.warning(f'Nessuna info trovata per {symbol}, uso default')
-                    qty = round(qty, 3)
-            else:
-                logging.warning(f'Errore nel recuperare info {symbol}, uso default')
-                qty = round(qty, 3)
-                
+            # ✅ FIX: get_instrument_info_cached() ritorna DIRETTAMENTE il dict con info
+            min_order_qty = instrument_info['min_order_qty']
+            max_order_qty = instrument_info['max_order_qty']
+            qty_step = instrument_info['qty_step']
+            qty_decimals = instrument_info['qty_decimals']
+            
+            logging.info(f'📊 {symbol} - Min: {min_order_qty}, Max: {max_order_qty}, Step: {qty_step}')
+            
+            # Arrotonda qty al qty_step più vicino
+            qty = round(qty / qty_step) * qty_step
+            
+            # Limita qty tra min e max
+            qty = max(min_order_qty, min(qty, max_order_qty))
+            
+            # Arrotonda ai decimali corretti
+            qty = round(qty, qty_decimals)
+            
+        except KeyError as e:
+            logging.error(f'Missing key in instrument_info: {e}')
+            logging.warning(f'Using default qty rounding for {symbol}')
+            qty = round(qty, 3)
         except Exception as e:
             logging.warning(f'Errore nel recuperare instrument info: {e}')
             # Fallback: arrotondamento generico
