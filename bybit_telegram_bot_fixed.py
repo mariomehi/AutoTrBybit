@@ -5625,6 +5625,14 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             try:
                 found, data = is_bud_pattern(df, require_maxi=False)
                 if found:
+
+                    entry_price = data.get('suggested_entry')
+                    sl_price    = data.get('suggested_sl')
+                    tp_price    = data.get('suggested_tp')
+                    
+                    if entry_price is None or sl_price is None or tp_price is None:
+                        raise KeyError(f"BUD data missing suggested_* keys={list(data.keys())}")
+    
                     logging.info(f'✅ TIER 1: BUD Pattern ({data["rest_count"]} riposo)')
                     
                     # Caption personalizzato
@@ -6239,17 +6247,17 @@ def get_symbol_qty_limits(symbol: str) -> dict:
 
 
 # ===== BACKWARD COMPATIBILITY =====
-def calculate_position_size(entryprice: float, slprice: float, risk_usd: float) -> float:
+def calculate_position_size(entry_price: float, sl_price: float, risk_usd: float) -> float:
     """
     Legacy function - usa la nuova versione con ATR di default
     Per backward compatibility con il codice esistente
     """
     # Se non abbiamo ATR, usiamo un fattore di volatilità di default (1.0 = neutrale)
     return calculate_optimal_position_size(
-        entry_price=entryprice,
-        sl_price=slprice,
+        entry_price=entry_price,
+        sl_price=sl_price,
         symbol='UNKNOWN',  # Non sappiamo il symbol qui
-        volatility_atr=abs(entryprice - slprice) * 1.0,  # Approximation
+        volatility_atr=abs(entry_price - sl_price) * 1.0,  # Approximation
         ema_score=50,  # Neutrale
         risk_usd=risk_usd
     )
@@ -7754,6 +7762,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     symbol = job_ctx['symbol']
     timeframe = job_ctx['timeframe']
     key = f'{symbol}-{timeframe}'
+    momentum_reason = ""   # default
 
     #logging.info(f'🔍 Analyzing {symbol} {timeframe}...')
     logging.debug(f'   Volume mode: {VOLUME_FILTER_MODE}')
@@ -8121,9 +8130,13 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 R:R tipico: 1:2.5-3.5
                 """
                 
-                entry_price = pattern_data['suggested_entry']
-                sl_price = pattern_data['suggested_sl']
-                tp_price = pattern_data['suggested_tp']
+                entry_price = pattern_data.get('suggested_entry')
+                sl_price   = pattern_data.get('suggested_sl')
+                tp_price   = pattern_data.get('suggested_tp')
+                
+                if entry_price is None or sl_price is None or tp_price is None:
+                    logging.error(f"{symbol} {timeframe} - Pattern {pattern}: missing suggested_* in pattern_data keys={list(pattern_data.keys())}")
+                    return  # oppure continue / skip ordine
                 
                 ema_used = 'Triple Touch Zone'
                 ema_value = pattern_data['resistance']
@@ -8211,9 +8224,13 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 R:R tipico: 1:2.5-3
                 """
                 
-                entry_price = pattern_data['suggested_entry']
-                sl_price = pattern_data['suggested_sl']
-                tp_price = pattern_data['suggested_tp']
+                entry_price = pattern_data.get('suggested_entry')
+                sl_price   = pattern_data.get('suggested_sl')
+                tp_price   = pattern_data.get('suggested_tp')
+                
+                if entry_price is None or sl_price is None or tp_price is None:
+                    logging.error(f"{symbol} {timeframe} - Pattern {pattern}: missing suggested_* in pattern_data keys={list(pattern_data.keys())}")
+                    return  # oppure continue / skip ordine
                 
                 ema_used = 'Retest Zone'
                 ema_value = pattern_data['resistance']
@@ -8383,9 +8400,14 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                  pattern == 'Pin Bar Bullish (GOOD)' or \
                  pattern == 'Pin Bar Bullish (OK)':
                 
-                entry_price = pattern_data['suggested_entry']
-                sl_price = pattern_data['suggested_sl']
-                tp_price = pattern_data['suggested_tp']
+                entry_price = pattern_data.get('suggested_entry')
+                sl_price   = pattern_data.get('suggested_sl')
+                tp_price   = pattern_data.get('suggested_tp')
+                
+                if entry_price is None or sl_price is None or tp_price is None:
+                    logging.error(f"{symbol} {timeframe} - Pattern {pattern}: missing suggested_* in pattern_data keys={list(pattern_data.keys())}")
+                    return  # oppure continue / skip ordine
+                     
                 ema_used = 'Pin Bar Enhanced'
                 ema_value = pattern_data['ema60']
                 
