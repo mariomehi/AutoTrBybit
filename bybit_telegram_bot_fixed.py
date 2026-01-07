@@ -6808,13 +6808,27 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
             return {'error': f'Qty troppo piccola ({qty}). Aumenta RISK_USD o riduci ATR.'}
         
         # Arrotonda prezzi con decimali dinamici
+        # ✅ FIX CRITICO: Arrotonda prezzi SL/TP al tick_size corretto
         price_decimals = instrument_info['price_decimals']
+        tick_size = instrument_info['tick_size']
+
+        # Arrotonda al tick_size più vicino (non solo ai decimali!)
+        def round_to_tick(price, tick):
+            """Arrotonda prezzo al tick_size più vicino"""
+            if tick == 0:
+                return round(price, price_decimals)
+            return round(price / tick) * tick
+
+        sl_price = round_to_tick(sl_price, tick_size)
+        tp_price = round_to_tick(tp_price, tick_size)
+
+        # Fallback: assicurati almeno i decimali corretti
         sl_price = round(sl_price, price_decimals)
         tp_price = round(tp_price, price_decimals)
         
         logging.info(f'📤 Piazzando ordine {side} per {symbol}')
         logging.info(f'   Qty: {qty} | SL: {sl_price} | TP: {tp_price}')
-
+        logging.info(f'   Tick size: {tick_size}, Price decimals: {price_decimals}')
 
         if order_type == 'Limit':
             # ===== LIMIT ORDER =====
@@ -7377,6 +7391,41 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             # ===== VERIFICA POSIZIONE REALE SU BYBIT =====
             try:
                 session = create_bybit_session()
+
+                # ✅ FIX: Preserva TP quando aggiorni SL
+                # Alcuni broker resettano TP se non lo passi esplicitamente
+                tp_price = pos_info.get('tp', 0)
+
+                # Arrotonda al tick_size
+                price_decimals = get_price_decimals(new_sl)
+                new_sl_rounded = round(new_sl, price_decimals)
+
+                # Prepara parametri
+                params = {
+                    "category": "linear",
+                    "symbol": symbol,
+                    "stopLoss": str(new_sl_rounded),
+                    "positionIdx": 0
+                }
+
+                # ✅ Includi TP se esistente per preservarlo
+                if tp_price > 0:
+                    tp_rounded = round(tp_price, price_decimals)
+                    params["takeProfit"] = str(tp_rounded)
+                    logging.debug(f"{symbol}: Updating SL={new_sl_rounded}, preserving TP={tp_rounded}")
+                else:
+                    logging.debug(f"{symbol}: Updating SL={new_sl_rounded}, no TP set")
+                
+                result = session.set_trading_stop(**params)
+
+                if result.get('retCode') == 0:
+                    # Aggiorna tracking locale
+                    with POSITIONS_LOCK:
+                        if symbol in ACTIVE_POSITIONS:
+                            ACTIVE_POSITIONS[symbol]['sl'] = new_sl
+                            
+                            logging.info(f"{symbol} ({side}): Trailing SL updated to {new_sl:.4f} (Level: {active_level['label']})")
+    
                 positions_response = session.get_positions(
                     category='linear',
                     symbol=symbol
@@ -11111,7 +11160,14 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /trailing - Mostra status trailing con livelli"""
+    """
+    Comando /trailing [ACTION]
+    
+    Actions:
+    - (nessuno): Mostra status
+    - setup: Imposta trailing per posizioni senza
+    - force: Forza update trailing su tutte le posizioni
+    """
     if not TRAILING_STOP_ENABLED:
         await update.message.reply_text(
             "<b>Trailing Stop Loss DISABILITATO</b>\n"
@@ -11119,6 +11175,9 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
         return
+    
+    args = context.args
+    action = args[0].lower() if args else 'status'
     
     with POSITIONS_LOCK:
         positions_copy = dict(ACTIVE_POSITIONS)
@@ -11131,6 +11190,104 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # ===== ACTION: SETUP =====
+    if action == 'setup':
+        await update.message.reply_text("🔄 Impostando trailing stop per posizioni senza...")
+        
+        setup_count = 0
+        errors = []
+        
+        for symbol, pos in positions_copy.items():
+            side = pos.get('side')
+            if side != 'Buy':
+                continue  # Solo LONG per ora
+            
+            # Check se ha già trailing attivo
+            if pos.get('trailing_active', False):
+                continue
+            
+            # Imposta trailing
+            try:
+                entry = pos.get('entry_price')
+                timeframe = pos.get('timeframe', '15m')
+                
+                # Scarica dati per calcolare EMA 10
+                ema_tf = TRAILING_EMA_TIMEFRAME.get(timeframe, '5m')
+                df = bybit_get_klines(symbol, ema_tf, limit=20)
+                
+                if df.empty:
+                    errors.append(f"{symbol}: No data")
+                    continue
+                
+                # Calcola nuovo SL basato su EMA 10
+                ema_10 = df['close'].ewm(span=10, adjust=False).mean().iloc[-1]
+                ema_buffer = TRAILING_CONFIG_ADVANCED['levels'][0]['ema_buffer']
+                new_sl = ema_10 * (1 - ema_buffer)
+                
+                # Verifica che non sia peggio dello SL corrente
+                current_sl = pos['sl']
+                if new_sl <= current_sl:
+                    errors.append(f"{symbol}: New SL worse than current")
+                    continue
+                
+                # Aggiorna su Bybit
+                session = create_bybit_session()
+                tp_price = pos.get('tp', 0)
+                
+                params = {
+                    "category": "linear",
+                    "symbol": symbol,
+                    "stopLoss": str(round(new_sl, get_price_decimals(new_sl))),
+                    "positionIdx": 0
+                }
+                
+                if tp_price > 0:
+                    params["takeProfit"] = str(round(tp_price, get_price_decimals(tp_price)))
+                
+                result = session.set_trading_stop(**params)
+                
+                if result.get('retCode') == 0:
+                    # Marca come trailing attivo
+                    with POSITIONS_LOCK:
+                        if symbol in ACTIVE_POSITIONS:
+                            ACTIVE_POSITIONS[symbol]['sl'] = new_sl
+                            ACTIVE_POSITIONS[symbol]['trailing_active'] = True
+                            ACTIVE_POSITIONS[symbol]['highest_price'] = entry
+                    
+                    setup_count += 1
+                    logging.info(f"✅ {symbol}: Trailing setup (SL={new_sl:.4f})")
+                else:
+                    errors.append(f"{symbol}: {result.get('retMsg')}")
+            
+            except Exception as e:
+                errors.append(f"{symbol}: {str(e)[:50]}")
+                logging.error(f"Error setting up trailing for {symbol}: {e}")
+        
+        # Report
+        msg = f"<b>Trailing Setup Completato</b>\n\n"
+        msg += f"✅ Setup: {setup_count} posizioni\n"
+        
+        if errors:
+            msg += f"\n❌ Errori ({len(errors)}):\n"
+            for err in errors[:5]:  # Max 5 errori
+                msg += f"• {err}\n"
+            if len(errors) > 5:
+                msg += f"... e altri {len(errors)-5}\n"
+        
+        await update.message.reply_text(msg, parse_mode="HTML")
+        return
+    
+    # ===== ACTION: FORCE =====
+    if action == 'force':
+        await update.message.reply_text("🔄 Forcing trailing update per tutte le posizioni...")
+        
+        # Chiama direttamente la funzione di update
+        await update_trailing_stop_loss(context)
+        
+        await update.message.reply_text("✅ Trailing update forzato completato")
+        return
+    
+    # ===== ACTION: STATUS (default) =====
     msg = "<b>📈 Advanced Trailing Stop Status</b>\n\n"
     
     # Mostra configurazione livelli
@@ -11146,17 +11303,20 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     msg += "<b>📊 Posizioni Attive:</b>\n\n"
     
+    positions_with_trailing = 0
+    positions_without_trailing = 0
+    
     for symbol, pos in positions_copy.items():
         if pos['side'] != 'Buy':
             continue
         
-        #entry = pos['entry_price']
-        entry = pos.get('entry_price')  # ← USA .get() per safety
+        entry = pos.get('entry_price')
         if not entry:
-            logging.error(f"{symbol}: Missing entry_price in position data")
             continue
+        
         current_sl = pos['sl']
         timeframe_entry = pos['timeframe']
+        trailing_active = pos.get('trailing_active', False)
         
         # Scarica prezzo corrente
         df = bybit_get_klines(symbol, timeframe_entry, limit=5)
@@ -11178,7 +11338,15 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         price_decimals = get_price_decimals(current_price)
         
-        msg += f"{level_emoji} <b>{symbol}</b> ({timeframe_entry})\n"
+        # Status emoji
+        if trailing_active:
+            status_emoji = "✅"
+            positions_with_trailing += 1
+        else:
+            status_emoji = "⚠️"
+            positions_without_trailing += 1
+        
+        msg += f"{status_emoji} {level_emoji} <b>{symbol}</b> ({timeframe_entry})\n"
         msg += f"Entry: ${entry:.{price_decimals}f}\n"
         msg += f"Current: ${current_price:.{price_decimals}f}\n"
         msg += f"SL: ${current_sl:.{price_decimals}f}\n"
@@ -11190,12 +11358,27 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
             needed = TRAILING_CONFIG_ADVANCED['levels'][0]['profit_pct'] - profit_pct
             msg += f"Serve +{needed:.2f}% per attivare\n"
         
+        if not trailing_active:
+            msg += "⚠️ <b>Trailing NON attivo</b>\n"
+        
         msg += "\n"
     
-    msg += "\n<b>ℹ️ Info</b>\n"
+    # Summary
+    msg += f"\n<b>📋 Summary:</b>\n"
+    msg += f"✅ Con trailing: {positions_with_trailing}\n"
+    msg += f"⚠️ Senza trailing: {positions_without_trailing}\n\n"
+    
+    if positions_without_trailing > 0:
+        msg += f"💡 Usa <code>/trailing setup</code> per impostare trailing\n\n"
+    
+    msg += "<b>ℹ️ Info</b>\n"
     msg += "• SL segue EMA 10 del TF superiore\n"
     msg += "• Livelli progressivi stringono automaticamente\n"
-    msg += "• SL non torna mai indietro\n"
+    msg += "• SL non torna mai indietro\n\n"
+    msg += "<b>Comandi:</b>\n"
+    msg += "<code>/trailing</code> - Status\n"
+    msg += "<code>/trailing setup</code> - Setup trailing\n"
+    msg += "<code>/trailing force</code> - Forza update"
     
     await update.message.reply_text(msg, parse_mode="HTML")
 
