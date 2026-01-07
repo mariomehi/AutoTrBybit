@@ -11152,7 +11152,7 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         #entry = pos['entry_price']
         entry = pos.get('entry_price')  # ← USA .get() per safety
-        if not entry_price:
+        if not entry:
             logging.error(f"{symbol}: Missing entry_price in position data")
             continue
         current_sl = pos['sl']
