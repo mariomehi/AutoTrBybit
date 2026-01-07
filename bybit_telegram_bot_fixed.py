@@ -2157,6 +2157,8 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
             pattern_data = {
                 'tier': 'GOLD',
                 'quality_score': 95,
+                'distance_to_ema10': distancetoema10, # Aggiunta
+                'distance_to_ema60': distancetoema60, # Aggiunta
                 'ema60_breakout': True,
                 'breakout_strength': breakout_pct,
                 'entry_price': curr_price,
@@ -2572,6 +2574,8 @@ def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
     
     # Oppure: Usa range breakout
     # tp_price = breakout_high + (breakout_range * 2)
+    # Definisci entry_price prima di creare la caption o il dizionario data
+    entry_price = last_close # o il valore del breakout
     
     pattern_data = {
         'pattern_type': pattern_type,
@@ -4722,17 +4726,17 @@ def is_pin_bar_bullish_enhanced(candle, df):
     score = min(score, 100)
 
     # ===== SL / TP =====
-    sl = pin_low * 0.995
-    risk = curr_price - sl
-    tp = curr_price + risk * 2
+    suggested_sl = pin_low * 0.995
+    risk = curr_price - suggested_sl
+    suggested_tp = curr_price + risk * 2
 
     data = {
         "tier": tier,
         'quality_score': score,
         "score": score,
-        "entry": curr_price,
-        "sl": sl,
-        "tp": tp,
+        "suggested_entry": curr_price,
+        "suggested_sl": suggested_sl,
+        "suggested_tp": suggested_tp,
         "rr": 2.0,
         "lower_wick_pct": lower_wick_pct * 100,
         "close_position": close_position * 100,
@@ -7598,6 +7602,8 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                     # ===== NOTIFICA TELEGRAM =====
                     if chat_id:
                         try:
+                            # Recupera il prezzo di entrata prima del calcolo del profitto
+                            entry_price = float(posinfo.get('entryPrice', 0)) 
                             profit_usd = abs(current_price - entry_price) * pos_info['qty']
                             sl_move_usd = abs(new_sl - current_sl) * pos_info['qty']
                             
