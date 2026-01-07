@@ -7603,7 +7603,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                     if chat_id:
                         try:
                             # Recupera il prezzo di entrata prima del calcolo del profitto
-                            entry_price = float(posinfo.get('entryPrice', 0)) 
+                            entry_price = float(pos_info.get('entryPrice', 0)) 
                             profit_usd = abs(current_price - entry_price) * pos_info['qty']
                             sl_move_usd = abs(new_sl - current_sl) * pos_info['qty']
                             
