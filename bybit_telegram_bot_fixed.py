@@ -525,6 +525,45 @@ PROFIT_LOCK_CONFIG = {
     'min_profit_usd': 20.0,   # Min profit in USD per attivare (evita micro-profit)
 }
 
+# ===== MULTI-TP SYSTEM (Dynamic Take Profit) =====
+MULTI_TP_ENABLED = True  # Abilita/disabilita sistema multi-TP
+
+MULTI_TP_CONFIG = {
+    'enabled': True,
+    
+    # Livelli TP (in Risk-Reward ratio)
+    'levels': [
+        {
+            'label': 'TP1 - Quick Profit',
+            'rr_ratio': 1.5,      # 1.5R dal entry
+            'close_pct': 0.40,    # Chiudi 40% posizione
+            'emoji': '🎯'
+        },
+        {
+            'label': 'TP2 - Trend Capture',
+            'rr_ratio': 2.5,      # 2.5R dal entry
+            'close_pct': 0.30,    # Chiudi 30% posizione
+            'emoji': '🎯🎯'
+        },
+        {
+            'label': 'TP3 - Big Move',
+            'rr_ratio': 4.0,      # 4R dal entry
+            'close_pct': 0.30,    # Chiudi 30% posizione (residuo)
+            'emoji': '🎯🎯🎯'
+        }
+    ],
+    
+    # Impostazioni avanzate
+    'check_interval': 30,          # Check ogni 30 secondi
+    'min_partial_qty': 0.001,      # Min qty per chiusura parziale (BTC)
+    'activate_trailing_after_tp1': True,  # Trailing attivo dopo TP1
+    'buffer_pct': 0.002,           # Buffer 0.2% per considerar TP "hit"
+}
+
+# Tracking TP hit per posizione
+TP_TRACKING = {}  # symbol -> {'tp1': False, 'tp2': False, 'tp3': False, 'tp1_qty': 0, ...}
+TP_TRACKING_LOCK = threading.Lock()
+
 def is_good_trading_time_utc(now=None) -> tuple[bool, str]:
     """
     Ritorna (ok, reason)
@@ -6699,6 +6738,7 @@ def check_compression_htf_resistance(symbol: str, current_tf: str, current_price
 
 async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float, entry_price: float, timeframe: str, chat_id: int, pattern_name: str = None):
     """
+    NEW: Invece di 1 TP fisso, calcola 3 TP levels
     Piazza ordine su Bybit (Market o Limit)
     NEW: Supporta ordini LIMIT per pattern lenti
     
@@ -6830,6 +6870,45 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         logging.info(f'   Qty: {qty} | SL: {sl_price} | TP: {tp_price}')
         logging.info(f'   Tick size: {tick_size}, Price decimals: {price_decimals}')
 
+        # ===== CALCOLA MULTI-TP SE ABILITATO =====
+        tp_levels = []
+
+        # Modifica TP levels basandosi su EMA score
+        if ema_analysis and ema_analysis['score'] >= 80:
+            # Setup GOLD: TP più aggressivi
+            MULTI_TP_CONFIG['levels'][0]['rr_ratio'] = 2.0  # TP1: 2R invece di 1.5R
+            MULTI_TP_CONFIG['levels'][1]['rr_ratio'] = 3.5  # TP2: 3.5R
+            MULTI_TP_CONFIG['levels'][2]['rr_ratio'] = 5.0  # TP3: 5R
+        
+        if MULTI_TP_ENABLED and MULTI_TP_CONFIG['enabled']:
+            risk = abs(entry_price - sl_price)
+            
+            for level in MULTI_TP_CONFIG['levels']:
+                if side == 'Buy':
+                    tp_level_price = entry_price + (risk * level['rr_ratio'])
+                else:  # Sell
+                    tp_level_price = entry_price - (risk * level['rr_ratio'])
+                
+                # Arrotonda al tick_size
+                tp_level_price = round_to_tick(tp_level_price, tick_size)
+                
+                tp_levels.append({
+                    'label': level['label'],
+                    'price': tp_level_price,
+                    'close_pct': level['close_pct'],
+                    'qty': round(qty * level['close_pct'], qty_decimals),
+                    'emoji': level['emoji'],
+                    'hit': False
+                })
+            
+            logging.info(f'🎯 Multi-TP configurato:')
+            for i, tp in enumerate(tp_levels, 1):
+                logging.info(f'   TP{i}: ${tp["price"]:.{price_decimals}f} ({tp["close_pct"]*100:.0f}% = {tp["qty"]:.4f})')
+            
+            # Per Bybit: Usa TP più lontano come "main TP" (TP3)
+            # TP1 e TP2 saranno gestiti da monitor_partial_tp()
+            tp_price = tp_levels[-1]['price']  # TP3
+
         if order_type == 'Limit':
             # ===== LIMIT ORDER =====
             # Calcola prezzo limit (entry - offset per BUY)
@@ -6939,6 +7018,45 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
             )
         
         logging.info(f'✅ Ordine eseguito: {order_type} - {order}')
+
+        # ===== SALVA POSIZIONE CON MULTI-TP TRACKING =====
+        if order.get('retCode') == 0:
+            with POSITIONS_LOCK:
+                ACTIVE_POSITIONS[symbol] = {
+                    'side': side,
+                    'qty': qty,
+                    'qty_original': qty,  # ← NUOVO: Qty iniziale (prima dei TP parziali)
+                    'entry_price': entry_price,
+                    'sl': sl_price,
+                    'tp': tp_price,  # TP finale (TP3)
+                    'order_id': order.get('result', {}).get('orderId'),
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'timeframe': timeframe,
+                    'pattern_name': pattern_name,
+                    'trailing_active': False,
+                    'highest_price': entry_price,
+                    'chat_id': chat_id,
+                    'multi_tp_levels': tp_levels if MULTI_TP_ENABLED else None  # ← NUOVO
+                }
+            
+            # ===== INIZIALIZZA TP TRACKING =====
+            if MULTI_TP_ENABLED and tp_levels:
+                with TP_TRACKING_LOCK:
+                    TP_TRACKING[symbol] = {
+                        'tp1_hit': False,
+                        'tp2_hit': False,
+                        'tp3_hit': False,
+                        'tp1_qty_closed': 0.0,
+                        'tp2_qty_closed': 0.0,
+                        'tp3_qty_closed': 0.0,
+                        'last_check': datetime.now(timezone.utc)
+                    }
+                
+                logging.info(f'📝 Multi-TP tracking inizializzato per {symbol}')
+            
+            logging.info(f'📝 Posizione salvata per {symbol}')
+        
+        return order
         
         # Salva la posizione come attiva
         if order.get('retCode') == 0:
@@ -7705,9 +7823,215 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             logging.exception(f"Errore trailing SL per {symbol}: {e}")
 
 
+async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Monitora prezzo vs TP levels e chiude posizioni parzialmente
+    
+    Eseguito ogni 30 secondi
+    
+    LOGICA:
+    1. Per ogni posizione con multi-TP attivo
+    2. Scarica prezzo corrente
+    3. Se prezzo >= TP1 (non ancora hit) → Chiudi 40%
+    4. Se prezzo >= TP2 (non ancora hit) → Chiudi 30%
+    5. Se prezzo >= TP3 (non ancora hit) → Chiudi 30% (residuo)
+    6. Aggiorna qty posizione e attiva trailing
+    7. Invia notifica Telegram
+    """
+    
+    if not MULTI_TP_ENABLED or not MULTI_TP_CONFIG['enabled']:
+        return
+    
+    with POSITIONS_LOCK:
+        positions_copy = dict(ACTIVE_POSITIONS)
+    
+    if not positions_copy:
+        return
+    
+    logging.debug(f"Multi-TP check: {len(positions_copy)} positions")
+    
+    for symbol, pos_info in positions_copy.items():
+        # Skip se non ha multi-TP configurato
+        tp_levels = pos_info.get('multi_tp_levels')
+        if not tp_levels:
+            continue
+        
+        try:
+            side = pos_info['side']
+            entry_price = pos_info['entry_price']
+            current_qty = pos_info['qty']
+            timeframe = pos_info.get('timeframe', '15m')
+            chat_id = pos_info.get('chat_id')
+            
+            # Scarica prezzo corrente
+            df = bybit_get_klines(symbol, timeframe, limit=5)
+            if df.empty:
+                continue
+            
+            current_price = df['close'].iloc[-1]
+            
+            # Check ogni TP level
+            for i, tp_level in enumerate(tp_levels, 1):
+                tp_price = tp_level['price']
+                close_pct = tp_level['close_pct']
+                tp_qty = tp_level['qty']
+                label = tp_level['label']
+                emoji = tp_level['emoji']
+                
+                # Skip se già hit
+                if tp_level.get('hit', False):
+                    continue
+                
+                # Check se prezzo ha raggiunto TP (con buffer)
+                buffer = MULTI_TP_CONFIG['buffer_pct']
+                
+                if side == 'Buy':
+                    tp_reached = current_price >= tp_price * (1 - buffer)
+                else:  # Sell
+                    tp_reached = current_price <= tp_price * (1 + buffer)
+                
+                if not tp_reached:
+                    continue
+                
+                # ===== TP RAGGIUNTO! =====
+                logging.info(
+                    f"🎯 {symbol}: TP{i} REACHED! "
+                    f"Price ${current_price:.4f} >= TP ${tp_price:.4f}"
+                )
+                
+                # Calcola qty da chiudere (% del qty CORRENTE, non originale)
+                qty_to_close = round(current_qty * close_pct, pos_info.get('qty_decimals', 3))
+                
+                # Verifica min qty
+                min_qty = MULTI_TP_CONFIG.get('min_partial_qty', 0.001)
+                if qty_to_close < min_qty:
+                    logging.warning(
+                        f"{symbol}: TP{i} qty too small ({qty_to_close:.4f} < {min_qty}), "
+                        f"skipping partial close"
+                    )
+                    # Marca come hit comunque per non riprovare
+                    tp_level['hit'] = True
+                    continue
+                
+                # ===== CHIUDI POSIZIONE PARZIALE =====
+                try:
+                    session = create_bybit_session()
+                    
+                    # Usa Market order con reduceOnly per chiusura parziale
+                    close_order = session.place_order(
+                        category='linear',
+                        symbol=symbol,
+                        side='Sell' if side == 'Buy' else 'Buy',  # Inverti lato
+                        orderType='Market',
+                        qty=str(qty_to_close),
+                        reduceOnly=True,  # Solo riduce posizione esistente
+                        positionIdx=0
+                    )
+                    
+                    if close_order.get('retCode') == 0:
+                        # ===== SUCCESS: Aggiorna tracking =====
+                        
+                        # Calcola profit
+                        if side == 'Buy':
+                            profit_per_unit = current_price - entry_price
+                        else:
+                            profit_per_unit = entry_price - current_price
+                        
+                        profit_usd = profit_per_unit * qty_to_close
+                        profit_pct = (profit_per_unit / entry_price) * 100
+                        
+                        # Aggiorna posizione
+                        new_qty = current_qty - qty_to_close
+                        
+                        with POSITIONS_LOCK:
+                            if symbol in ACTIVE_POSITIONS:
+                                ACTIVE_POSITIONS[symbol]['qty'] = new_qty
+                                
+                                # Marca TP come hit
+                                for level in ACTIVE_POSITIONS[symbol]['multi_tp_levels']:
+                                    if level['price'] == tp_price:
+                                        level['hit'] = True
+                                
+                                logging.info(
+                                    f"✅ {symbol}: TP{i} executed! "
+                                    f"Closed {qty_to_close:.4f} (${profit_usd:+.2f}), "
+                                    f"Remaining: {new_qty:.4f}"
+                                )
+                        
+                        # Aggiorna TP tracking
+                        with TP_TRACKING_LOCK:
+                            if symbol in TP_TRACKING:
+                                TP_TRACKING[symbol][f'tp{i}_hit'] = True
+                                TP_TRACKING[symbol][f'tp{i}_qty_closed'] = qty_to_close
+                        
+                        # ===== ATTIVA TRAILING DOPO TP1 =====
+                        if i == 1 and MULTI_TP_CONFIG.get('activate_trailing_after_tp1', True):
+                            with POSITIONS_LOCK:
+                                if symbol in ACTIVE_POSITIONS:
+                                    ACTIVE_POSITIONS[symbol]['trailing_active'] = True
+                            
+                            logging.info(f"🔄 {symbol}: Trailing SL attivato dopo TP1")
+                        
+                        # ===== NOTIFICA TELEGRAM =====
+                        if chat_id:
+                            try:
+                                side_emoji = '🟢' if side == 'Buy' else '🔴'
+                                price_decimals = get_price_decimals(current_price)
+                                
+                                notification = f"{side_emoji} {emoji} <b>TAKE PROFIT {i} HIT!</b>\n\n"
+                                notification += f"<b>Symbol:</b> {symbol} ({timeframe})\n"
+                                notification += f"<b>{label}</b>\n\n"
+                                
+                                notification += f"<b>📊 Chiusura Parziale:</b>\n"
+                                notification += f"• Qty chiusa: {qty_to_close:.4f} ({close_pct*100:.0f}%)\n"
+                                notification += f"• Prezzo: ${current_price:.{price_decimals}f}\n"
+                                notification += f"• Entry: ${entry_price:.{price_decimals}f}\n\n"
+                                
+                                notification += f"<b>💰 Profit Parziale:</b>\n"
+                                notification += f"• ${profit_usd:+.2f} ({profit_pct:+.2f}%)\n\n"
+                                
+                                notification += f"<b>📦 Posizione Residua:</b>\n"
+                                notification += f"• Qty: {new_qty:.4f}\n"
+                                
+                                # Info TP rimanenti
+                                remaining_tps = [
+                                    (j, tp) for j, tp in enumerate(tp_levels, 1) 
+                                    if not tp.get('hit', False)
+                                ]
+                                
+                                if remaining_tps:
+                                    notification += f"\n<b>🎯 TP Rimanenti:</b>\n"
+                                    for tp_idx, tp in remaining_tps:
+                                        notification += f"• TP{tp_idx}: ${tp['price']:.{price_decimals}f} ({tp['close_pct']*100:.0f}%)\n"
+                                else:
+                                    notification += f"\n✅ <b>Tutti i TP eseguiti!</b>\n"
+                                
+                                # Status trailing
+                                if i == 1 and MULTI_TP_CONFIG.get('activate_trailing_after_tp1'):
+                                    notification += f"\n🔄 <b>Trailing SL ora ATTIVO</b>\n"
+                                    notification += f"Stop Loss proteggerà il residuo automaticamente"
+                                
+                                await context.bot.send_message(
+                                    chat_id=chat_id,
+                                    text=notification,
+                                    parse_mode='HTML'
+                                )
+                            
+                            except Exception as e:
+                                logging.error(f"Errore invio notifica TP{i}: {e}")
+                    
+                    else:
+                        logging.error(
+                            f"{symbol}: Errore chiusura TP{i}: {close_order.get('retMsg')}"
+                        )
+                
+                except Exception as e:
+                    logging.error(f"{symbol}: Errore esecuzione TP{i}: {e}")
+        
+        except Exception as e:
+            logging.exception(f"Errore monitoring TP per {symbol}: {e}")
 
 # ===== FUNZIONE per schedulare il job =====
-
 def schedule_trailing_stop_job(application):
     """
     Schedula il job di trailing stop loss ogni 5 minuti
@@ -12707,6 +13031,107 @@ async def cmd_testcache(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
+async def cmd_multitp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /multitp [ACTION]
+    
+    Actions:
+    - (nessuno): Mostra status
+    - on: Abilita multi-TP
+    - off: Disabilita multi-TP
+    """
+    global MULTI_TP_ENABLED
+    
+    args = context.args
+    
+    if not args:
+        # ===== MOSTRA STATUS =====
+        
+        with POSITIONS_LOCK:
+            positions_with_multitp = {
+                sym: pos for sym, pos in ACTIVE_POSITIONS.items()
+                if pos.get('multi_tp_levels')
+            }
+        
+        msg = "<b>🎯 Multi-TP System Status</b>\n\n"
+        msg += f"Enabled: {'✅ ON' if MULTI_TP_ENABLED else '❌ OFF'}\n\n"
+        
+        if MULTI_TP_ENABLED:
+            msg += "<b>📊 Configuration:</b>\n"
+            for i, level in enumerate(MULTI_TP_CONFIG['levels'], 1):
+                msg += f"{level['emoji']} TP{i}: {level['rr_ratio']}R ({level['close_pct']*100:.0f}%)\n"
+            
+            msg += f"\nCheck Interval: {MULTI_TP_CONFIG['check_interval']}s\n"
+            msg += f"Min Partial Qty: {MULTI_TP_CONFIG['min_partial_qty']}\n\n"
+            
+            if positions_with_multitp:
+                msg += f"<b>📦 Posizioni Attive con Multi-TP ({len(positions_with_multitp)}):</b>\n\n"
+                
+                for symbol, pos in positions_with_multitp.items():
+                    side = pos['side']
+                    side_emoji = "🟢" if side == "Buy" else "🔴"
+                    
+                    msg += f"{side_emoji} <b>{symbol}</b>\n"
+                    
+                    # Status TP
+                    tp_levels = pos['multi_tp_levels']
+                    for i, tp in enumerate(tp_levels, 1):
+                        if tp.get('hit'):
+                            msg += f"  ✅ TP{i}: ${tp['price']:.4f} (HIT)\n"
+                        else:
+                            msg += f"  ⏳ TP{i}: ${tp['price']:.4f}\n"
+                    
+                    msg += f"  Qty: {pos['qty']:.4f} / {pos['qty_original']:.4f}\n\n"
+            else:
+                msg += "Nessuna posizione con Multi-TP attivo\n"
+        
+        else:
+            msg += "Multi-TP disabilitato.\n"
+            msg += "Usa <code>/multitp on</code> per abilitare"
+        
+        msg += "\n<b>Comandi:</b>\n"
+        msg += "<code>/multitp on</code> - Abilita\n"
+        msg += "<code>/multitp off</code> - Disabilita"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+        return
+    
+    # ===== ABILITA/DISABILITA =====
+    action = args[0].lower()
+    
+    if action == 'on':
+        MULTI_TP_ENABLED = True
+        MULTI_TP_CONFIG['enabled'] = True
+        
+        msg = "✅ <b>Multi-TP System ATTIVATO</b>\n\n"
+        msg += "Nuove posizioni avranno TP multipli:\n"
+        for i, level in enumerate(MULTI_TP_CONFIG['levels'], 1):
+            msg += f"{level['emoji']} TP{i}: {level['rr_ratio']}R ({level['close_pct']*100:.0f}%)\n"
+        
+        msg += "\n💡 <b>Benefici:</b>\n"
+        msg += "• Banca profitto progressivamente\n"
+        msg += "• Lascia correre i winner\n"
+        msg += "• Trailing attivo dopo TP1\n"
+        msg += "• Rischio gestito meglio"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+    
+    elif action == 'off':
+        MULTI_TP_ENABLED = False
+        MULTI_TP_CONFIG['enabled'] = False
+        
+        msg = "❌ <b>Multi-TP System DISATTIVATO</b>\n\n"
+        msg += "Nuove posizioni avranno TP singolo (2R)"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+    
+    else:
+        await update.message.reply_text(
+            "❌ Comando non valido\n"
+            "Usa: <code>/multitp [on|off]</code>",
+            parse_mode='HTML'
+        )
+
 # ----------------------------- MAIN -----------------------------
 
 def main():
@@ -12779,9 +13204,24 @@ def main():
     application.add_handler(CommandHandler('reset_pattern_stats', track_patterns.cmd_reset_pattern_stats))
     application.add_handler(CommandHandler('export_pattern_stats', track_patterns.cmd_export_pattern_stats))
     application.add_handler(CommandHandler('testcache', cmd_testcache))
+    application.add_handler(CommandHandler('multitp', cmd_multitp))
 
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
+
+    # Schedula Multi-TP monitoring
+    if MULTI_TP_ENABLED and MULTI_TP_CONFIG['enabled']:
+        application.job_queue.run_repeating(
+            monitor_partial_tp,
+            interval=MULTI_TP_CONFIG['check_interval'],
+            first=30,  # Primo check dopo 30 secondi
+            name='monitor_partial_tp'
+        )
+        
+        logging.info(
+            f'✅ Multi-TP monitoring attivato '
+            f'(check ogni {MULTI_TP_CONFIG["check_interval"]}s)'
+        )
 
     async def save_pattern_stats_job(context: ContextTypes.DEFAULT_TYPE):
         """Salva le statistiche pattern periodicamente"""
