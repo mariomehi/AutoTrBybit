@@ -5569,7 +5569,7 @@ async def sync_positions_with_bybit():
     try:
         real_positions = await get_open_positions_from_bybit()
         
-        with POSITIONS_LOCK:
+        with config.config.POSITIONS_LOCK:
             # Crea un set dei symbol con posizioni reali
             real_symbols = {pos['symbol'] for pos in real_positions}
             
@@ -6265,7 +6265,7 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     await sync_positions_with_bybit()
 
     # ✅ FIX PUNTO #3: Check con lock prima di verificare su Bybit
-    with POSITIONS_LOCK:
+    with config.config.POSITIONS_LOCK:
         if symbol in ACTIVE_POSITIONS:
             logging.warning(f'{symbol}: Position already tracked locally')
             return {'error': 'position_exists', 'message': f'Posizione già tracciata per {symbol}'}
@@ -6411,7 +6411,7 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
             )
             
             if order.get('retCode') == 0:
-                with POSITIONS_LOCK:
+                with config.config.POSITIONS_LOCK:
                     # ✅ DOUBLE-CHECK dopo ordine eseguito (pattern standard)
                     if symbol in ACTIVE_POSITIONS:
                         logging.warning(f'{symbol}: Race condition detected, position already added')
@@ -6492,7 +6492,7 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
 
         # ===== SALVA POSIZIONE CON MULTI-TP TRACKING =====
         if order.get('retCode') == 0:
-            with POSITIONS_LOCK:
+            with config.config.POSITIONS_LOCK:
                 ACTIVE_POSITIONS[symbol] = {
                     'side': side,
                     'qty': qty,
@@ -6531,7 +6531,7 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         
         # Salva la posizione come attiva
         if order.get('retCode') == 0:
-            with POSITIONS_LOCK:
+            with config.config.POSITIONS_LOCK:
                 ACTIVE_POSITIONS[symbol] = {
                     'side': side,
                     'qty': qty,
@@ -6873,7 +6873,7 @@ async def execute_profit_lock(
         
         if not real_position:
             logging.warning(f"{symbol}: No active position on Bybit, removing from tracking")
-            with POSITIONS_LOCK:
+            with config.config.POSITIONS_LOCK:
                 if symbol in ACTIVE_POSITIONS:
                     del ACTIVE_POSITIONS[symbol]
             return False
@@ -6888,7 +6888,7 @@ async def execute_profit_lock(
         
         if result.get('retCode') == 0:
             # ✅ SUCCESS: Aggiorna tracking locale
-            with POSITIONS_LOCK:
+            with config.config.POSITIONS_LOCK:
                 if symbol in ACTIVE_POSITIONS:
                     ACTIVE_POSITIONS[symbol]['sl'] = new_sl
             
@@ -6959,7 +6959,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
     if not TRAILING_STOP_ENABLED:
         return
     
-    with POSITIONS_LOCK:
+    with config.config.POSITIONS_LOCK:
         positions_copy = dict(ACTIVE_POSITIONS)
     
     if not positions_copy:
@@ -7013,7 +7013,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
 
                 if result.get('retCode') == 0:
                     # Aggiorna tracking locale
-                    with POSITIONS_LOCK:
+                    with config.config.POSITIONS_LOCK:
                         if symbol in ACTIVE_POSITIONS:
                             ACTIVE_POSITIONS[symbol]['sl'] = new_sl
                             
@@ -7036,7 +7036,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                     
                     if not real_position:
                         logging.warning(f"{symbol}: No active position on Bybit, removing from tracking")
-                        with POSITIONS_LOCK:
+                        with config.config.POSITIONS_LOCK:
                             if symbol in ACTIVE_POSITIONS:
                                 del ACTIVE_POSITIONS[symbol]
                         continue
@@ -7235,7 +7235,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                 
                 if result.get('retCode') == 0:
                     # Aggiorna tracking locale
-                    with POSITIONS_LOCK:
+                    with config.config.POSITIONS_LOCK:
                         if symbol in ACTIVE_POSITIONS:
                             ACTIVE_POSITIONS[symbol]['sl'] = new_sl
                             
@@ -7317,7 +7317,7 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
     if not config.MULTI_TP_ENABLED or not config.MULTI_TP_CONFIG['enabled']:
         return
     
-    with POSITIONS_LOCK:
+    with config.config.POSITIONS_LOCK:
         positions_copy = dict(ACTIVE_POSITIONS)
     
     if not positions_copy:
@@ -7418,7 +7418,7 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
                         # Aggiorna posizione
                         new_qty = current_qty - qty_to_close
                         
-                        with POSITIONS_LOCK:
+                        with config.config.POSITIONS_LOCK:
                             if symbol in ACTIVE_POSITIONS:
                                 ACTIVE_POSITIONS[symbol]['qty'] = new_qty
                                 
@@ -7441,7 +7441,7 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
                         
                         # ===== ATTIVA TRAILING DOPO TP1 =====
                         if i == 1 and config.MULTI_TP_CONFIG.get('activate_trailing_after_tp1', True):
-                            with POSITIONS_LOCK:
+                            with config.POSITIONS_LOCK:
                                 if symbol in ACTIVE_POSITIONS:
                                     ACTIVE_POSITIONS[symbol]['trailing_active'] = True
                             
@@ -7733,7 +7733,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         timestamp_str = last_time.strftime('%Y-%m-%d %H:%M UTC')
 
         # ✅ FIX PUNTO #3: Lock per lettura thread-safe
-        with POSITIONS_LOCK:
+        with config.POSITIONS_LOCK:
             position_exists = symbol in ACTIVE_POSITIONS
 
         # Log per debug
@@ -9799,7 +9799,7 @@ async def cmd_posizioni(update: Update, context: ContextTypes.DEFAULT_TYPE):
     real_positions = await get_open_positions_from_bybit()
     
     if not real_positions:
-        with POSITIONS_LOCK:
+        with config.POSITIONS_LOCK:
             tracked = len(ACTIVE_POSITIONS)
         
         msg = '📭 <b>Nessuna posizione aperta</b>\n\n'
@@ -9855,7 +9855,7 @@ async def cmd_chiudi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     symbol = args[0].upper()
     
-    with POSITIONS_LOCK:
+    with config.POSITIONS_LOCK:
         if symbol in ACTIVE_POSITIONS:
             pos_info = ACTIVE_POSITIONS[symbol]
             del ACTIVE_POSITIONS[symbol]
@@ -9889,7 +9889,7 @@ async def cmd_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Mostra risultato
         real_positions = await get_open_positions_from_bybit()
         
-        with POSITIONS_LOCK:
+        with config.POSITIONS_LOCK:
             tracked_count = len(ACTIVE_POSITIONS)
         
         msg = '✅ <b>Sincronizzazione completata!</b>\n\n'
@@ -10978,7 +10978,7 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     action = args[0].lower() if args else 'status'
     
-    with POSITIONS_LOCK:
+    with config.POSITIONS_LOCK:
         positions_copy = dict(ACTIVE_POSITIONS)
     
     if not positions_copy:
@@ -11047,7 +11047,7 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 if result.get('retCode') == 0:
                     # Marca come trailing attivo
-                    with POSITIONS_LOCK:
+                    with config.POSITIONS_LOCK:
                         if symbol in ACTIVE_POSITIONS:
                             ACTIVE_POSITIONS[symbol]['sl'] = new_sl
                             ACTIVE_POSITIONS[symbol]['trailing_active'] = True
@@ -12136,7 +12136,7 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
         
         pnl_list = pnl_response.get('result', {}).get('list', [])
         
-        with POSITIONS_LOCK:
+        with config.POSITIONS_LOCK:
             tracked_symbols = set(ACTIVE_POSITIONS.keys())
         
         for pnl_entry in pnl_list:
@@ -12212,7 +12212,7 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
             msg += f"PnL: <b>${closed_pnl:+.2f}</b> ({pnl_percent:+.2f}%)\n\n"
             
             # Recupera info posizione originale se disponibile
-            with POSITIONS_LOCK:
+            with config.POSITIONS_LOCK:
                 if symbol in ACTIVE_POSITIONS:
                     pos_info = ACTIVE_POSITIONS[symbol]
                     
@@ -12331,7 +12331,7 @@ async def cmd_multitp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not args:
         # ===== MOSTRA STATUS =====
         
-        with POSITIONS_LOCK:
+        with config.POSITIONS_LOCK:
             positions_with_multitp = {
                 sym: pos for sym, pos in ACTIVE_POSITIONS.items()
                 if pos.get('multi_tp_levels')
