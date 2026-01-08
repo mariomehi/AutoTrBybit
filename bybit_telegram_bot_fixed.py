@@ -12427,7 +12427,7 @@ def main():
     )
 
         # Avvia Auto-Discovery se abilitato
-    if AUTO_DISCOVERY_ENABLED and AUTO_DISCOVERY_CONFIG['enabled']:
+    if config.AUTO_DISCOVERY_ENABLED and config.AUTO_DISCOVERY_CONFIG['enabled']:
         # Nota: Serve chat_id, quindi auto-discovery sarà attivato
         # dal primo utente che usa /autodiscover on
         logging.info('🔍 Auto-Discovery configurato (attiva con /autodiscover on)')
