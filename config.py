@@ -1,3 +1,5 @@
+import os
+
 # ----------------------------- CONFIG -----------------------------
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '')
 BYBIT_API_KEY = os.environ.get('BYBIT_API_KEY', '')
