@@ -1002,7 +1002,7 @@ def is_volume_spike_breakout(df: pd.DataFrame) -> tuple:
     volume_ratio = current_vol / avg_vol
     
     # Determina threshold da VOLUME_FILTER_MODE
-    if VOLUME_FILTER_MODE == 'adaptive':
+    if config.VOLUME_FILTER_MODE == 'adaptive':
         min_volume_ratio = 2.0  # Più permissivo
     else:
         min_volume_ratio = 2.5  # Default strict
@@ -11838,8 +11838,8 @@ async def cmd_debug_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # ===== 2. VOLUME FILTER =====
         msg += "<b>📊 2. VOLUME FILTER</b>\n"
-        msg += f"Mode: <b>{VOLUME_FILTER_MODE}</b>\n"
-        msg += f"Enabled: {'✅' if VOLUME_FILTER_ENABLED else '❌'}\n"
+        msg += f"Mode: <b>{config.VOLUME_FILTER_MODE}</b>\n"
+        msg += f"Enabled: {'✅' if config.VOLUME_FILTER_ENABLED else '❌'}\n"
         
         vol = df['volume']
         if len(vol) >= 20:
