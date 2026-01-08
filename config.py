@@ -1,4 +1,5 @@
 import os
+import threading
 
 # ----------------------------- CONFIG -----------------------------
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '')
