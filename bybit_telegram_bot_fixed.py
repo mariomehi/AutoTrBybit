@@ -6711,7 +6711,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
         new_symbols_set = set(top_symbols)
         
         with AUTO_DISCOVERED_LOCK:
-            old_symbols_set = set(AUTO_DISCOVERED_SYMBOLS)
+            old_symbols_set = set(config.AUTO_DISCOVERED_SYMBOLS)
         
         # Symbols da rimuovere (non più in top)
         to_remove = old_symbols_set - new_symbols_set
@@ -6723,7 +6723,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
         removed_count = 0
         
         with config.ACTIVE_ANALYSES_LOCK:
-            chat_analyses = ACTIVE_ANALYSES.get(chat_id, {})
+            chat_analyses = config.ACTIVE_ANALYSES.get(chat_id, {})
             
             for symbol in to_remove:
                 key = f'{symbol}-{timeframe}'
@@ -6743,7 +6743,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             
             # Verifica che non esista già
             with config.ACTIVE_ANALYSES_LOCK:
-                chat_map = ACTIVE_ANALYSES.setdefault(chat_id, {})
+                chat_map = config.ACTIVE_ANALYSES.setdefault(chat_id, {})
                 
                 if key in chat_map:
                     logging.debug(f'⏭️ Skip {symbol}: già in analisi')
@@ -6756,7 +6756,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
                 continue
             
             # Calcola intervallo
-            interval_seconds = INTERVAL_SECONDS.get(timeframe, 300)
+            interval_seconds = config.INTERVAL_SECONDS.get(timeframe, 300)
             now = datetime.now(timezone.utc)
             epoch = int(now.timestamp())
             to_next = interval_seconds - (epoch % interval_seconds)
@@ -6785,9 +6785,9 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             logging.info(f'✅ Aggiunto {symbol} {timeframe}')
         
         # Aggiorna storage
-        with AUTO_DISCOVERED_LOCK:
-            AUTO_DISCOVERED_SYMBOLS.clear()
-            AUTO_DISCOVERED_SYMBOLS.update(new_symbols_set)
+        with config.AUTO_DISCOVERED_LOCK:
+            config.AUTO_DISCOVERED_SYMBOLS.clear()
+            config.AUTO_DISCOVERED_SYMBOLS.update(new_symbols_set)
         
         # === NOTIFICA RISULTATI ===
         msg = "🔄 <b>Auto-Discovery Aggiornato</b>\n\n"
@@ -10224,8 +10224,8 @@ async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"• Min change: +{config.AUTO_DISCOVERY_CONFIG['min_price_change']}%\n"
             msg += f"• Max change: +{config.AUTO_DISCOVERY_CONFIG['max_price_change']}%\n\n"
             
-            with AUTO_DISCOVERED_LOCK:
-                symbols = list(AUTO_DISCOVERED_SYMBOLS)
+            with config.AUTO_DISCOVERED_LOCK:
+                symbols = list(config.AUTO_DISCOVERED_SYMBOLS)
             
             if symbols:
                 msg += f"<b>Symbols attivi ({len(symbols)}):</b>\n"
