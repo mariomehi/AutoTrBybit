@@ -8789,7 +8789,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 entry_price = last_close
                 
                 # Calcola SL basato su EMA o ATR
-                if USE_EMA_STOP_LOSS:
+                if config.USE_EMA_STOP_LOSS:
                     sl_price, ema_used, ema_value = calculate_ema_stop_loss(
                         df, timeframe, last_close, side
                     )
