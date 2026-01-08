@@ -6710,7 +6710,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
         # Converti in set per comparazione
         new_symbols_set = set(top_symbols)
         
-        with AUTO_DISCOVERED_LOCK:
+        with config.AUTO_DISCOVERED_LOCK:
             old_symbols_set = set(config.AUTO_DISCOVERED_SYMBOLS)
         
         # Symbols da rimuovere (non più in top)
