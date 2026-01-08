@@ -7490,6 +7490,10 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
     logging.debug(f"Trailing check: {len(positions_copy)} positions")
     
     for symbol, pos_info in positions_copy.items():
+
+        # ===== INIZIALIZZA new_sl QUI (FIX) =====
+        new_sl = None  # ← AGGIUNGI QUESTA RIGA ALL'INIZIO DEL LOOP
+        
         try:
             side = pos_info.get('side')
             entry_price = pos_info.get('entry_price')  # ← USA .get() per safety
