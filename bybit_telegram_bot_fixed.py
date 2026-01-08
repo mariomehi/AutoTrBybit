@@ -704,17 +704,17 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str =
     last_ema223 = ema_223.iloc[-1]
     
     # Determina configurazione per timeframe
-    config = None
+    configEma = None
     for strategy, cfg in config.EMA_CONFIG.items():
         if timeframe in cfg['timeframes']:
-            config = cfg
+            configEma = cfg
             break
     
-    if not config:
+    if not configEma:
         # Default: usa day trading config
-        config = config.EMA_CONFIG['daytrading']
+        configEma = config.EMA_CONFIG['daytrading']
     
-    rules = config['rules']
+    rules = configEma['rules']
     conditions = {}
     score = 0
     details = []
