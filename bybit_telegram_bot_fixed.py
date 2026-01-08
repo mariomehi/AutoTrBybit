@@ -12324,7 +12324,7 @@ async def cmd_multitp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     - on: Abilita multi-TP
     - off: Disabilita multi-TP
     """
-    global config.MULTI_TP_ENABLED
+    global MULTI_TP_ENABLED
     
     args = context.args
     
