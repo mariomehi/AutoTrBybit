@@ -11815,7 +11815,7 @@ async def cmd_debug_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # ===== 1. MARKET TIME FILTER =====
         msg += "<b>⏰ 1. MARKET TIME FILTER</b>\n"
-        msg += f"Enabled: {'✅' if MARKET_TIME_FILTER_ENABLED else '❌'}\n"
+        msg += f"Enabled: {'✅' if config.MARKET_TIME_FILTER_ENABLED else '❌'}\n"
         
         if config.MARKET_TIME_FILTER_ENABLED:
             time_ok, time_reason = is_good_trading_time_utc()
