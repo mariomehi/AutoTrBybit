@@ -5569,25 +5569,25 @@ async def sync_positions_with_bybit():
     try:
         real_positions = await get_open_positions_from_bybit()
         
-        with config.config.POSITIONS_LOCK:
+        with config.POSITIONS_LOCK:
             # Crea un set dei symbol con posizioni reali
             real_symbols = {pos['symbol'] for pos in real_positions}
             
             # Rimuovi dal tracking le posizioni che non esistono più su Bybit
             to_remove = []
-            for symbol in ACTIVE_POSITIONS.keys():
+            for symbol in config.ACTIVE_POSITIONS.keys():
                 if symbol not in real_symbols:
                     to_remove.append(symbol)
             
             for symbol in to_remove:
                 logging.info(f'🔄 Rimossa {symbol} dal tracking (non presente su Bybit)')
-                del ACTIVE_POSITIONS[symbol]
+                del config.ACTIVE_POSITIONS[symbol]
             
             # Aggiungi al tracking posizioni che esistono su Bybit ma non sono tracciate
             for pos in real_positions:
                 symbol = pos['symbol']
-                if symbol not in ACTIVE_POSITIONS:
-                    ACTIVE_POSITIONS[symbol] = {
+                if symbol not in config.ACTIVE_POSITIONS:
+                    config.ACTIVE_POSITIONS[symbol] = {
                         'side': pos['side'],
                         'qty': pos['size'],
                         'entry_price': pos['entry_price'],  # ← AGGIUNGI QUESTA RIGA
@@ -6265,8 +6265,8 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     await sync_positions_with_bybit()
 
     # ✅ FIX PUNTO #3: Check con lock prima di verificare su Bybit
-    with config.config.POSITIONS_LOCK:
-        if symbol in ACTIVE_POSITIONS:
+    with config.POSITIONS_LOCK:
+        if symbol in config.ACTIVE_POSITIONS:
             logging.warning(f'{symbol}: Position already tracked locally')
             return {'error': 'position_exists', 'message': f'Posizione già tracciata per {symbol}'}
     # Controlla se esiste VERAMENTE una posizione aperta per questo symbol
@@ -6411,12 +6411,12 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
             )
             
             if order.get('retCode') == 0:
-                with config.config.POSITIONS_LOCK:
+                with config.POSITIONS_LOCK:
                     # ✅ DOUBLE-CHECK dopo ordine eseguito (pattern standard)
-                    if symbol in ACTIVE_POSITIONS:
+                    if symbol in config.ACTIVE_POSITIONS:
                         logging.warning(f'{symbol}: Race condition detected, position already added')
                     else:
-                        ACTIVE_POSITIONS[symbol] = {
+                        config.ACTIVE_POSITIONS[symbol] = {
                             'side': side,
                             'qty': qty,
                             'entry_price': entry_price,
@@ -6492,8 +6492,8 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
 
         # ===== SALVA POSIZIONE CON MULTI-TP TRACKING =====
         if order.get('retCode') == 0:
-            with config.config.POSITIONS_LOCK:
-                ACTIVE_POSITIONS[symbol] = {
+            with config.POSITIONS_LOCK:
+                config.ACTIVE_POSITIONS[symbol] = {
                     'side': side,
                     'qty': qty,
                     'qty_original': qty,  # ← NUOVO: Qty iniziale (prima dei TP parziali)
@@ -6531,8 +6531,8 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         
         # Salva la posizione come attiva
         if order.get('retCode') == 0:
-            with config.config.POSITIONS_LOCK:
-                ACTIVE_POSITIONS[symbol] = {
+            with config.POSITIONS_LOCK:
+                config.ACTIVE_POSITIONS[symbol] = {
                     'side': side,
                     'qty': qty,
                     'entry_price': entry_price,  # 👈 AGGIUNGI (pass come parametro)
@@ -6873,9 +6873,9 @@ async def execute_profit_lock(
         
         if not real_position:
             logging.warning(f"{symbol}: No active position on Bybit, removing from tracking")
-            with config.config.POSITIONS_LOCK:
-                if symbol in ACTIVE_POSITIONS:
-                    del ACTIVE_POSITIONS[symbol]
+            with config.POSITIONS_LOCK:
+                if symbol in config.ACTIVE_POSITIONS:
+                    del config.ACTIVE_POSITIONS[symbol]
             return False
         
         # ✅ STEP 2: Aggiorna SL su Bybit
@@ -6888,9 +6888,9 @@ async def execute_profit_lock(
         
         if result.get('retCode') == 0:
             # ✅ SUCCESS: Aggiorna tracking locale
-            with config.config.POSITIONS_LOCK:
-                if symbol in ACTIVE_POSITIONS:
-                    ACTIVE_POSITIONS[symbol]['sl'] = new_sl
+            with config.POSITIONS_LOCK:
+                if symbol in config.ACTIVE_POSITIONS:
+                    config.ACTIVE_POSITIONS[symbol]['sl'] = new_sl
             
             logging.info(
                 f"🔒 {symbol} {side} PROFIT LOCK! "
@@ -6956,11 +6956,11 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
     - 2.0%: Ultra tight trail (buffer ultra 0.05%)
     """
     
-    if not TRAILING_STOP_ENABLED:
+    if not config.TRAILING_STOP_ENABLED:
         return
     
-    with config.config.POSITIONS_LOCK:
-        positions_copy = dict(ACTIVE_POSITIONS)
+    with config.POSITIONS_LOCK:
+        positions_copy = dict(config.ACTIVE_POSITIONS)
     
     if not positions_copy:
         return
@@ -7013,9 +7013,9 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
 
                 if result.get('retCode') == 0:
                     # Aggiorna tracking locale
-                    with config.config.POSITIONS_LOCK:
-                        if symbol in ACTIVE_POSITIONS:
-                            ACTIVE_POSITIONS[symbol]['sl'] = new_sl
+                    with config.POSITIONS_LOCK:
+                        if symbol in config.ACTIVE_POSITIONS:
+                            config.ACTIVE_POSITIONS[symbol]['sl'] = new_sl
                             
                             logging.info(f"{symbol} ({side}): Trailing SL updated to {new_sl:.4f} (Level: {active_level['label']})")
     
@@ -7036,9 +7036,9 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                     
                     if not real_position:
                         logging.warning(f"{symbol}: No active position on Bybit, removing from tracking")
-                        with config.config.POSITIONS_LOCK:
-                            if symbol in ACTIVE_POSITIONS:
-                                del ACTIVE_POSITIONS[symbol]
+                        with config.POSITIONS_LOCK:
+                            if symbol in config.ACTIVE_POSITIONS:
+                                del config.ACTIVE_POSITIONS[symbol]
                         continue
                 else:
                     logging.error(f"{symbol}: Error checking position: {positions_response.get('retMsg')}")
@@ -7235,9 +7235,9 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                 
                 if result.get('retCode') == 0:
                     # Aggiorna tracking locale
-                    with config.config.POSITIONS_LOCK:
-                        if symbol in ACTIVE_POSITIONS:
-                            ACTIVE_POSITIONS[symbol]['sl'] = new_sl
+                    with config.POSITIONS_LOCK:
+                        if symbol in config.ACTIVE_POSITIONS:
+                            config.ACTIVE_POSITIONS[symbol]['sl'] = new_sl
                             
                             logging.info(f"{symbol} ({side}): Trailing SL updated to {new_sl:.4f} (Level: {active_level['label']})")
                     
@@ -7317,8 +7317,8 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
     if not config.MULTI_TP_ENABLED or not config.MULTI_TP_CONFIG['enabled']:
         return
     
-    with config.config.POSITIONS_LOCK:
-        positions_copy = dict(ACTIVE_POSITIONS)
+    with config.POSITIONS_LOCK:
+        positions_copy = dict(config.ACTIVE_POSITIONS)
     
     if not positions_copy:
         return
@@ -7418,12 +7418,12 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
                         # Aggiorna posizione
                         new_qty = current_qty - qty_to_close
                         
-                        with config.config.POSITIONS_LOCK:
-                            if symbol in ACTIVE_POSITIONS:
-                                ACTIVE_POSITIONS[symbol]['qty'] = new_qty
+                        with config.POSITIONS_LOCK:
+                            if symbol in config.ACTIVE_POSITIONS:
+                                config.ACTIVE_POSITIONS[symbol]['qty'] = new_qty
                                 
                                 # Marca TP come hit
-                                for level in ACTIVE_POSITIONS[symbol]['multi_tp_levels']:
+                                for level in config.ACTIVE_POSITIONS[symbol]['multi_tp_levels']:
                                     if level['price'] == tp_price:
                                         level['hit'] = True
                                 
@@ -7442,8 +7442,8 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
                         # ===== ATTIVA TRAILING DOPO TP1 =====
                         if i == 1 and config.MULTI_TP_CONFIG.get('activate_trailing_after_tp1', True):
                             with config.POSITIONS_LOCK:
-                                if symbol in ACTIVE_POSITIONS:
-                                    ACTIVE_POSITIONS[symbol]['trailing_active'] = True
+                                if symbol in config.ACTIVE_POSITIONS:
+                                    config.ACTIVE_POSITIONS[symbol]['trailing_active'] = True
                             
                             logging.info(f"🔄 {symbol}: Trailing SL attivato dopo TP1")
                         
@@ -7734,7 +7734,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
 
         # ✅ FIX PUNTO #3: Lock per lettura thread-safe
         with config.POSITIONS_LOCK:
-            position_exists = symbol in ACTIVE_POSITIONS
+            position_exists = symbol in config.ACTIVE_POSITIONS
 
         # Log per debug
         if position_exists:
@@ -7888,7 +7888,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else np.nan
 
         # 🔧 FIX: Dichiara position_exists SUBITO
-        position_exists = symbol in ACTIVE_POSITIONS
+        position_exists = symbol in config.ACTIVE_POSITIONS
         # ===== STEP 5: COSTRUISCI MESSAGGIO =====
         
         if found and side == 'Buy':
@@ -8849,7 +8849,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
 
             
-            position_exists = symbol in ACTIVE_POSITIONS
+            position_exists = symbol in config.ACTIVE_POSITIONS
             if position_exists:
                 logging.warning(f'🚫 Position already exists for {symbol}, skip order')
             else:
@@ -9350,7 +9350,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
 
             
             # Check posizione esistente
-            position_exists = symbol in ACTIVE_POSITIONS
+            position_exists = symbol in config.ACTIVE_POSITIONS
             
             # ===== COSTRUISCI CAPTION SELL =====
             quality_emoji_map = {
@@ -9650,7 +9650,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📈 EMA: {EMA_FILTER_MODE.upper() if EMA_FILTER_ENABLED else 'OFF'}\n"
         f"🔕 Default: Solo pattern (non tutte)\n"
         f"🛑 EMA SL: {'ON' if USE_EMA_STOP_LOSS else 'OFF'}\n"
-        f"🔄 Trailing: {'ON' if TRAILING_STOP_ENABLED else 'OFF'}\n\n"
+        f"🔄 Trailing: {'ON' if config.TRAILING_STOP_ENABLED else 'OFF'}\n\n"
         
         "━━━━━━━━━━━━━━━━━━━\n"
         "⚠️ <b>NOTE IMPORTANTI</b>\n"
@@ -9800,7 +9800,7 @@ async def cmd_posizioni(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not real_positions:
         with config.POSITIONS_LOCK:
-            tracked = len(ACTIVE_POSITIONS)
+            tracked = len(config.ACTIVE_POSITIONS)
         
         msg = '📭 <b>Nessuna posizione aperta</b>\n\n'
         
@@ -9856,9 +9856,9 @@ async def cmd_chiudi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = args[0].upper()
     
     with config.POSITIONS_LOCK:
-        if symbol in ACTIVE_POSITIONS:
-            pos_info = ACTIVE_POSITIONS[symbol]
-            del ACTIVE_POSITIONS[symbol]
+        if symbol in config.ACTIVE_POSITIONS:
+            pos_info = config.ACTIVE_POSITIONS[symbol]
+            del config.ACTIVE_POSITIONS[symbol]
             
             await update.message.reply_text(
                 f'✅ <b>Posizione {symbol} rimossa dal tracking</b>\n\n'
@@ -9890,7 +9890,7 @@ async def cmd_sync(update: Update, context: ContextTypes.DEFAULT_TYPE):
         real_positions = await get_open_positions_from_bybit()
         
         with config.POSITIONS_LOCK:
-            tracked_count = len(ACTIVE_POSITIONS)
+            tracked_count = len(config.ACTIVE_POSITIONS)
         
         msg = '✅ <b>Sincronizzazione completata!</b>\n\n'
         msg += f'📊 Posizioni su Bybit: {len(real_positions)}\n'
@@ -10967,7 +10967,7 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     - setup: Imposta trailing per posizioni senza
     - force: Forza update trailing su tutte le posizioni
     """
-    if not TRAILING_STOP_ENABLED:
+    if not config.TRAILING_STOP_ENABLED:
         await update.message.reply_text(
             "<b>Trailing Stop Loss DISABILITATO</b>\n"
             "Abilita nelle configurazioni: TRAILING_STOP_ENABLED = True",
@@ -10979,7 +10979,7 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = args[0].lower() if args else 'status'
     
     with config.POSITIONS_LOCK:
-        positions_copy = dict(ACTIVE_POSITIONS)
+        positions_copy = dict(config.ACTIVE_POSITIONS)
     
     if not positions_copy:
         await update.message.reply_text(
@@ -11048,10 +11048,10 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if result.get('retCode') == 0:
                     # Marca come trailing attivo
                     with config.POSITIONS_LOCK:
-                        if symbol in ACTIVE_POSITIONS:
-                            ACTIVE_POSITIONS[symbol]['sl'] = new_sl
-                            ACTIVE_POSITIONS[symbol]['trailing_active'] = True
-                            ACTIVE_POSITIONS[symbol]['highest_price'] = entry
+                        if symbol in config.ACTIVE_POSITIONS:
+                            config.ACTIVE_POSITIONS[symbol]['sl'] = new_sl
+                            config.ACTIVE_POSITIONS[symbol]['trailing_active'] = True
+                            config.ACTIVE_POSITIONS[symbol]['highest_price'] = entry
                     
                     setup_count += 1
                     logging.info(f"✅ {symbol}: Trailing setup (SL={new_sl:.4f})")
@@ -11236,8 +11236,8 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"  {'🤖 ' + autotrade_text}\n"
         
         # Verifica se ha posizione aperta
-        if symbol in ACTIVE_POSITIONS:
-            pos = ACTIVE_POSITIONS[symbol]
+        if symbol in config.ACTIVE_POSITIONS:
+            pos = config.ACTIVE_POSITIONS[symbol]
             msg += f"  💼 Posizione: {pos.get('side')} ({pos.get('qty'):.4f})\n"
         
         msg += "\n"
@@ -12137,7 +12137,7 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
         pnl_list = pnl_response.get('result', {}).get('list', [])
         
         with config.POSITIONS_LOCK:
-            tracked_symbols = set(ACTIVE_POSITIONS.keys())
+            tracked_symbols = set(config.ACTIVE_POSITIONS.keys())
         
         for pnl_entry in pnl_list:
             symbol = pnl_entry.get('symbol', 'N/A')
@@ -12213,8 +12213,8 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
             
             # Recupera info posizione originale se disponibile
             with config.POSITIONS_LOCK:
-                if symbol in ACTIVE_POSITIONS:
-                    pos_info = ACTIVE_POSITIONS[symbol]
+                if symbol in config.ACTIVE_POSITIONS:
+                    pos_info = config.ACTIVE_POSITIONS[symbol]
                     
                     entry_original = pos_info.get('entry_price', avg_entry)
                     sl_original = pos_info.get('sl', 0)
@@ -12252,7 +12252,7 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
                         msg += "👤 <b>Tipo chiusura: MANUAL</b>\n"
                     
                     # Rimuovi dal tracking
-                    del ACTIVE_POSITIONS[symbol]
+                    del config.ACTIVE_POSITIONS[symbol]
                     logging.info(f'📝 Rimossa {symbol} dal tracking dopo chiusura')
             
             # Timestamp
@@ -12333,7 +12333,7 @@ async def cmd_multitp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         with config.POSITIONS_LOCK:
             positions_with_multitp = {
-                sym: pos for sym, pos in ACTIVE_POSITIONS.items()
+                sym: pos for sym, pos in config.ACTIVE_POSITIONS.items()
                 if pos.get('multi_tp_levels')
             }
         
