@@ -68,9 +68,9 @@ def create_bybit_session():
         raise RuntimeError('BYBIT_API_KEY e BYBIT_API_SECRET devono essere configurate')
     
     # Determina l'endpoint in base alla modalità
-    base_url = BYBIT_ENDPOINTS.get(TRADING_MODE, BYBIT_ENDPOINTS['demo'])
+    base_url = config.BYBIT_ENDPOINTS.get(config.TRADING_MODE, config.BYBIT_ENDPOINTS['demo'])
     
-    logging.info(f'🔌 Connessione Bybit - Modalità: {TRADING_MODE.upper()}')
+    logging.info(f'🔌 Connessione Bybit - Modalità: {config.TRADING_MODE.upper()}')
     logging.info(f'📡 Endpoint: {base_url}')
     
     session = BybitHTTP(
@@ -6351,10 +6351,10 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         # ===== CALCOLA MULTI-TP SE ABILITATO =====
         tp_levels = []
         
-        if MULTI_TP_ENABLED and MULTI_TP_CONFIG['enabled']:
+        if config.MULTI_TP_ENABLED and config.MULTI_TP_CONFIG['enabled']:
             risk = abs(entry_price - sl_price)
             
-            for level in MULTI_TP_CONFIG['levels']:
+            for level in config.MULTI_TP_CONFIG['levels']:
                 if side == 'Buy':
                     tp_level_price = entry_price + (risk * level['rr_ratio'])
                 else:  # Sell
@@ -6507,11 +6507,11 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                     'trailing_active': False,
                     'highest_price': entry_price,
                     'chat_id': chat_id,
-                    'multi_tp_levels': tp_levels if MULTI_TP_ENABLED else None  # ← NUOVO
+                    'multi_tp_levels': tp_levels if config.MULTI_TP_ENABLED else None  # ← NUOVO
                 }
             
             # ===== INIZIALIZZA TP TRACKING =====
-            if MULTI_TP_ENABLED and tp_levels:
+            if config.MULTI_TP_ENABLED and tp_levels:
                 with TP_TRACKING_LOCK:
                     TP_TRACKING[symbol] = {
                         'tp1_hit': False,
@@ -7314,7 +7314,7 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
     7. Invia notifica Telegram
     """
     
-    if not MULTI_TP_ENABLED or not MULTI_TP_CONFIG['enabled']:
+    if not config.MULTI_TP_ENABLED or not config.MULTI_TP_CONFIG['enabled']:
         return
     
     with POSITIONS_LOCK:
@@ -7358,7 +7358,7 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
                     continue
                 
                 # Check se prezzo ha raggiunto TP (con buffer)
-                buffer = MULTI_TP_CONFIG['buffer_pct']
+                buffer = config.MULTI_TP_CONFIG['buffer_pct']
                 
                 if side == 'Buy':
                     tp_reached = current_price >= tp_price * (1 - buffer)
@@ -7378,7 +7378,7 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
                 qty_to_close = round(current_qty * close_pct, pos_info.get('qty_decimals', 3))
                 
                 # Verifica min qty
-                min_qty = MULTI_TP_CONFIG.get('min_partial_qty', 0.001)
+                min_qty = config.MULTI_TP_CONFIG.get('min_partial_qty', 0.001)
                 if qty_to_close < min_qty:
                     logging.warning(
                         f"{symbol}: TP{i} qty too small ({qty_to_close:.4f} < {min_qty}), "
@@ -7440,7 +7440,7 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
                                 TP_TRACKING[symbol][f'tp{i}_qty_closed'] = qty_to_close
                         
                         # ===== ATTIVA TRAILING DOPO TP1 =====
-                        if i == 1 and MULTI_TP_CONFIG.get('activate_trailing_after_tp1', True):
+                        if i == 1 and config.MULTI_TP_CONFIG.get('activate_trailing_after_tp1', True):
                             with POSITIONS_LOCK:
                                 if symbol in ACTIVE_POSITIONS:
                                     ACTIVE_POSITIONS[symbol]['trailing_active'] = True
@@ -7482,7 +7482,7 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
                                     notification += f"\n✅ <b>Tutti i TP eseguiti!</b>\n"
                                 
                                 # Status trailing
-                                if i == 1 and MULTI_TP_CONFIG.get('activate_trailing_after_tp1'):
+                                if i == 1 and config.MULTI_TP_CONFIG.get('activate_trailing_after_tp1'):
                                     notification += f"\n🔄 <b>Trailing SL ora ATTIVO</b>\n"
                                     notification += f"Stop Loss proteggerà il residuo automaticamente"
                                 
@@ -12324,7 +12324,7 @@ async def cmd_multitp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     - on: Abilita multi-TP
     - off: Disabilita multi-TP
     """
-    global MULTI_TP_ENABLED
+    global config.MULTI_TP_ENABLED
     
     args = context.args
     
@@ -12338,15 +12338,15 @@ async def cmd_multitp(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
         
         msg = "<b>🎯 Multi-TP System Status</b>\n\n"
-        msg += f"Enabled: {'✅ ON' if MULTI_TP_ENABLED else '❌ OFF'}\n\n"
+        msg += f"Enabled: {'✅ ON' if config.MULTI_TP_ENABLED else '❌ OFF'}\n\n"
         
-        if MULTI_TP_ENABLED:
+        if config.MULTI_TP_ENABLED:
             msg += "<b>📊 Configuration:</b>\n"
-            for i, level in enumerate(MULTI_TP_CONFIG['levels'], 1):
+            for i, level in enumerate(config.MULTI_TP_CONFIG['levels'], 1):
                 msg += f"{level['emoji']} TP{i}: {level['rr_ratio']}R ({level['close_pct']*100:.0f}%)\n"
             
-            msg += f"\nCheck Interval: {MULTI_TP_CONFIG['check_interval']}s\n"
-            msg += f"Min Partial Qty: {MULTI_TP_CONFIG['min_partial_qty']}\n\n"
+            msg += f"\nCheck Interval: {config.MULTI_TP_CONFIG['check_interval']}s\n"
+            msg += f"Min Partial Qty: {config.MULTI_TP_CONFIG['min_partial_qty']}\n\n"
             
             if positions_with_multitp:
                 msg += f"<b>📦 Posizioni Attive con Multi-TP ({len(positions_with_multitp)}):</b>\n\n"
@@ -12384,12 +12384,12 @@ async def cmd_multitp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = args[0].lower()
     
     if action == 'on':
-        MULTI_TP_ENABLED = True
-        MULTI_TP_CONFIG['enabled'] = True
+        config.MULTI_TP_ENABLED = True
+        config.MULTI_TP_CONFIG['enabled'] = True
         
         msg = "✅ <b>Multi-TP System ATTIVATO</b>\n\n"
         msg += "Nuove posizioni avranno TP multipli:\n"
-        for i, level in enumerate(MULTI_TP_CONFIG['levels'], 1):
+        for i, level in enumerate(config.MULTI_TP_CONFIG['levels'], 1):
             msg += f"{level['emoji']} TP{i}: {level['rr_ratio']}R ({level['close_pct']*100:.0f}%)\n"
         
         msg += "\n💡 <b>Benefici:</b>\n"
@@ -12401,8 +12401,8 @@ async def cmd_multitp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode='HTML')
     
     elif action == 'off':
-        MULTI_TP_ENABLED = False
-        MULTI_TP_CONFIG['enabled'] = False
+        config.MULTI_TP_ENABLED = False
+        config.MULTI_TP_CONFIG['enabled'] = False
         
         msg = "❌ <b>Multi-TP System DISATTIVATO</b>\n\n"
         msg += "Nuove posizioni avranno TP singolo (2R)"
