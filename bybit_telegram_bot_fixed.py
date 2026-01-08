@@ -398,7 +398,7 @@ def check_ema_trend(df: pd.DataFrame) -> tuple:
     Win Rate: Mantiene 60-70% patterns
     False Negatives: ~10% (molto basso)
     """
-    config = TREND_FILTER_CONFIG['ema_based']
+    configEma = config.TREND_FILTER_CONFIG['ema_based']
     
     # Calcola EMA 60
     ema_60 = df['close'].ewm(span=60, adjust=False).mean()
@@ -410,7 +410,7 @@ def check_ema_trend(df: pd.DataFrame) -> tuple:
     curr_ema60 = ema_60.iloc[-1]
     
     # Check 1: Prezzo sopra EMA 60 (con buffer)
-    buffer = config['ema60_buffer']
+    buffer = configEma['ema60_buffer']
     above_ema60 = curr_price > curr_ema60 * buffer
     
     if not above_ema60:
