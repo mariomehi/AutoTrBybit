@@ -64,7 +64,7 @@ def create_bybit_session():
     """Crea sessione Bybit per trading (Demo o Live)"""
     if BybitHTTP is None:
         raise RuntimeError('pybit non disponibile. Installa: pip install pybit>=5.0')
-    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+    if not config.BYBIT_API_KEY or not config.BYBIT_API_SECRET:
         raise RuntimeError('BYBIT_API_KEY e BYBIT_API_SECRET devono essere configurate')
     
     # Determina l'endpoint in base alla modalità
@@ -74,10 +74,10 @@ def create_bybit_session():
     logging.info(f'📡 Endpoint: {base_url}')
     
     session = BybitHTTP(
-        api_key=BYBIT_API_KEY,
-        api_secret=BYBIT_API_SECRET,
+        api_key=config.BYBIT_API_KEY,
+        api_secret=config.BYBIT_API_SECRET,
         testnet=False,  # Non usiamo testnet
-        demo=True if TRADING_MODE == 'demo' else False  # Usa demo se configurato
+        demo=True if config.TRADING_MODE == 'demo' else False  # Usa demo se configurato
     )
     
     return session
@@ -10418,7 +10418,7 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Comando /balance
     Mostra il saldo del wallet Bybit
     """
-    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+    if not config.BYBIT_API_KEY or not config.BYBIT_API_SECRET:
         await update.message.reply_text(
             '⚠️ API Bybit non configurate.\n'
             'Configura BYBIT_API_KEY e BYBIT_API_SECRET nelle variabili d\'ambiente.'
@@ -10544,7 +10544,7 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Mostra gli ultimi ordini chiusi con P&L da Bybit
     CON DISTINZIONE CORRETTA BUY/SELL usando closedSize
     """
-    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+    if not config.BYBIT_API_KEY or not config.BYBIT_API_SECRET:
         await update.message.reply_text(
             '⚠️ API Bybit non configurate.\n'
             'Configura BYBIT_API_KEY e BYBIT_API_SECRET nelle variabili d\'ambiente.'
@@ -12112,7 +12112,7 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
     Job che monitora posizioni chiuse e invia notifiche
     Eseguito ogni 30 secondi
     """
-    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+    if not config.BYBIT_API_KEY or not config.BYBIT_API_SECRET:
         return
     
     try:
