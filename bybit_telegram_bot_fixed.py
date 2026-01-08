@@ -7511,13 +7511,13 @@ def schedule_trailing_stop_job(application):
     """
     Schedula il job di trailing stop loss ogni 5 minuti
     """
-    if not TRAILING_STOP_ENABLED:
+    if not config.TRAILING_STOP_ENABLED:
         logging.info('🔕 Trailing Stop Loss disabilitato')
         return
     
     #interval = TRAILING_CONFIG['check_interval']
     # Usa check_interval dal config advanced
-    interval = TRAILING_CONFIG_ADVANCED['check_interval']  # ← MODIFICA QUI
+    interval = config.TRAILING_CONFIG_ADVANCED['check_interval']  # ← MODIFICA QUI
     
     application.job_queue.run_repeating(
         update_trailing_stop_loss,
