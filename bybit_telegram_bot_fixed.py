@@ -46,13 +46,13 @@ def is_good_trading_time_utc(now=None) -> tuple[bool, str]:
     """
     Ritorna (ok, reason)
     """
-    if not MARKET_TIME_FILTER_ENABLED:
+    if not config.MARKET_TIME_FILTER_ENABLED:
         return (True, "Market time filter OFF")
 
     now = now or datetime.now(timezone.utc)
     h = now.hour
 
-    if h in MARKET_TIME_FILTER_BLOCKED_UTC_HOURS:
+    if h in config.MARKET_TIME_FILTER_BLOCKED_UTC_HOURS:
         reason = f"Blocked low-liquidity hour UTC={h:02d}"
         logging.warning(f'🚫 MARKET TIME FILTER: {reason}')  # ← AGGIUNGI QUESTO
         return (False, reason)
@@ -6232,7 +6232,7 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     """
 
     # ===== CRITICAL: Check Market Time Filter PRIMA di piazzare ordine =====
-    if MARKET_TIME_FILTER_ENABLED:
+    if config.MARKET_TIME_FILTER_ENABLED:
         time_ok, time_reason = is_good_trading_time_utc()
         
         if not time_ok:
