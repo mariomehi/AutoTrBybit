@@ -6256,7 +6256,7 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     if pattern_name and pattern_name in PATTERN_ORDER_TYPE:
         order_type = 'Market' if PATTERN_ORDER_TYPE[pattern_name] == 'market' else 'Limit'
 
-    logging.info(f'📤 Placing {order_type} order: {symbol} {side} qty={qty:.4f} Entry: ${entry_price:.4f} SL: ${sl_price:.4f} TP: ${tp_price:.4f} Mode: {TRADING_MODE}')
+    logging.info(f'📤 Placing {order_type} order: {symbol} {side} qty={qty:.4f} Entry: ${entry_price:.4f} SL: ${sl_price:.4f} TP: ${tp_price:.4f} Mode: {config.TRADING_MODE}')
     
     if BybitHTTP is None:
         return {'error': 'pybit non disponibile'}
@@ -8449,7 +8449,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     if 'error' in order_res:
                         caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
                     else:
-                        caption += f"\n\n✅ <b>Ordine su Bybit {TRADING_MODE.upper()}</b>"
+                        caption += f"\n\n✅ <b>Ordine su Bybit {config.TRADING_MODE.upper()}</b>"
 
             # 🌱 BUD PATTERN CAPTION
             elif pattern == 'BUD Pattern' or pattern == 'MAXI BUD Pattern':
@@ -8580,7 +8580,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     if 'error' in order_res:
                         caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
                     else:
-                        caption += f"\n\n✅ <b>Ordine su Bybit {TRADING_MODE.upper()}</b>"
+                        caption += f"\n\n✅ <b>Ordine su Bybit {config.TRADING_MODE.upper()}</b>"
 
             elif pattern == 'Morning Star (GOLD)' or \
                  pattern == 'Morning Star (GOOD)' or \
@@ -8782,7 +8782,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     if 'error' in order_res:
                         caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
                     else:
-                        caption += f"\n\n✅ <b>Ordine su Bybit {TRADING_MODE.upper()}</b>"
+                        caption += f"\n\n✅ <b>Ordine su Bybit {config.TRADING_MODE.upper()}</b>"
 
             
             # === LOGICA STANDARD per altri pattern ===
@@ -8992,7 +8992,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 if 'error' in order_res:
                     caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
                 else:
-                    caption += f"\n\n✅ <b>Ordine su Bybit {TRADING_MODE.upper()}</b>"
+                    caption += f"\n\n✅ <b>Ordine su Bybit {config.TRADING_MODE.upper()}</b>"
 
         # ===== SEGNALE SELL (SHORT) =====
         elif found and side == 'Sell':
@@ -9207,7 +9207,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     if 'error' in order_res:
                         caption += f"\n\n❌ <b>Errore ordine SHORT:</b>\n{order_res['error']}"
                     else:
-                        caption += f"\n\n✅ <b>Ordine SHORT su Bybit {TRADING_MODE.upper()}</b>"
+                        caption += f"\n\n✅ <b>Ordine SHORT su Bybit {config.TRADING_MODE.upper()}</b>"
 
             # Check EMA filter per SELL (come per BUY)
             if EMA_FILTER_ENABLED and ema_analysis:
@@ -9447,7 +9447,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 if 'error' in order_res:
                     caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
                 else:
-                    caption += f"\n\n✅ <b>Ordine SHORT su Bybit {TRADING_MODE.upper()}</b>"
+                    caption += f"\n\n✅ <b>Ordine SHORT su Bybit {config.TRADING_MODE.upper()}</b>"
         
         else:
             # NESSUN PATTERN (full mode)
@@ -9563,8 +9563,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_username = (await context.bot.get_me()).username
     
     # Emoji per la modalità
-    mode_emoji = "🎮" if TRADING_MODE == 'demo' else "💰"
-    mode_text = "DEMO (fondi virtuali)" if TRADING_MODE == 'demo' else "LIVE (SOLDI REALI!)"
+    mode_emoji = "🎮" if config.TRADING_MODE == 'demo' else "💰"
+    mode_text = "DEMO (fondi virtuali)" if config.TRADING_MODE == 'demo' else "LIVE (SOLDI REALI!)"
     
     welcome_text = (
         f"🤖 <b>Bot Pattern Detection Attivo!</b>\n"
@@ -9644,12 +9644,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━\n"
         "⚙️ <b>CONFIGURAZIONE ATTUALE</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        f"⏱️ Timeframes: {', '.join(ENABLED_TFS)}\n"
-        f"💰 Risk default: ${RISK_USD}\n"
-        f"📊 Trend: {TREND_FILTER_MODE.upper()}\n"
-        f"📈 EMA: {EMA_FILTER_MODE.upper() if EMA_FILTER_ENABLED else 'OFF'}\n"
+        f"⏱️ Timeframes: {', '.join(config.ENABLED_TFS)}\n"
+        f"💰 Risk default: ${config.RISK_USD}\n"
+        f"📊 Trend: {config.TREND_FILTER_MODE.upper()}\n"
+        f"📈 EMA: {config.EMA_FILTER_MODE.upper() if config.EMA_FILTER_ENABLED else 'OFF'}\n"
         f"🔕 Default: Solo pattern (non tutte)\n"
-        f"🛑 EMA SL: {'ON' if USE_EMA_STOP_LOSS else 'OFF'}\n"
+        f"🛑 EMA SL: {'ON' if config.USE_EMA_STOP_LOSS else 'OFF'}\n"
         f"🔄 Trailing: {'ON' if config.TRAILING_STOP_ENABLED else 'OFF'}\n\n"
         
         "━━━━━━━━━━━━━━━━━━━\n"
