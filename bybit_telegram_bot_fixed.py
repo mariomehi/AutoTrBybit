@@ -6611,7 +6611,7 @@ def get_top_profitable_symbols():
                 continue
             
             # Escludi stablecoins
-            if symbol in AUTO_DISCOVERY_CONFIG['exclude_symbols']:
+            if symbol in config.AUTO_DISCOVERY_CONFIG['exclude_symbols']:
                 continue
             
             try:
@@ -6620,13 +6620,13 @@ def get_top_profitable_symbols():
                 last_price = float(ticker.get('lastPrice', 0))
                 
                 # Applica filtri
-                if volume_24h < AUTO_DISCOVERY_CONFIG['min_volume_usdt']:
+                if volume_24h < config.AUTO_DISCOVERY_CONFIG['min_volume_usdt']:
                     continue
                 
-                if price_change_percent < AUTO_DISCOVERY_CONFIG['min_price_change']:
+                if price_change_percent < config.AUTO_DISCOVERY_CONFIG['min_price_change']:
                     continue
                 
-                if price_change_percent > AUTO_DISCOVERY_CONFIG['max_price_change']:
+                if price_change_percent > config.AUTO_DISCOVERY_CONFIG['max_price_change']:
                     continue  # Evita pump estremi
                 
                 candidates.append({
@@ -6645,7 +6645,7 @@ def get_top_profitable_symbols():
             return []
         
         # Ordina per criterio scelto
-        sort_by = AUTO_DISCOVERY_CONFIG['sorting']
+        sort_by = config.AUTO_DISCOVERY_CONFIG['sorting']
         
         if sort_by == 'volume':
             candidates.sort(key=lambda x: x['volume_24h'], reverse=True)
@@ -6653,7 +6653,7 @@ def get_top_profitable_symbols():
             candidates.sort(key=lambda x: x['price_change_percent'], reverse=True)
         
         # Prendi top N
-        top_count = AUTO_DISCOVERY_CONFIG['top_count']
+        top_count = config.AUTO_DISCOVERY_CONFIG['top_count']
         top_symbols = [c['symbol'] for c in candidates[:top_count]]
         
         # Log risultati
@@ -6684,7 +6684,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
     
     Eseguito ogni 4 ore
     """
-    if not AUTO_DISCOVERY_CONFIG['enabled']:
+    if not config.AUTO_DISCOVERY_CONFIG['enabled']:
         return
     
     job_data = context.job.data
@@ -6704,8 +6704,8 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        timeframe = AUTO_DISCOVERY_CONFIG['timeframe']
-        autotrade = AUTO_DISCOVERY_CONFIG['autotrade']
+        timeframe = config.AUTO_DISCOVERY_CONFIG['timeframe']
+        autotrade = config.AUTO_DISCOVERY_CONFIG['autotrade']
         
         # Converti in set per comparazione
         new_symbols_set = set(top_symbols)
@@ -6722,7 +6722,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
         # === RIMUOVI ANALISI VECCHIE ===
         removed_count = 0
         
-        with ACTIVE_ANALYSES_LOCK:
+        with config.ACTIVE_ANALYSES_LOCK:
             chat_analyses = ACTIVE_ANALYSES.get(chat_id, {})
             
             for symbol in to_remove:
@@ -6742,7 +6742,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             key = f'{symbol}-{timeframe}'
             
             # Verifica che non esista già
-            with ACTIVE_ANALYSES_LOCK:
+            with config.ACTIVE_ANALYSES_LOCK:
                 chat_map = ACTIVE_ANALYSES.setdefault(chat_id, {})
                 
                 if key in chat_map:
@@ -6778,7 +6778,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
                 name=key
             )
             
-            with ACTIVE_ANALYSES_LOCK:
+            with config.ACTIVE_ANALYSES_LOCK:
                 chat_map[key] = job
             
             added_count += 1
@@ -9691,7 +9691,7 @@ async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = f'{symbol}-{timeframe}'
     
     # Verifica che l'analisi sia attiva
-    with ACTIVE_ANALYSES_LOCK:
+    with config.ACTIVE_ANALYSES_LOCK:
         chat_map = ACTIVE_ANALYSES.get(chat_id, {})
         if key not in chat_map:
             await update.message.reply_text(
@@ -9748,7 +9748,7 @@ async def cmd_abilita(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = f'{symbol}-{timeframe}'
     
     # Verifica che l'analisi sia attiva
-    with ACTIVE_ANALYSES_LOCK:
+    with config.ACTIVE_ANALYSES_LOCK:
         chat_map = ACTIVE_ANALYSES.get(chat_id, {})
         if key not in chat_map:
             await update.message.reply_text(
@@ -10209,20 +10209,20 @@ async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not args:
         # Mostra status
-        status_emoji = "✅" if AUTO_DISCOVERY_CONFIG['enabled'] else "❌"
+        status_emoji = "✅" if config.AUTO_DISCOVERY_CONFIG['enabled'] else "❌"
         
         msg = f"🔍 <b>Auto-Discovery System</b>\n\n"
-        msg += f"Status: {status_emoji} {'Attivo' if AUTO_DISCOVERY_CONFIG['enabled'] else 'Disattivo'}\n\n"
+        msg += f"Status: {status_emoji} {'Attivo' if config.AUTO_DISCOVERY_CONFIG['enabled'] else 'Disattivo'}\n\n"
         
-        if AUTO_DISCOVERY_CONFIG['enabled']:
+        if config.AUTO_DISCOVERY_CONFIG['enabled']:
             msg += f"<b>Configurazione:</b>\n"
-            msg += f"• Top: {AUTO_DISCOVERY_CONFIG['top_count']} symbols\n"
-            msg += f"• Timeframe: {AUTO_DISCOVERY_CONFIG['timeframe']}\n"
-            msg += f"• Autotrade: {'ON' if AUTO_DISCOVERY_CONFIG['autotrade'] else 'OFF'}\n"
-            msg += f"• Update ogni: {AUTO_DISCOVERY_CONFIG['update_interval']//3600}h\n"
-            msg += f"• Min volume: ${AUTO_DISCOVERY_CONFIG['min_volume_usdt']/1_000_000:.0f}M\n"
-            msg += f"• Min change: +{AUTO_DISCOVERY_CONFIG['min_price_change']}%\n"
-            msg += f"• Max change: +{AUTO_DISCOVERY_CONFIG['max_price_change']}%\n\n"
+            msg += f"• Top: {config.AUTO_DISCOVERY_CONFIG['top_count']} symbols\n"
+            msg += f"• Timeframe: {config.AUTO_DISCOVERY_CONFIG['timeframe']}\n"
+            msg += f"• Autotrade: {'ON' if config.AUTO_DISCOVERY_CONFIG['autotrade'] else 'OFF'}\n"
+            msg += f"• Update ogni: {config.AUTO_DISCOVERY_CONFIG['update_interval']//3600}h\n"
+            msg += f"• Min volume: ${config.AUTO_DISCOVERY_CONFIG['min_volume_usdt']/1_000_000:.0f}M\n"
+            msg += f"• Min change: +{config.AUTO_DISCOVERY_CONFIG['min_price_change']}%\n"
+            msg += f"• Max change: +{config.AUTO_DISCOVERY_CONFIG['max_price_change']}%\n\n"
             
             with AUTO_DISCOVERED_LOCK:
                 symbols = list(AUTO_DISCOVERED_SYMBOLS)
@@ -10246,7 +10246,7 @@ async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = args[0].lower()
     
     if action == 'on':
-        AUTO_DISCOVERY_CONFIG['enabled'] = True
+        config.AUTO_DISCOVERY_CONFIG['enabled'] = True
         
         # Schedula il job se non esiste
         current_jobs = context.job_queue.get_jobs_by_name('auto_discovery')
@@ -10254,7 +10254,7 @@ async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not current_jobs:
             context.job_queue.run_repeating(
                 auto_discover_and_analyze,
-                interval=AUTO_DISCOVERY_CONFIG['update_interval'],
+                interval=config.AUTO_DISCOVERY_CONFIG['update_interval'],
                 first=60,  # Primo run dopo 1 minuto
                 data={'chat_id': chat_id},
                 name='auto_discovery'
@@ -10263,7 +10263,7 @@ async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 '✅ <b>Auto-Discovery ATTIVATO</b>\n\n'
                 'Primo update tra 1 minuto...\n'
-                f"Poi ogni {AUTO_DISCOVERY_CONFIG['update_interval']//3600} ore",
+                f"Poi ogni {config.AUTO_DISCOVERY_CONFIG['update_interval']//3600} ore",
                 parse_mode='HTML'
             )
         else:
@@ -10273,7 +10273,7 @@ async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     
     elif action == 'off':
-        AUTO_DISCOVERY_CONFIG['enabled'] = False
+        config.AUTO_DISCOVERY_CONFIG['enabled'] = False
         
         # Rimuovi tutti i job auto-discovery
         current_jobs = context.job_queue.get_jobs_by_name('auto_discovery')
@@ -10288,7 +10288,7 @@ async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     elif action == 'now':
-        if not AUTO_DISCOVERY_CONFIG['enabled']:
+        if not config.AUTO_DISCOVERY_CONFIG['enabled']:
             await update.message.reply_text(
                 '⚠️ Auto-Discovery è disattivato.\n'
                 'Usa /autodiscover on per attivarlo.'
@@ -10447,7 +10447,7 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             
-            msg = f"💰 <b>Saldo Wallet ({TRADING_MODE.upper()})</b>\n\n"
+            msg = f"💰 <b>Saldo Wallet ({config.TRADING_MODE.upper()})</b>\n\n"
             
             total_equity = 0
             found_coins = False
@@ -10582,7 +10582,7 @@ async def cmd_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             
-            msg = f"📊 <b>Ultimi {len(pnl_list)} Ordini Chiusi ({TRADING_MODE.upper()})</b>\n\n"
+            msg = f"📊 <b>Ultimi {len(pnl_list)} Ordini Chiusi ({config.TRADING_MODE.upper()})</b>\n\n"
             
             # Statistiche globali
             total_pnl = 0
@@ -10865,7 +10865,7 @@ async def cmd_analizza(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     key = f'{symbol}-{timeframe}'
     
-    with ACTIVE_ANALYSES_LOCK:
+    with config.ACTIVE_ANALYSES_LOCK:
         chat_map = ACTIVE_ANALYSES.setdefault(chat_id, {})
         
         if key in chat_map:
@@ -10924,7 +10924,7 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     target = args[0].upper()
     
-    with ACTIVE_ANALYSES_LOCK:
+    with config.ACTIVE_ANALYSES_LOCK:
         chat_map = ACTIVE_ANALYSES.get(chat_id, {})
         
         if not chat_map:
@@ -11011,7 +11011,7 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 timeframe = pos.get('timeframe', '15m')
                 
                 # Scarica dati per calcolare EMA 10
-                ema_tf = TRAILING_EMA_TIMEFRAME.get(timeframe, '5m')
+                ema_tf = config.TRAILING_EMA_TIMEFRAME.get(timeframe, '5m')
                 df = bybit_get_klines(symbol, ema_tf, limit=20)
                 
                 if df.empty:
@@ -11020,7 +11020,7 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 # Calcola nuovo SL basato su EMA 10
                 ema_10 = df['close'].ewm(span=10, adjust=False).mean().iloc[-1]
-                ema_buffer = TRAILING_CONFIG_ADVANCED['levels'][0]['ema_buffer']
+                ema_buffer = config.TRAILING_CONFIG_ADVANCED['levels'][0]['ema_buffer']
                 new_sl = ema_10 * (1 - ema_buffer)
                 
                 # Verifica che non sia peggio dello SL corrente
@@ -11091,14 +11091,14 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Mostra configurazione livelli
     msg += "<b>🎯 Livelli Configurati:</b>\n"
-    for i, level in enumerate(TRAILING_CONFIG_ADVANCED['levels'], 1):
+    for i, level in enumerate(config.TRAILING_CONFIG_ADVANCED['levels'], 1):
         msg += f"{i}. {level['label']}\n"
         msg += f"   • Attivazione: ≥{level['profit_pct']}% profit\n"
         msg += f"   • Buffer: {level['ema_buffer']*100:.2f}% sotto EMA\n\n"
     
     msg += f"<b>⚙️ Settings:</b>\n"
-    msg += f"Check Interval: {TRAILING_CONFIG_ADVANCED['check_interval']} secondi\n"
-    msg += f"Never Back: {'✅ ON' if TRAILING_CONFIG_ADVANCED['never_back'] else '❌ OFF'}\n\n"
+    msg += f"Check Interval: {config.TRAILING_CONFIG_ADVANCED['check_interval']} secondi\n"
+    msg += f"Never Back: {'✅ ON' if config.TRAILING_CONFIG_ADVANCED['never_back'] else '❌ OFF'}\n\n"
     
     msg += "<b>📊 Posizioni Attive:</b>\n\n"
     
@@ -11124,7 +11124,7 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Determina livello attivo
         active_level = None
-        for level in TRAILING_CONFIG_ADVANCED['levels']:
+        for level in config.TRAILING_CONFIG_ADVANCED['levels']:
             if profit_pct >= level['profit_pct']:
                 active_level = level
         
@@ -11154,7 +11154,7 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if active_level:
             msg += f"<b>Level: {active_level['label']}</b>\n"
         else:
-            needed = TRAILING_CONFIG_ADVANCED['levels'][0]['profit_pct'] - profit_pct
+            needed = config.TRAILING_CONFIG_ADVANCED['levels'][0]['profit_pct'] - profit_pct
             msg += f"Serve +{needed:.2f}% per attivare\n"
         
         if not trailing_active:
@@ -11188,7 +11188,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     chat_id = update.effective_chat.id
     
-    with ACTIVE_ANALYSES_LOCK:
+    with config.ACTIVE_ANALYSES_LOCK:
         chat_map = ACTIVE_ANALYSES.get(chat_id, {})
     
     if not chat_map:
@@ -12262,7 +12262,7 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
             msg += f"\n⏰ Chiuso: {time_str}"
             
             # Invia notifica a tutte le chat che stanno tracciando questo symbol
-            with ACTIVE_ANALYSES_LOCK:
+            with config.ACTIVE_ANALYSES_LOCK:
                 for chat_id, analyses in ACTIVE_ANALYSES.items():
                     # Verifica se questa chat stava analizzando questo symbol
                     is_tracking = any(key.startswith(f'{symbol}-') for key in analyses.keys())
@@ -12427,7 +12427,7 @@ def main():
     )
 
         # Avvia Auto-Discovery se abilitato
-    if config.AUTO_DISCOVERY_ENABLED and config.AUTO_DISCOVERY_CONFIG['enabled']:
+    if config.AUTO_DISCOVERY_ENABLED and config.config.AUTO_DISCOVERY_CONFIG['enabled']:
         # Nota: Serve chat_id, quindi auto-discovery sarà attivato
         # dal primo utente che usa /autodiscover on
         logging.info('🔍 Auto-Discovery configurato (attiva con /autodiscover on)')
