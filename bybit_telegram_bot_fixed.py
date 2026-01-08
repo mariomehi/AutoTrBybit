@@ -682,7 +682,7 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str =
         - conditions: dict di condizioni soddisfatte
         - details: messaggio testuale
     """
-    if not EMA_FILTER_ENABLED or EMA_FILTER_MODE == 'off':
+    if not config.EMA_FILTER_ENABLED or config.EMA_FILTER_MODE == 'off':
         return {
             'score': 100,
             'quality': 'OK',
@@ -705,14 +705,14 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str =
     
     # Determina configurazione per timeframe
     config = None
-    for strategy, cfg in EMA_CONFIG.items():
+    for strategy, cfg in config.EMA_CONFIG.items():
         if timeframe in cfg['timeframes']:
             config = cfg
             break
     
     if not config:
         # Default: usa day trading config
-        config = EMA_CONFIG['daytrading']
+        config = config.EMA_CONFIG['daytrading']
     
     rules = config['rules']
     conditions = {}
@@ -947,7 +947,7 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str =
         quality = 'BAD'   # ❌ Setup da evitare
     
     # Determina se passa il filtro
-    if EMA_FILTER_MODE == 'strict':
+    if config.EMA_FILTER_MODE == 'strict':
         passed = score >= 60  # Strict: solo GOOD e GOLD
     else:  # loose
         passed = score >= 40  # Loose: anche OK
