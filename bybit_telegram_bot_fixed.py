@@ -7619,16 +7619,16 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     momentum_reason = ""   # default
 
     #logging.info(f'🔍 Analyzing {symbol} {timeframe}...')
-    logging.debug(f'   Volume mode: {VOLUME_FILTER_MODE}')
-    logging.debug(f'   Trend mode: {TREND_FILTER_MODE}')
-    logging.debug(f'   EMA mode: {EMA_FILTER_MODE if EMA_FILTER_ENABLED else "OFF"}')
-    logging.debug(f'   Market time: {"ON" if MARKET_TIME_FILTER_ENABLED else "OFF"}')
+    logging.debug(f'   Volume mode: {config.VOLUME_FILTER_MODE}')
+    logging.debug(f'   Trend mode: {config.TREND_FILTER_MODE}')
+    logging.debug(f'   EMA mode: {config.EMA_FILTER_MODE if config.EMA_FILTER_ENABLED else "OFF"}')
+    logging.debug(f'   Market time: {"ON" if config.MARKET_TIME_FILTER_ENABLED else "OFF"}')
     
     # Check se auto-discovered
     is_auto = job_ctx.get('auto_discovered', False)
 
     # ===== MARKET TIME FILTER (PRIORITY CHECK) =====
-    if MARKET_TIME_FILTER_ENABLED:
+    if config.MARKET_TIME_FILTER_ENABLED:
         time_ok, time_reason = is_good_trading_time_utc()
         
         if not time_ok:
@@ -7640,7 +7640,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 f'(UTC hour {current_hour:02d})'
             )
             
-            if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
+            if config.MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
                 # Blocca SOLO autotrade, analisi continua
                 logging.info(f'   Mode: AUTOTRADE_ONLY - Analysis continues, trading disabled')
                 
@@ -7648,7 +7648,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 job_ctx['autotrade'] = False
                 
                 # IMPORTANTE: Continua con l'analisi ma senza trading
-                # Non fare return qui, lascia che il codice prosegua
             else:
                 # Blocca TUTTO (analisi + trading)
                 logging.info(f'   Mode: ALL_ANALYSIS - Skipping analysis completely')
@@ -7662,7 +7661,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                                 f"⏰ <b>Market Time Filter Active</b>\n\n"
                                 f"Symbol: {symbol} {timeframe}\n"
                                 f"UTC Hour: {current_hour:02d}\n"
-                                f"Blocked Hours: {sorted(MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)}\n\n"
+                                f"Blocked Hours: {sorted(config.MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)}\n\n"
                                 f"Analysis paused during low liquidity hours.\n"
                                 f"Will resume automatically."
                             ),
@@ -7680,8 +7679,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 delattr(analyze_job, f'notified_{symbol}_{timeframe}')
 
     # Verifica se le notifiche complete sono attive
-    with FULL_NOTIFICATIONS_LOCK:
-        full_mode = chat_id in FULL_NOTIFICATIONS and key in FULL_NOTIFICATIONS[chat_id]
+    with config.FULL_NOTIFICATIONS_LOCK:
+        full_mode = chat_id in config.FULL_NOTIFICATIONS and key in config.FULL_NOTIFICATIONS[chat_id]
 
     try:
         # ===== STEP 1: OTTIENI DATI =====
@@ -7706,7 +7705,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         time_diff = (now_utc - last_candle_time).total_seconds()
         
         # Ottieni durata timeframe in secondi
-        interval_seconds = INTERVAL_SECONDS.get(timeframe, 300)
+        interval_seconds = config.INTERVAL_SECONDS.get(timeframe, 300)
         
         # Se l'ultima candela è troppo recente (meno del 90% del timeframe),
         # è ancora in formazione → usa la penultima
@@ -7748,7 +7747,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         ema_analysis = None
         pattern_search_allowed = True  # Default: cerca pattern
         
-        if EMA_FILTER_ENABLED:
+        if config.EMA_FILTER_ENABLED:
             ema_analysis = analyze_ema_conditions(df, timeframe, None)
             
             logging.info(
@@ -7759,7 +7758,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             )
             
             # STRICT MODE: Blocca completamente se EMA non passa
-            if EMA_FILTER_MODE == 'strict' and not ema_analysis['passed']:
+            if config.EMA_FILTER_MODE == 'strict' and not ema_analysis['passed']:
                 pattern_search_allowed = False
                 logging.warning(
                     f'🚫 {symbol} {timeframe} - EMA STRICT BLOCK '
@@ -7798,7 +7797,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 #return  # STOP QUI - Non cerca pattern
             
             # LOOSE MODE: Blocca se score < 40
-            elif EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
+            elif config.EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
                 pattern_search_allowed = False
                 logging.warning(
                     f'🚫 {symbol} {timeframe} - EMA LOOSE BLOCK '
@@ -7941,7 +7940,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 entry_price = last_close  # Entry immediato
                 
                 # SL: EMA 10 o ATR
-                if USE_EMA_STOP_LOSS:
+                if config.USE_EMA_STOP_LOSS:
                     sl_price, ema_used, ema_value = calculate_ema_stop_loss(
                         df, timeframe, last_close, side
                     )
@@ -8356,7 +8355,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # ===== DYNAMIC RISK CALCULATION =====
                 # Calcola risk basato su EMA score
                 # Prima di usare risk_base
-                risk_base = RISK_USD  # default sempre definito
+                risk_base = config.RISK_USD  # default sempre definito
                 if ema_analysis and 'score' in ema_analysis:
                     ema_score = ema_analysis['score']
                     risk_base = calculate_dynamic_risk(ema_score)
@@ -8366,8 +8365,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     logging.debug(f"No EMA analysis, using base risk ${RISK_USD}")
                 
                 # Apply symbol-specific override se configurato
-                if symbol in SYMBOL_RISK_OVERRIDE:
-                    risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+                if symbol in config.SYMBOL_RISK_OVERRIDE:
+                    risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
                     logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
                 else:
                     risk_for_symbol = risk_base
@@ -8687,7 +8686,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # ===== DYNAMIC RISK CALCULATION =====
                 # Calcola risk basato su EMA score
                 # Prima di usare risk_base
-                risk_base = RISK_USD  # default sempre definito
+                risk_base = config.RISK_USD  # default sempre definito
                 if ema_analysis and 'score' in ema_analysis:
                     ema_score = ema_analysis['score']
                     risk_base = calculate_dynamic_risk(ema_score)
@@ -8697,8 +8696,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     logging.debug(f"No EMA analysis, using base risk ${RISK_USD}")
                 
                 # Apply symbol-specific override se configurato
-                if symbol in SYMBOL_RISK_OVERRIDE:
-                    risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+                if symbol in config.SYMBOL_RISK_OVERRIDE:
+                    risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
                     logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
                 else:
                     risk_for_symbol = risk_base
@@ -8814,15 +8813,15 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             #risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
             #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
             # Apply symbol-specific override se configurato
-            risk_base = RISK_USD
-            if symbol in SYMBOL_RISK_OVERRIDE:
-                risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+            risk_base = config.RISK_USD
+            if symbol in config.SYMBOL_RISK_OVERRIDE:
+                risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
                 logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
             else:
                 risk_for_symbol = risk_base
             #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
             # ===== INTELLIGENT POSITION SIZING =====
-            risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
+            risk_for_symbol = config.SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
             
             # Calcola ATR per volatilità
             lastatr = atr(df, period=14).iloc[-1]
@@ -8893,7 +8892,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
                 caption += f"   (1.5x pole height)\n"
             else:
-                if USE_EMA_STOP_LOSS:
+                if config.USE_EMA_STOP_LOSS:
                     caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
                     caption += f"   sotto {ema_used}"
                     if isinstance(ema_value, (int, float)) and ema_value > 0:
@@ -8909,10 +8908,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             
             rr = abs(tp_price - entry_price) / abs(sl_price - entry_price) if abs(sl_price - entry_price) > 0 else 0
             caption += f"📏 R:R: <b>{rr:.2f}:1</b>\n"
-            
-            # Volume
-            # RIMUOVI QUESTO BLOCCO COMPLETAMENTE
-            # Il volume è già gestito nei pattern specifici se necessario
             
             # EMA Analysis dettagliata
             if ema_analysis:
@@ -8944,8 +8939,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Info filtri applicati
                 caption += f"\n\n💡 <b>Filtri Pattern:</b>\n"
                 
-                if TREND_FILTER_ENABLED:
-                    caption += f"Trend: {TREND_FILTER_MODE.upper()}"
+                if config.TREND_FILTER_ENABLED:
+                    caption += f"Trend: {config.TREND_FILTER_MODE.upper()}"
                     if TREND_FILTER_MODE == 'ema_based':
                         caption += f" (Price > EMA 60)\n"
                     elif TREND_FILTER_MODE == 'structure':
@@ -8955,18 +8950,18 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     caption += f"Trend: OFF\n"
                 
-                if VOLUME_FILTER_ENABLED:
-                    caption += f"Volume: {VOLUME_FILTER_MODE.upper()}\n"
+                if config.VOLUME_FILTER_ENABLED:
+                    caption += f"Volume: {config.VOLUME_FILTER_MODE.upper()}\n"
                 else:
                     caption += f"Volume: OFF\n"
                 
-                if EMA_FILTER_ENABLED:
-                    caption += f"EMA: {EMA_FILTER_MODE.upper()}\n"
+                if config.EMA_FILTER_ENABLED:
+                    caption += f"EMA: {config.EMA_FILTER_MODE.upper()}\n"
                 else:
                     caption += f"EMA: OFF\n"
 
             # Warning se LOOSE mode con EMA deboli
-            if ema_analysis and EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
+            if ema_analysis and config.EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
                 caption += f"\n⚠️ <b>ATTENZIONE:</b> Setup con EMA non ottimali"
                 caption += f"\nConsidera ridurre position size."
             
@@ -9210,8 +9205,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                         caption += f"\n\n✅ <b>Ordine SHORT su Bybit {config.TRADING_MODE.upper()}</b>"
 
             # Check EMA filter per SELL (come per BUY)
-            if EMA_FILTER_ENABLED and ema_analysis:
-                if EMA_FILTER_MODE == 'strict' and not ema_analysis['passed']:
+            if config.EMA_FILTER_ENABLED and ema_analysis:
+                if config.EMA_FILTER_MODE == 'strict' and not ema_analysis['passed']:
                     logging.warning(
                         f'🚫 {symbol} {timeframe} - Pattern {pattern} (SELL) '
                         f'bloccato da EMA STRICT (score {ema_analysis["score"]}/100)'
@@ -9243,7 +9238,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     
                     return  # Blocca ordine SELL
                 
-                elif EMA_FILTER_MODE == 'loose' and ema_analysis['score'] < 40:
+                elif config.EMA_FILTER_MODE == 'loose' and ema_analysis['score'] < 40:
                     logging.warning(
                         f'🚫 {symbol} {timeframe} - Pattern {pattern} (SELL) '
                         f'bloccato da EMA LOOSE (score {ema_analysis["score"]}/100 < 40)'
@@ -9416,12 +9411,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 # Info filtri
                 caption += f"\n\n💡 <b>Filtri Pattern:</b>\n"
-                caption += f"Trend: {TREND_FILTER_MODE.upper()}\n"
-                caption += f"Volume: {VOLUME_FILTER_MODE.upper()}\n"
-                caption += f"EMA: {EMA_FILTER_MODE.upper() if EMA_FILTER_ENABLED else 'OFF'}\n"
+                caption += f"Trend: {config.TREND_FILTER_MODE.upper()}\n"
+                caption += f"Volume: {config.VOLUME_FILTER_MODE.upper()}\n"
+                caption += f"EMA: {config.EMA_FILTER_MODE.upper() if config.EMA_FILTER_ENABLED else 'OFF'}\n"
             
             # Warning se LOOSE mode
-            if ema_analysis and EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
+            if ema_analysis and config.EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
                 caption += f"\n⚠️ <b>ATTENZIONE:</b> Setup con EMA non ottimali"
                 caption += f"\nConsidera ridurre position size."
             
@@ -9461,18 +9456,18 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Info filtri configurati (non status)
             caption += "💡 <b>Filter Configuration:</b>\n"
             
-            if TREND_FILTER_ENABLED:
-                caption += f"Trend: {TREND_FILTER_MODE.upper()}\n"
+            if config.TREND_FILTER_ENABLED:
+                caption += f"Trend: {config.TREND_FILTER_MODE.upper()}\n"
             else:
                 caption += f"Trend: OFF\n"
             
-            if VOLUME_FILTER_ENABLED:
-                caption += f"Volume: {VOLUME_FILTER_MODE.upper()}\n"
+            if config.VOLUME_FILTER_ENABLED:
+                caption += f"Volume: {config.VOLUME_FILTER_MODE.upper()}\n"
             else:
                 caption += f"Volume: OFF\n"
             
-            if EMA_FILTER_ENABLED:
-                caption += f"EMA: {EMA_FILTER_MODE.upper()}\n"
+            if config.EMA_FILTER_ENABLED:
+                caption += f"EMA: {config.EMA_FILTER_MODE.upper()}\n"
             else:
                 caption += f"EMA: OFF\n"
             
@@ -9544,8 +9539,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
         logging.exception(f'Errore in analyze_job per {symbol} {timeframe}')
         
         try:
-            with FULL_NOTIFICATIONS_LOCK:
-                should_send = chat_id in FULL_NOTIFICATIONS and key in FULL_NOTIFICATIONS[chat_id]
+            with config.FULL_NOTIFICATIONS_LOCK:
+                should_send = chat_id in config.FULL_NOTIFICATIONS and key in config.FULL_NOTIFICATIONS[chat_id]
             
             if should_send:
                 await context.bot.send_message(
