@@ -37,7 +37,7 @@ except Exception as e:
     BybitHTTP = None
     
 # Import pattern statistics tracker
-import bybit_telegram_bot_config
+import config
 
 # Import pattern statistics tracker
 import track_patterns
