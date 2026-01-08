@@ -6872,13 +6872,6 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
 
         # ===== CALCOLA MULTI-TP SE ABILITATO =====
         tp_levels = []
-
-        # Modifica TP levels basandosi su EMA score
-        if ema_analysis and ema_analysis['score'] >= 80:
-            # Setup GOLD: TP più aggressivi
-            MULTI_TP_CONFIG['levels'][0]['rr_ratio'] = 2.0  # TP1: 2R invece di 1.5R
-            MULTI_TP_CONFIG['levels'][1]['rr_ratio'] = 3.5  # TP2: 3.5R
-            MULTI_TP_CONFIG['levels'][2]['rr_ratio'] = 5.0  # TP3: 5R
         
         if MULTI_TP_ENABLED and MULTI_TP_CONFIG['enabled']:
             risk = abs(entry_price - sl_price)
