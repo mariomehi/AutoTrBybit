@@ -89,11 +89,11 @@ def bybit_get_klines(symbol: str, interval: str, limit: int = 200):
     Ottiene klines da Bybit v5 public API
     Returns: DataFrame con OHLCV
     """
-    itv = BYBIT_INTERVAL_MAP.get(interval)
+    itv = config.BYBIT_INTERVAL_MAP.get(interval)
     if itv is None:
         raise ValueError(f'Timeframe non supportato: {interval}')
 
-    url = f'{BYBIT_PUBLIC_REST}/v5/market/kline'
+    url = f'{config.BYBIT_PUBLIC_REST}/v5/market/kline'
     params = {
         'category': 'linear', 
         'symbol': symbol, 
@@ -6581,7 +6581,7 @@ def get_top_profitable_symbols():
     """
     try:
         # Ottieni ticker 24h per tutti i symbol
-        url = f'{BYBIT_PUBLIC_REST}/v5/market/tickers'
+        url = f'{config.BYBIT_PUBLIC_REST}/v5/market/tickers'
         params = {
             'category': 'linear'
         }
