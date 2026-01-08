@@ -11713,11 +11713,11 @@ async def cmd_time_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Status
     if not args:
-        mode = "AUTOTRADE_ONLY" if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY else "ALL_ANALYSIS"
-        hours = ", ".join([f"{h:02d}" for h in sorted(MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)])
+        mode = "AUTOTRADE_ONLY" if config.MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY else "ALL_ANALYSIS"
+        hours = ", ".join([f"{h:02d}" for h in sorted(config.MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)])
         msg = ""
         msg += "<b>Market Time Filter</b>\n"
-        msg += f"Status: {'✅ ON' if MARKET_TIME_FILTER_ENABLED else '❌ OFF'}\n"
+        msg += f"Status: {'✅ ON' if config.MARKET_TIME_FILTER_ENABLED else '❌ OFF'}\n"
         msg += f"Mode: <b>{mode}</b>\n"
         msg += f"Blocked UTC hours: <b>{hours if hours else 'None'}</b>\n\n"
         msg += "<b>Comandi</b>\n"
@@ -11733,9 +11733,9 @@ async def cmd_time_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ON/OFF
     if cmd in ("on", "off"):
-        MARKET_TIME_FILTER_ENABLED = (cmd == "on")
+        config.MARKET_TIME_FILTER_ENABLED = (cmd == "on")
         await update.message.reply_text(
-            f"<b>Market Time Filter</b>: {'✅ ON' if MARKET_TIME_FILTER_ENABLED else '❌ OFF'}",
+            f"<b>Market Time Filter</b>: {'✅ ON' if config.MARKET_TIME_FILTER_ENABLED else '❌ OFF'}",
             parse_mode="HTML"
         )
         return
@@ -11749,9 +11749,9 @@ async def cmd_time_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if m not in ("autotrade", "all"):
             await update.message.reply_text("Valore non valido. Usa: autotrade | all", parse_mode="HTML")
             return
-        MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY = (m == "autotrade")
+        config.MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY = (m == "autotrade")
         await update.message.reply_text(
-            f"Mode impostato: <b>{'AUTOTRADE_ONLY' if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY else 'ALL_ANALYSIS'}</b>",
+            f"Mode impostato: <b>{'AUTOTRADE_ONLY' if config.MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY else 'ALL_ANALYSIS'}</b>",
             parse_mode="HTML"
         )
         return
@@ -11763,7 +11763,7 @@ async def cmd_time_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if args[1].lower() == "clear":
-            MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = set()
+            config.MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = set()
             await update.message.reply_text("Blocked UTC hours svuotate.", parse_mode="HTML")
             return
 
@@ -11778,8 +11778,8 @@ async def cmd_time_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             new_hours.add(h)
 
-        MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = new_hours
-        hours = ", ".join([f"{h:02d}" for h in sorted(MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)])
+        config.MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = new_hours
+        hours = ", ".join([f"{h:02d}" for h in sorted(config.MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)])
         await update.message.reply_text(f"Blocked UTC hours impostate: <b>{hours}</b>", parse_mode="HTML")
         return
 
@@ -11817,19 +11817,19 @@ async def cmd_debug_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += "<b>⏰ 1. MARKET TIME FILTER</b>\n"
         msg += f"Enabled: {'✅' if MARKET_TIME_FILTER_ENABLED else '❌'}\n"
         
-        if MARKET_TIME_FILTER_ENABLED:
+        if config.MARKET_TIME_FILTER_ENABLED:
             time_ok, time_reason = is_good_trading_time_utc()
             now_utc = datetime.now(timezone.utc)
             current_hour = now_utc.hour
             
             msg += f"Current UTC Hour: <b>{current_hour:02d}</b>\n"
-            msg += f"Blocked Hours: {sorted(MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)}\n"
+            msg += f"Blocked Hours: {sorted(config.MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)}\n"
             msg += f"Status: {'✅ OK' if time_ok else f'❌ BLOCKED - {time_reason}'}\n"
-            msg += f"Mode: {'AUTOTRADE_ONLY' if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY else 'ALL_ANALYSIS'}\n"
+            msg += f"Mode: {'AUTOTRADE_ONLY' if config.MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY else 'ALL_ANALYSIS'}\n"
             
             if not time_ok:
                 msg += "\n⚠️ <b>PATTERN SEARCH SKIPPED!</b>\n"
-                if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
+                if config.MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
                     msg += "Analisi pattern OK, ma autotrade disabilitato\n"
                 else:
                     msg += "TUTTO bloccato (analisi + autotrade)\n"
@@ -11872,17 +11872,17 @@ async def cmd_debug_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # ===== 3. TREND FILTER =====
         msg += "<b>📈 3. TREND FILTER</b>\n"
-        msg += f"Enabled: {'✅' if TREND_FILTER_ENABLED else '❌'}\n"
-        msg += f"Mode: <b>{TREND_FILTER_MODE}</b>\n"
+        msg += f"Enabled: {'✅' if config.TREND_FILTER_ENABLED else '❌'}\n"
+        msg += f"Mode: <b>{config.TREND_FILTER_MODE}</b>\n"
         
-        if TREND_FILTER_ENABLED:
+        if config.TREND_FILTER_ENABLED:
             trend_valid, trend_reason, trend_details = is_valid_trend_for_entry(
-                df, mode=TREND_FILTER_MODE, symbol=symbol
+                df, mode=config.TREND_FILTER_MODE, symbol=symbol
             )
             
             msg += f"Status: {'✅ VALID' if trend_valid else f'❌ INVALID - {trend_reason}'}\n"
             
-            if TREND_FILTER_MODE == 'ema_based' and trend_details:
+            if config.TREND_FILTER_MODE == 'ema_based' and trend_details:
                 ema60 = trend_details.get('ema60', 0)
                 price = trend_details.get('price', 0)
                 distance = trend_details.get('distance_pct', 0)
@@ -11898,21 +11898,21 @@ async def cmd_debug_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # ===== 4. EMA FILTER =====
         msg += "<b>💹 4. EMA FILTER</b>\n"
-        msg += f"Enabled: {'✅' if EMA_FILTER_ENABLED else '❌'}\n"
-        msg += f"Mode: <b>{EMA_FILTER_MODE}</b>\n"
+        msg += f"Enabled: {'✅' if config.EMA_FILTER_ENABLED else '❌'}\n"
+        msg += f"Mode: <b>{config.EMA_FILTER_MODE}</b>\n"
         
-        if EMA_FILTER_ENABLED:
+        if config.EMA_FILTER_ENABLED:
             ema_analysis = analyze_ema_conditions(df, timeframe, None)
             
             msg += f"Score: <b>{ema_analysis['score']}/100</b>\n"
             msg += f"Quality: <b>{ema_analysis['quality']}</b>\n"
             msg += f"Passed: {'✅ YES' if ema_analysis['passed'] else '❌ NO'}\n"
             
-            if EMA_FILTER_MODE == 'strict':
+            if config.EMA_FILTER_MODE == 'strict':
                 msg += f"Threshold: 60/100\n"
                 if ema_analysis['score'] < 60:
                     msg += "\n⚠️ <b>EMA STRICT BLOCKING!</b>\n"
-            elif EMA_FILTER_MODE == 'loose':
+            elif config.EMA_FILTER_MODE == 'loose':
                 msg += f"Threshold: 40/100\n"
                 if ema_analysis['score'] < 40:
                     msg += "\n⚠️ <b>EMA LOOSE BLOCKING!</b>\n"
@@ -11946,21 +11946,21 @@ async def cmd_debug_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         blocking_filters = []
         
-        if MARKET_TIME_FILTER_ENABLED:
+        if config.MARKET_TIME_FILTER_ENABLED:
             time_ok, _ = is_good_trading_time_utc()
-            if not time_ok and not MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
+            if not time_ok and not config.MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
                 blocking_filters.append("Market Time (ALL)")
         
-        if VOLUME_FILTER_ENABLED and vol_ratio < 1.5:
+        if config.VOLUME_FILTER_ENABLED and vol_ratio < 1.5:
             blocking_filters.append("Volume (too low)")
         
-        if TREND_FILTER_ENABLED:
-            trend_valid, _, _ = is_valid_trend_for_entry(df, mode=TREND_FILTER_MODE)
+        if config.TREND_FILTER_ENABLED:
+            trend_valid, _, _ = is_valid_trend_for_entry(df, mode=config.TREND_FILTER_MODE)
             if not trend_valid:
-                blocking_filters.append(f"Trend ({TREND_FILTER_MODE})")
+                blocking_filters.append(f"Trend ({config.TREND_FILTER_MODE})")
         
-        if EMA_FILTER_ENABLED and not ema_analysis['passed']:
-            blocking_filters.append(f"EMA ({EMA_FILTER_MODE})")
+        if config.EMA_FILTER_ENABLED and not ema_analysis['passed']:
+            blocking_filters.append(f"EMA ({config.EMA_FILTER_MODE})")
         
         if blocking_filters:
             msg += "❌ <b>FILTERS BLOCKING:</b>\n"
