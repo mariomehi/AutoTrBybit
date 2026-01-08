@@ -12437,18 +12437,18 @@ def main():
     track_patterns.load_pattern_stats()
     
     # Verifica variabili d'ambiente
-    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == '':
+    if not config.TELEGRAM_TOKEN or config.TELEGRAM_TOKEN == '':
         logging.error('❌ TELEGRAM_TOKEN non configurato!')
         logging.error('Imposta la variabile d\'ambiente TELEGRAM_TOKEN')
         return
     
-    if not BYBIT_API_KEY or not BYBIT_API_SECRET:
+    if not config.BYBIT_API_KEY or not config.BYBIT_API_SECRET:
         logging.warning('⚠️ Bybit API keys non configurate. Trading disabilitato.')
     
     # Crea applicazione con JobQueue
     try:
         from telegram.ext import JobQueue
-        application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+        application = ApplicationBuilder().token(config.TELEGRAM_TOKEN).build()
         if application.job_queue is None:
             logging.error('❌ JobQueue non disponibile!')
             logging.error('Installa: pip install "python-telegram-bot[job-queue]"')
@@ -12492,17 +12492,17 @@ def main():
     schedule_trailing_stop_job(application)
 
     # Schedula Multi-TP monitoring
-    if MULTI_TP_ENABLED and MULTI_TP_CONFIG['enabled']:
+    if config.MULTI_TP_ENABLED and config.MULTI_TP_CONFIG['enabled']:
         application.job_queue.run_repeating(
             monitor_partial_tp,
-            interval=MULTI_TP_CONFIG['check_interval'],
+            interval=config.MULTI_TP_CONFIG['check_interval'],
             first=30,  # Primo check dopo 30 secondi
             name='monitor_partial_tp'
         )
         
         logging.info(
             f'✅ Multi-TP monitoring attivato '
-            f'(check ogni {MULTI_TP_CONFIG["check_interval"]}s)'
+            f'(check ogni {config.MULTI_TP_CONFIG["check_interval"]}s)'
         )
 
     async def save_pattern_stats_job(context: ContextTypes.DEFAULT_TYPE):
@@ -12523,7 +12523,7 @@ def main():
         )
 
     # ===== NUOVO: Schedula monitoring posizioni chiuse =====
-    if BYBIT_API_KEY and BYBIT_API_SECRET:
+    if config.BYBIT_API_KEY and config.BYBIT_API_SECRET:
         application.job_queue.run_repeating(
             monitor_closed_positions,
             interval=30,  # Ogni 30 secondi
@@ -12533,13 +12533,13 @@ def main():
         logging.info('✅ Monitoring posizioni chiuse attivato (ogni 30s)')
     
     # Avvia bot
-    mode_emoji = "🎮" if TRADING_MODE == 'demo' else "⚠️💰"
+    mode_emoji = "🎮" if config.TRADING_MODE == 'demo' else "⚠️💰"
     logging.info('🚀 Bot avviato correttamente!')
-    logging.info(f'{mode_emoji} Modalità Trading: {TRADING_MODE.upper()}')
-    logging.info(f'⏱️ Timeframes supportati: {ENABLED_TFS}')
-    logging.info(f'💰 Rischio per trade: ${RISK_USD}')
+    logging.info(f'{mode_emoji} Modalità Trading: {config.TRADING_MODE.upper()}')
+    logging.info(f'⏱️ Timeframes supportati: {config.ENABLED_TFS}')
+    logging.info(f'💰 Rischio per trade: ${config.RISK_USD}')
     
-    if TRADING_MODE == 'live':
+    if config.TRADING_MODE == 'live':
         logging.warning('⚠️⚠️⚠️ ATTENZIONE: MODALITÀ LIVE - TRADING REALE! ⚠️⚠️⚠️')
     
     try:
