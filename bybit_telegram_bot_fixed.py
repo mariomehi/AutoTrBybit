@@ -4948,9 +4948,9 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     # ═══════════════════════════════════════════
     
     logging.debug(f'🔍 {symbol}: Checking patterns (no global filters)')
-    logging.debug(f'   Volume mode: {VOLUME_FILTER_MODE}')
-    logging.debug(f'   Trend mode: {TREND_FILTER_MODE}')
-    logging.debug(f'   EMA mode: {EMA_FILTER_MODE if EMA_FILTER_ENABLED else "OFF"}')
+    logging.debug(f'   Volume mode: {config.VOLUME_FILTER_MODE}')
+    logging.debug(f'   Trend mode: {config.TREND_FILTER_MODE}')
+    logging.debug(f'   EMA mode: {config.EMA_FILTER_MODE if config.EMA_FILTER_ENABLED else "OFF"}')
     
     # ═══════════════════════════════════════════
     # TIER 1: HIGH PROBABILITY PATTERNS (60-72%)
@@ -4960,7 +4960,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     allowed_pattern_side = 'Buy'
     
     # 🥇 #1: Volume Spike Breakout
-    if AVAILABLE_PATTERNS.get('volume_spike_breakout', {}).get('enabled', False):
+    if config.AVAILABLE_PATTERNS.get('volume_spike_breakout', {}).get('enabled', False):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Volume Spike Breakout'):
             pass  # Skip
         else:
@@ -4970,9 +4970,9 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 if found:
                     logging.info(f'✅ TIER 1: Volume Spike Breakout')
                     # Check trend se abilitato
-                    if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                    if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE != 'pattern_only':
                         trend_valid, trend_reason, _ = is_valid_trend_for_entry(
-                            df, mode=TREND_FILTER_MODE, symbol=symbol
+                            df, mode=config.TREND_FILTER_MODE, symbol=symbol
                         )
                         if not trend_valid:
                             logging.info(f'⚠️ Volume Spike: trend blocked - {trend_reason}')
@@ -4985,7 +4985,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in Volume Spike: {e}')
 
     # 🥇 #2: Breakout + Retest
-    if AVAILABLE_PATTERNS.get('breakout_retest', {}).get('enabled', False):
+    if config.AVAILABLE_PATTERNS.get('breakout_retest', {}).get('enabled', False):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Breakout + Retest'):
             pass  # Skip
         else:
@@ -4995,7 +4995,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 if found:
                     logging.info(f'✅ TIER 1: Breakout + Retest')
                     # Check trend (permetti consolidamenti)
-                    if TREND_FILTER_ENABLED and TREND_FILTER_MODE == 'structure':
+                    if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE == 'structure':
                         # Structure mode troppo stretto per questo pattern
                         logging.debug('⚠️ Breakout+Retest: structure mode may block consolidations')
                         logging.info(
@@ -5010,7 +5010,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in Breakout+Retest: {e}')
     
     # 🥇 #3: Triple Touch Breakout
-    if AVAILABLE_PATTERNS.get('triple_touch_breakout', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('triple_touch_breakout', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Triple Touch Breakout'):
             pass  # Skip
         else:
@@ -5033,7 +5033,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in Triple Touch: {e}')
     
     # 🥇 #4: Liquidity Sweep + Reversal
-    if AVAILABLE_PATTERNS.get('liquidity_sweep_reversal', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('liquidity_sweep_reversal', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Liquidity Sweep + Reversal'):
             pass  # Skip
         else:
@@ -5054,7 +5054,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     logging.debug(f'{symbol}: Testing TIER 2 patterns...')
     
     # 🥈 #5: S/R Bounce
-    if AVAILABLE_PATTERNS.get('sr_bounce', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('sr_bounce', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'S/R Bounce'):
             pass  # Skip
         else:
@@ -5070,7 +5070,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in S/R Bounce: {e}')
     
     # 🥈 #6: Bullish Flag Breakout
-    if AVAILABLE_PATTERNS.get('bullish_flag_breakout', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('bullish_flag_breakout', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Bullish Flag Breakout'):
             pass  # Skip
         else:
@@ -5089,7 +5089,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in Flag: {e}')
     
     # 🥈 #7: Higher Low Consolidation Breakout
-    if AVAILABLE_PATTERNS.get('higher_low_breakout', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('higher_low_breakout', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Higher Low Consolidation Breakout'):
             pass  # Skip
         else:
@@ -5108,7 +5108,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in Higher Low: {e}')
     
     # 🥈 #8: Bullish Comeback
-    if AVAILABLE_PATTERNS.get('bullish_comeback', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('bullish_comeback', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Bullish Comeback'):
             pass  # Skip
         else:
@@ -5123,7 +5123,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in Comeback: {e}')
     
     # 🥈 #9: Compression Breakout
-    if AVAILABLE_PATTERNS.get('compression_breakout', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('compression_breakout', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Compression Breakout'):
             pass  # Skip
         else:
@@ -5138,7 +5138,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in Compression: {e}')
 
         # 🌱 BUD Pattern
-    if AVAILABLE_PATTERNS.get('bud_pattern', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('bud_pattern', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'BUD Pattern'):
             pass  # Skip
         else:
@@ -5175,7 +5175,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in BUD Pattern: {e}')
     
     # 🌟 MAXI BUD Pattern
-    if AVAILABLE_PATTERNS.get('maxi_bud_pattern', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('maxi_bud_pattern', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'MAXI BUD Pattern'):
             pass  # Skip
         else:
@@ -5194,7 +5194,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in MAXI BUD: {e}')
     
     # ⭐ Morning Star Enhanced
-    if AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled', False):
+    if config.AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled', False):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Morning Star Enhanced'):
             pass  # Skip
         else:
@@ -5221,7 +5221,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in Morning Star Enhanced: {e}')
 
     # 🟢 Bullish Engulfing Enhanced
-    if AVAILABLE_PATTERNS.get('bullish_engulfing', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('bullish_engulfing', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Bullish Engulfing Enhanced'):
             pass  # Skip
         else:
@@ -5254,7 +5254,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     prev2 = df.iloc[-3]
         
     # 📍 Pin Bar Bullish Enhanced
-    if AVAILABLE_PATTERNS.get('pin_bar_bullish', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('pin_bar_bullish', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Pin Bar Bullish Enhanced'):
             pass  # Skip
         else:
@@ -5286,7 +5286,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in Pin Bar Enhanced: {e}')
     
     # ⭐ Morning Star Enhanced
-    if AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled'):
         if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Morning Star Enhanced'):
             pass  # Skip
         else:
@@ -5313,7 +5313,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in Morning Star Enhanced: {e}')
 
     # Three White Soldiers
-    if AVAILABLE_PATTERNS.get('three_white_soldiers', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('three_white_soldiers', {}).get('enabled'):
         try:
             if is_three_white_soldiers(prev2, prev, last):
                 logging.info(f'✅ TIER 3: Three White Soldiers')
@@ -5322,7 +5322,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             logging.error(f'Error in Three White Soldiers: {e}')
 
     # Hammer
-    if AVAILABLE_PATTERNS.get('hammer', {}).get('enabled', False):
+    if config.AVAILABLE_PATTERNS.get('hammer', {}).get('enabled', False):
         try:
             if is_hammer(last):
                 logging.info(f'✅ TIER 3: Hammer')
@@ -5331,7 +5331,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
             logging.error(f'Error in Hammer: {e}')
     
     # Doji
-    if AVAILABLE_PATTERNS.get('doji', {}).get('enabled', False):
+    if config.AVAILABLE_PATTERNS.get('doji', {}).get('enabled', False):
         try:
             if is_doji(last):
                 logging.info(f'✅ TIER 3: Doji')
@@ -5349,7 +5349,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     allowed_pattern_side = 'Sell'
     
     # Bearish Engulfing Enhanced
-    if AVAILABLE_PATTERNS.get('bearish_engulfing', {}).get('enabled', False):
+    if config.AVAILABLE_PATTERNS.get('bearish_engulfing', {}).get('enabled', False):
         if not should_test_pattern('Sell', allowed_pattern_side, symbol, 'Bearish Engulfing Enhanced'):
             pass  # Skip
         else:
@@ -5370,7 +5370,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                         # Ritorna SUBITO per EMA 60 breakdown
                         return (True, 'Sell', pattern_name, data)
                     # Check trend per altri tier
-                    if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                    if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE != 'pattern_only':
                         trend_valid, trend_reason, _ = is_valid_trend_for_sell(
                             df, mode=TREND_FILTER_MODE, symbol=symbol
                         )
@@ -5383,7 +5383,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in Bearish Engulfing Enhanced: {e}')
 
     # 🔴🌱 BUD Bearish Pattern
-    if AVAILABLE_PATTERNS.get('bud_bearish_pattern', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('bud_bearish_pattern', {}).get('enabled'):
         if not should_test_pattern('Sell', allowed_pattern_side, symbol, 'BUD Bearish Pattern'):
             pass  # Skip
         else:
@@ -5394,9 +5394,9 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                     logging.info(f'✅ TIER 1: BUD Bearish Pattern ({data["rest_count"]} riposo)')
                     
                     # Check trend filter per SHORT
-                    if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                    if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE != 'pattern_only':
                         trend_valid, trend_reason, _ = is_valid_trend_for_sell(
-                            df, mode=TREND_FILTER_MODE, symbol=symbol
+                            df, mode=config.TREND_FILTER_MODE, symbol=symbol
                         )
                         
                         if not trend_valid:
@@ -5409,7 +5409,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in BUD Bearish: {e}')
     
     # 🌟🔴 MAXI BUD Bearish Pattern
-    if AVAILABLE_PATTERNS.get('maxi_bud_bearish_pattern', {}).get('enabled'):
+    if config.AVAILABLE_PATTERNS.get('maxi_bud_bearish_pattern', {}).get('enabled'):
         if not should_test_pattern('Sell', allowed_pattern_side, symbol, 'MAXI BUD Bearish Pattern'):
             pass  # Skip
         else:
@@ -5419,9 +5419,9 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 if found:
                     logging.info(f'✅ TIER 1: MAXI BUD Bearish ({data["rest_count"]} riposo)')
                     
-                    if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
+                    if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE != 'pattern_only':
                         trend_valid, _, _ = is_valid_trend_for_sell(
-                            df, mode=TREND_FILTER_MODE, symbol=symbol
+                            df, mode=config.TREND_FILTER_MODE, symbol=symbol
                         )
                         
                         if trend_valid:
@@ -5432,14 +5432,14 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 logging.error(f'Error in MAXI BUD Bearish: {e}')
     
     # Shooting Star
-    if AVAILABLE_PATTERNS.get('shooting_star', {}).get('enabled', False):
+    if config.AVAILABLE_PATTERNS.get('shooting_star', {}).get('enabled', False):
         if not should_test_pattern('Sell', allowed_pattern_side, symbol, 'Shooting Star'):
             pass  # Skip
         else:
             try:
                 if is_shooting_star(last):
-                    if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
-                        trend_valid, _, _ = is_valid_trend_for_sell(df, mode=TREND_FILTER_MODE, symbol=symbol)
+                    if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE != 'pattern_only':
+                        trend_valid, _, _ = is_valid_trend_for_sell(df, mode=config.TREND_FILTER_MODE, symbol=symbol)
                         if trend_valid:
                             logging.info(f'✅ SELL: Shooting Star')
                             return (True, 'Sell', 'Shooting Star', None)
@@ -5450,7 +5450,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 pass
     
     # Pin Bar Bearish
-    if AVAILABLE_PATTERNS.get('pin_bar_bearish', {}).get('enabled', False):
+    if config.AVAILABLE_PATTERNS.get('pin_bar_bearish', {}).get('enabled', False):
         if not should_test_pattern('Sell', allowed_pattern_side, symbol, 'Pin Bar Bearish'):
             pass  # Skip
         else:
@@ -5460,8 +5460,8 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                     upper_wick = last['high'] - max(last['open'], last['close'])
                     
                     if upper_wick > lower_wick:
-                        if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
-                            trend_valid, _, _ = is_valid_trend_for_sell(df, mode=TREND_FILTER_MODE, symbol=symbol)
+                        if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE != 'pattern_only':
+                            trend_valid, _, _ = is_valid_trend_for_sell(df, mode=config.TREND_FILTER_MODE, symbol=symbol)
                             if trend_valid:
                                 logging.info(f'✅ SELL: Pin Bar Bearish')
                                 return (True, 'Sell', 'Pin Bar Bearish', None)
@@ -5472,14 +5472,14 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 pass
     
     # Evening Star
-    if AVAILABLE_PATTERNS.get('evening_star', {}).get('enabled', False):
+    if config.AVAILABLE_PATTERNS.get('evening_star', {}).get('enabled', False):
         if not should_test_pattern('Sell', allowed_pattern_side, symbol, 'Evening Star'):
             pass  # Skip
         else:
             try:
                 if is_evening_star(prev2, prev, last):
-                    if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
-                        trend_valid, _, _ = is_valid_trend_for_sell(df, mode=TREND_FILTER_MODE, symbol=symbol)
+                    if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE != 'pattern_only':
+                        trend_valid, _, _ = is_valid_trend_for_sell(df, mode=config.TREND_FILTER_MODE, symbol=symbol)
                         if trend_valid:
                             logging.info(f'✅ SELL: Evening Star')
                             return (True, 'Sell', 'Evening Star', None)
@@ -5490,14 +5490,14 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                 pass
     
     # Three Black Crows
-    if AVAILABLE_PATTERNS.get('three_black_crows', {}).get('enabled', False):
+    if config.AVAILABLE_PATTERNS.get('three_black_crows', {}).get('enabled', False):
         if not should_test_pattern('Sell', allowed_pattern_side, symbol, 'Three Black Crows'):
             pass  # Skip
         else:
             try:
                 if is_three_black_crows(prev2, prev, last):
-                    if TREND_FILTER_ENABLED and TREND_FILTER_MODE != 'pattern_only':
-                        trend_valid, _, _ = is_valid_trend_for_sell(df, mode=TREND_FILTER_MODE, symbol=symbol)
+                    if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE != 'pattern_only':
+                        trend_valid, _, _ = is_valid_trend_for_sell(df, mode=config.TREND_FILTER_MODE, symbol=symbol)
                         if trend_valid:
                             logging.info(f'✅ SELL: Three Black Crows')
                             return (True, 'Sell', 'Three Black Crows', None)
@@ -9921,7 +9921,7 @@ async def cmd_patterns(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sell_patterns = []
         both_patterns = []
         
-        for pattern_key, pattern_info in AVAILABLE_PATTERNS.items():
+        for pattern_key, pattern_info in config.AVAILABLE_PATTERNS.items():
             emoji = pattern_info['emoji']
             name = pattern_info['name']
             enabled = pattern_info['enabled']
@@ -9979,14 +9979,14 @@ async def cmd_pattern_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pattern_key = args[0].lower()
     
     with PATTERNS_LOCK:
-        if pattern_key not in AVAILABLE_PATTERNS:
+        if pattern_key not in config.AVAILABLE_PATTERNS:
             await update.message.reply_text(
                 f'❌ Pattern "{pattern_key}" non trovato.\n\n'
                 f'Usa /patterns per vedere la lista completa.'
             )
             return
         
-        pattern_info = AVAILABLE_PATTERNS[pattern_key]
+        pattern_info = config.AVAILABLE_PATTERNS[pattern_key]
         
         if pattern_info['enabled']:
             await update.message.reply_text(
@@ -9996,7 +9996,7 @@ async def cmd_pattern_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Abilita il pattern
-        AVAILABLE_PATTERNS[pattern_key]['enabled'] = True
+        config.AVAILABLE_PATTERNS[pattern_key]['enabled'] = True
         
         emoji = pattern_info['emoji']
         name = pattern_info['name']
@@ -10031,14 +10031,14 @@ async def cmd_pattern_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pattern_key = args[0].lower()
     
     with PATTERNS_LOCK:
-        if pattern_key not in AVAILABLE_PATTERNS:
+        if pattern_key not in config.AVAILABLE_PATTERNS:
             await update.message.reply_text(
                 f'❌ Pattern "{pattern_key}" non trovato.\n\n'
                 f'Usa /patterns per vedere la lista completa.'
             )
             return
         
-        pattern_info = AVAILABLE_PATTERNS[pattern_key]
+        pattern_info = config.AVAILABLE_PATTERNS[pattern_key]
         
         if not pattern_info['enabled']:
             await update.message.reply_text(
@@ -10048,7 +10048,7 @@ async def cmd_pattern_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Disabilita il pattern
-        AVAILABLE_PATTERNS[pattern_key]['enabled'] = False
+        config.AVAILABLE_PATTERNS[pattern_key]['enabled'] = False
         
         emoji = pattern_info['emoji']
         name = pattern_info['name']
@@ -10079,14 +10079,14 @@ async def cmd_pattern_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pattern_key = args[0].lower()
     
     with PATTERNS_LOCK:
-        if pattern_key not in AVAILABLE_PATTERNS:
+        if pattern_key not in config.AVAILABLE_PATTERNS:
             await update.message.reply_text(
                 f'❌ Pattern "{pattern_key}" non trovato.\n\n'
                 f'Usa /patterns per vedere la lista completa.'
             )
             return
         
-        pattern_info = AVAILABLE_PATTERNS[pattern_key]
+        pattern_info = config.AVAILABLE_PATTERNS[pattern_key]
         
         emoji = pattern_info['emoji']
         name = pattern_info['name']
