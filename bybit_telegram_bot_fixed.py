@@ -9152,7 +9152,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     risk_for_symbol = risk_base
 
-                entry_price = last_price
+                entry_price = pattern_data.get('suggested_entry')
                 # Position sizing
                 lastatr = atr(df, period=14).iloc[-1]
                 if math.isnan(lastatr):
