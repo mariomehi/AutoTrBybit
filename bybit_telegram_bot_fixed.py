@@ -152,14 +152,14 @@ def get_instrument_info_cached(session, symbol: str) -> dict:
     """
     now = datetime.now()
     
-    with INSTRUMENT_CACHE_LOCK:
+    with config.INSTRUMENT_CACHE_LOCK:
         # Controlla se esiste in cache e non è scaduta
-        if symbol in INSTRUMENT_INFO_CACHE:
-            cached_data = INSTRUMENT_INFO_CACHE[symbol]
+        if symbol in config.INSTRUMENT_INFO_CACHE:
+            cached_data = config.INSTRUMENT_INFO_CACHE[symbol]
             cache_time = cached_data['timestamp']
             
             # Se cache valida (< 24h), restituisci subito
-            if now - cache_time < timedelta(hours=CACHE_EXPIRY_HOURS):
+            if now - cache_time < timedelta(hours=config.CACHE_EXPIRY_HOURS):
                 logging.debug(f"{symbol} - Using cached instrument info (age: {(now - cache_time).seconds}s)")
                 return cached_data['info']
         
@@ -224,13 +224,13 @@ def _get_default_instrument_info() -> dict:
 
 def clear_instrument_cache(symbol: str = None):
     """Pulisce la cache (utile per debug o aggiornamenti manuali)"""
-    with INSTRUMENT_CACHE_LOCK:
+    with config.INSTRUMENT_CACHE_LOCK:
         if symbol:
-            if symbol in INSTRUMENT_INFO_CACHE:
-                del INSTRUMENT_INFO_CACHE[symbol]
+            if symbol in config.INSTRUMENT_INFO_CACHE:
+                del config.INSTRUMENT_INFO_CACHE[symbol]
                 logging.info(f"Cache cleared for {symbol}")
         else:
-            INSTRUMENT_INFO_CACHE.clear()
+            config.INSTRUMENT_INFO_CACHE.clear()
             logging.info("全 cache cleared")
 
 
@@ -471,7 +471,7 @@ def check_hybrid_trend(df: pd.DataFrame) -> tuple:
     
     LOGICA: Structure OR EMA (più permissivo)
     """
-    config = TREND_FILTER_CONFIG['hybrid']
+    config = config.TREND_FILTER_CONFIG['hybrid']
     
     structure_valid, structure_reason, structure_details = check_structure_trend(df)
     ema_valid, ema_reason, ema_details = check_ema_trend(df)
