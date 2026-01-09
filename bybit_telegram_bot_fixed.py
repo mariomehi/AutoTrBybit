@@ -2081,30 +2081,6 @@ def is_maxi_bud_pattern(df: pd.DataFrame) -> tuple:
     return is_bud_pattern(df, require_maxi=True)
 
 
-def is_hammer(candle):
-    """
-    Pattern: Hammer (bullish reversal)
-    Corpo piccolo in alto, ombra inferiore lunga (almeno 2x il corpo)
-    """
-    body = abs(candle['close'] - candle['open'])
-    total_range = candle['high'] - candle['low']
-    
-    # Evita divisione per zero
-    if total_range == 0 or body == 0:
-        return False
-    
-    lower_wick = min(candle['open'], candle['close']) - candle['low']
-    upper_wick = candle['high'] - max(candle['open'], candle['close'])
-    
-    # Ombra inferiore deve essere almeno 2x il corpo
-    # Ombra superiore deve essere piccola (max 30% del corpo)
-    # Corpo deve essere nella parte superiore (top 1/3)
-    return (lower_wick >= 2 * body and 
-            upper_wick <= body * 0.5 and
-            body > 0 and
-            body / total_range <= 0.3)
-
-
 def is_morning_star_enhanced(df):
     """
     ⭐ MORNING STAR ENHANCED (EMA-Optimized)
@@ -3606,46 +3582,6 @@ def is_pin_bar_bullish_enhanced(candle, df):
     return (True, tier, data)
 
 
-def is_doji(candle):
-    """
-    Pattern: Doji - indecisione
-    Corpo molto piccolo, apertura e chiusura quasi uguali
-    """
-    body = abs(candle['close'] - candle['open'])
-    total_range = candle['high'] - candle['low']
-    
-    if total_range == 0:
-        return False
-    
-    # Corpo deve essere meno del 5% del range totale
-    return body <= total_range * 0.05
-
-
-def is_three_white_soldiers(a, b, c):
-    """
-    Pattern: Three White Soldiers - forte trend rialzista
-    Tre candele rialziste consecutive, ognuna chiude vicino al massimo
-    """
-    # Tutte e tre devono essere rialziste
-    all_bullish = (a['close'] > a['open'] and 
-                   b['close'] > b['open'] and 
-                   c['close'] > c['open'])
-    
-    # Ogni candela chiude più in alto della precedente
-    ascending = c['close'] > b['close'] > a['close']
-    
-    # Ogni candela ha corpo significativo (almeno 60% del range)
-    a_body_ratio = abs(a['close'] - a['open']) / (a['high'] - a['low']) if (a['high'] - a['low']) > 0 else 0
-    b_body_ratio = abs(b['close'] - b['open']) / (b['high'] - b['low']) if (b['high'] - b['low']) > 0 else 0
-    c_body_ratio = abs(c['close'] - c['open']) / (c['high'] - c['low']) if (c['high'] - c['low']) > 0 else 0
-    
-    strong_bodies = (a_body_ratio >= 0.6 and 
-                     b_body_ratio >= 0.6 and 
-                     c_body_ratio >= 0.6)
-    
-    return all_bullish and ascending and strong_bodies
-
-
 def is_bullish_comeback(candles):
     """
     Pattern: Bullish Comeback - forte inversione rialzista dopo tentativo ribassista
@@ -4914,23 +4850,6 @@ def get_symbol_qty_limits(symbol: str) -> dict:
             'step': 0.01,
             'description': 'Unknown'
         }
-
-
-# ===== BACKWARD COMPATIBILITY =====
-def calculate_position_size(entry_price: float, sl_price: float, risk_usd: float) -> float:
-    """
-    Legacy function - usa la nuova versione con ATR di default
-    Per backward compatibility con il codice esistente
-    """
-    # Se non abbiamo ATR, usiamo un fattore di volatilità di default (1.0 = neutrale)
-    return calculate_optimal_position_size(
-        entry_price=entry_price,
-        sl_price=sl_price,
-        symbol='UNKNOWN',  # Non sappiamo il symbol qui
-        volatility_atr=abs(entry_price - sl_price) * 1.0,  # Approximation
-        ema_score=50,  # Neutrale
-        risk_usd=risk_usd
-    )
 
 
 def calculate_ema_stop_loss(df: pd.DataFrame, timeframe: str, entry_price: float, side: str = 'Buy'):
@@ -7295,7 +7214,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     risk_for_symbol = risk_base
                 
-                #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
                 # ===== INTELLIGENT POSITION SIZING =====
                 # Calcola ATR per volatilità
                 lastatr = atr(df, period=14).iloc[-1]
@@ -7460,7 +7378,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     risk_for_symbol = risk_base
                 
-                #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
                 # ===== INTELLIGENT POSITION SIZING =====
                 # Calcola ATR per volatilità
                 lastatr = atr(df, period=14).iloc[-1]
@@ -7791,7 +7708,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 else:
                     risk_for_symbol = risk_base
                 
-                #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
                 # ===== INTELLIGENT POSITION SIZING =====
                 # Calcola ATR per volatilità
                 lastatr = atr(df, period=14).iloc[-1]
@@ -7899,8 +7815,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     tp_price = last_close * 1.02
             
             # ===== CALCOLO POSITION SIZE E CHECK =====
-            #risk_for_symbol = SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
-            #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
             # Apply symbol-specific override se configurato
             risk_base = config.RISK_USD
             if symbol in config.SYMBOL_RISK_OVERRIDE:
@@ -7908,7 +7822,6 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
             else:
                 risk_for_symbol = risk_base
-            #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
             # ===== INTELLIGENT POSITION SIZING =====
             risk_for_symbol = config.SYMBOL_RISK_OVERRIDE.get(symbol, config.RISK_USD)
             
@@ -10070,11 +9983,6 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tests_bool['🔨 Hammer'] = False
         
         try:
-            tests_bool['💫 Shooting Star'] = is_shooting_star(last)
-        except Exception as e:
-            tests_bool['💫 Shooting Star'] = False
-        
-        try:
             tests_bool['📍 Pin Bar'] = is_pin_bar(last)
         except Exception as e:
             tests_bool['📍 Pin Bar'] = False
@@ -10090,19 +9998,9 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tests_bool['⭐ Morning Star'] = False
         
         try:
-            tests_bool['🌙 Evening Star'] = is_evening_star(prev2, prev, last)
-        except Exception as e:
-            tests_bool['🌙 Evening Star'] = False
-        
-        try:
             tests_bool['⬆️ Three White Soldiers'] = is_three_white_soldiers(prev2, prev, last)
         except Exception as e:
             tests_bool['⬆️ Three White Soldiers'] = False
-        
-        try:
-            tests_bool['⬇️ Three Black Crows'] = is_three_black_crows(prev2, prev, last)
-        except Exception as e:
-            tests_bool['⬇️ Three Black Crows'] = False
         
         # ===== STEP 6: PATTERN RILEVATO DA check_patterns() =====
         found_main = False
