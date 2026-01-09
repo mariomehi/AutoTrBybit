@@ -8190,14 +8190,14 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # ===== DYNAMIC RISK CALCULATION =====
                 # Calcola risk basato su EMA score
                 # Prima di usare risk_base
-                risk_base = RISK_USD  # default sempre definito
+                risk_base = config.RISK_USD  # default sempre definito
                 if ema_analysis and 'score' in ema_analysis:
                     ema_score = ema_analysis['score']
                     risk_base = calculate_dynamic_risk(ema_score)
                     logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
                 else:
-                    risk_base = RISK_USD
-                    logging.info(f"No EMA analysis, using base risk ${RISK_USD}")
+                    risk_base = config.RISK_USD
+                    logging.info(f"No EMA analysis, using base risk ${config.RISK_USD}")
                 
                 # Apply symbol-specific override se configurato
                 if symbol in SYMBOL_RISK_OVERRIDE:
@@ -8361,8 +8361,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     risk_base = calculate_dynamic_risk(ema_score)
                     logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
                 else:
-                    risk_base = RISK_USD
-                    logging.debug(f"No EMA analysis, using base risk ${RISK_USD}")
+                    risk_base = config.RISK_USD
+                    logging.debug(f"No EMA analysis, using base risk ${config.RISK_USD}")
                 
                 # Apply symbol-specific override se configurato
                 if symbol in config.SYMBOL_RISK_OVERRIDE:
@@ -8500,18 +8500,18 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"  TP: ${tp_price:.{price_decimals}f} (2R)\n\n"
                 
                 # ===== DYNAMIC RISK CALCULATION =====
-                risk_base = RISK_USD
+                risk_base = config.RISK_USD
                 if ema_analysis and 'score' in ema_analysis:
                     ema_score = ema_analysis['score']
                     risk_base = calculate_dynamic_risk(ema_score)
                     logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
                 else:
-                    risk_base = RISK_USD
-                    logging.debug(f"No EMA analysis, using base risk ${RISK_USD}")
+                    risk_base = config.RISK_USD
+                    logging.debug(f"No EMA analysis, using base risk ${config.RISK_USD}")
                 
                 # Apply symbol-specific override
-                if symbol in SYMBOL_RISK_OVERRIDE:
-                    risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+                if symbol in config.SYMBOL_RISK_OVERRIDE:
+                    risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
                     logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
                 else:
                     risk_for_symbol = risk_base
@@ -8692,8 +8692,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     risk_base = calculate_dynamic_risk(ema_score)
                     logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
                 else:
-                    risk_base = RISK_USD
-                    logging.debug(f"No EMA analysis, using base risk ${RISK_USD}")
+                    risk_base = config.RISK_USD
+                    logging.debug(f"No EMA analysis, using base risk ${config.RISK_USD}")
                 
                 # Apply symbol-specific override se configurato
                 if symbol in config.SYMBOL_RISK_OVERRIDE:
@@ -8821,7 +8821,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 risk_for_symbol = risk_base
             #qty = calculate_position_size(entry_price, sl_price, risk_for_symbol)
             # ===== INTELLIGENT POSITION SIZING =====
-            risk_for_symbol = config.SYMBOL_RISK_OVERRIDE.get(symbol, RISK_USD)
+            risk_for_symbol = config.SYMBOL_RISK_OVERRIDE.get(symbol, config.RISK_USD)
             
             # Calcola ATR per volatilità
             lastatr = atr(df, period=14).iloc[-1]
@@ -9142,13 +9142,13 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"  TP: ${pattern_data['suggested_tp']:.{price_decimals}f} (2R)\n\n"
                 
                 # Risk calculation
-                risk_base = RISK_USD
+                risk_base = config.RISK_USD
                 if ema_analysis and 'score' in ema_analysis:
                     ema_score = ema_analysis['score']
                     risk_base = calculate_dynamic_risk(ema_score)
                 
-                if symbol in SYMBOL_RISK_OVERRIDE:
-                    risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+                if symbol in config.SYMBOL_RISK_OVERRIDE:
+                    risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
                 else:
                     risk_for_symbol = risk_base
                 
@@ -9310,10 +9310,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 ema_score = ema_analysis['score']
                 risk_base = calculate_dynamic_risk(ema_score)
             else:
-                risk_base = RISK_USD
+                risk_base = config.RISK_USD
             
-            if symbol in SYMBOL_RISK_OVERRIDE:
-                risk_for_symbol = SYMBOL_RISK_OVERRIDE[symbol]
+            if symbol in config.SYMBOL_RISK_OVERRIDE:
+                risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
             else:
                 risk_for_symbol = risk_base
             
