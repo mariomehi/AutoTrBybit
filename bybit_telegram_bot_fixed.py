@@ -5799,17 +5799,17 @@ def calculate_ema_stop_loss(df: pd.DataFrame, timeframe: str, entry_price: float
         ema_used: quale EMA è stata usata
         ema_value: valore dell'EMA
     """
-    if not USE_EMA_STOP_LOSS:
+    if not config.USE_EMA_STOP_LOSS:
         # Fallback a ATR se disabilitato
         atr_val = atr(df, period=14).iloc[-1]
         if side == 'Buy':
-            sl_price = entry_price - atr_val * ATR_MULT_SL
+            sl_price = entry_price - atr_val * config.ATR_MULT_SL
         else:
-            sl_price = entry_price + atr_val * ATR_MULT_SL
+            sl_price = entry_price + atr_val * config.ATR_MULT_SL
         return sl_price, 'ATR', atr_val
     
     # Determina quale EMA usare per questo timeframe
-    ema_to_use = EMA_STOP_LOSS_CONFIG.get(timeframe, 'ema10')
+    ema_to_use = config.EMA_STOP_LOSS_CONFIG.get(timeframe, 'ema10')
     
     # Calcola le EMA
     ema_5 = df['close'].ewm(span=5, adjust=False).mean()
@@ -5834,7 +5834,7 @@ def calculate_ema_stop_loss(df: pd.DataFrame, timeframe: str, entry_price: float
     # Calcola stop loss con buffer
     if side == 'Buy':
         # Per posizioni BUY: SL sotto l'EMA
-        sl_price = ema_value * (1 - EMA_SL_BUFFER)
+        sl_price = ema_value * (1 - config.EMA_SL_BUFFER)
         
         # Verifica che non sia troppo lontano (max 3% dall'entry)
         max_sl_distance = entry_price * 0.03
@@ -8933,7 +8933,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"EMA 223: ${ema_vals['ema223']:.{ema_decimals}f}\n"
                 
                 # Strategy
-                if USE_EMA_STOP_LOSS:
+                if config.USE_EMA_STOP_LOSS:
                     caption += f"\n🎯 <b>EMA Stop:</b> Exit se prezzo rompe {ema_used}"
                 
                 # Info filtri applicati
@@ -9275,7 +9275,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             entry_price = last_close
             
             # Calcola SL (sopra il prezzo per SHORT)
-            if USE_EMA_STOP_LOSS:
+            if config.USE_EMA_STOP_LOSS:
                 # SL sopra EMA per SHORT
                 ema_10 = df['close'].ewm(span=10, adjust=False).mean()
                 ema_60 = df['close'].ewm(span=60, adjust=False).mean()
@@ -9373,7 +9373,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             # Trading params
             caption += f"💵 Entry: <b>${entry_price:.{price_decimals}f}</b>\n"
             
-            if USE_EMA_STOP_LOSS:
+            if config.USE_EMA_STOP_LOSS:
                 caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
                 caption += f"   sopra {ema_used}"
                 if isinstance(ema_value, (int, float)) and ema_value > 0:
@@ -9407,7 +9407,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"EMA 60: ${ema_vals['ema60']:.{ema_decimals}f}\n"
                     caption += f"EMA 223: ${ema_vals['ema223']:.{ema_decimals}f}\n"
                 
-                if USE_EMA_STOP_LOSS:
+                if config.USE_EMA_STOP_LOSS:
                     caption += f"\n🎯 <b>EMA Stop:</b> Exit se prezzo rompe {ema_used}"
                 
                 # Info filtri
@@ -10122,19 +10122,19 @@ async def cmd_ema_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if len(args) == 0:
         # Mostra stato attuale
-        status_emoji = "✅" if EMA_FILTER_ENABLED else "❌"
-        sl_emoji = "✅" if USE_EMA_STOP_LOSS else "❌"
+        status_emoji = "✅" if config.EMA_FILTER_ENABLED else "❌"
+        sl_emoji = "✅" if config.USE_EMA_STOP_LOSS else "❌"
         
         msg = f"📈 <b>Filtro EMA Status</b>\n\n"
         msg += f"🔘 Filtro Abilitato: {status_emoji}\n"
-        msg += f"🎯 Modalità: <b>{EMA_FILTER_MODE.upper()}</b>\n"
+        msg += f"🎯 Modalità: <b>{config.EMA_FILTER_MODE.upper()}</b>\n"
         msg += f"🛑 EMA Stop Loss: {sl_emoji}\n\n"
         
-        if USE_EMA_STOP_LOSS:
+        if config.USE_EMA_STOP_LOSS:
             msg += "<b>📍 EMA Stop Loss Config:</b>\n"
-            for tf, ema in EMA_STOP_LOSS_CONFIG.items():
+            for tf, ema in config.EMA_STOP_LOSS_CONFIG.items():
                 msg += f"• {tf}: {ema.upper()}\n"
-            msg += f"\nBuffer: {EMA_SL_BUFFER*100}% sotto EMA\n\n"
+            msg += f"\nBuffer: {config.EMA_SL_BUFFER*100}% sotto EMA\n\n"
         
         msg += "<b>Modalità Filtro:</b>\n"
         msg += "• <code>strict</code> - Solo score ≥ 60 (GOOD/GOLD)\n"
@@ -10324,18 +10324,18 @@ async def cmd_ema_sl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if len(args) == 0:
         # Mostra info
-        status_emoji = "✅" if USE_EMA_STOP_LOSS else "❌"
+        status_emoji = "✅" if config.USE_EMA_STOP_LOSS else "❌"
         
         msg = f"🛑 <b>EMA Stop Loss System</b>\n\n"
-        msg += f"Status: {status_emoji} {'Attivo' if USE_EMA_STOP_LOSS else 'Disattivo'}\n\n"
+        msg += f"Status: {status_emoji} {'Attivo' if config.USE_EMA_STOP_LOSS else 'Disattivo'}\n\n"
         
-        if USE_EMA_STOP_LOSS:
+        if config.USE_EMA_STOP_LOSS:
             msg += "<b>📍 Configurazione per Timeframe:</b>\n"
-            for tf, ema in EMA_STOP_LOSS_CONFIG.items():
+            for tf, ema in config.EMA_STOP_LOSS_CONFIG.items():
                 msg += f"• {tf} → {ema.upper()}\n"
             
-            msg += f"\n<b>Buffer Safety:</b> {EMA_SL_BUFFER*100}%\n"
-            msg += f"(SL piazzato {EMA_SL_BUFFER*100}% sotto l'EMA)\n\n"
+            msg += f"\n<b>Buffer Safety:</b> {config.EMA_SL_BUFFER*100}%\n"
+            msg += f"(SL piazzato {config.EMA_SL_BUFFER*100}% sotto l'EMA)\n\n"
             
             msg += "<b>💡 Come Funziona:</b>\n"
             msg += "1. Pattern rilevato → Entry\n"
@@ -10375,14 +10375,14 @@ async def cmd_ema_sl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = args[0].lower()
     
     if action == 'on':
-        USE_EMA_STOP_LOSS = True
+        config.USE_EMA_STOP_LOSS = True
         msg = "✅ <b>EMA Stop Loss Attivato!</b>\n\n"
         msg += "Gli stop loss saranno ora posizionati sotto le EMA chiave:\n\n"
         
-        for tf, ema in EMA_STOP_LOSS_CONFIG.items():
+        for tf, ema in config.EMA_STOP_LOSS_CONFIG.items():
             msg += f"• {tf} → {ema.upper()}\n"
         
-        msg += f"\nBuffer: {EMA_SL_BUFFER*100}% sotto EMA\n\n"
+        msg += f"\nBuffer: {config.EMA_SL_BUFFER*100}% sotto EMA\n\n"
         msg += "💡 <b>Vantaggi:</b>\n"
         msg += "✅ Stop dinamico che segue il trend\n"
         msg += "✅ Protezione automatica profitti\n"
@@ -10392,7 +10392,7 @@ async def cmd_ema_sl(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += "l'EMA significativa, esci manualmente."
         
     elif action == 'off':
-        USE_EMA_STOP_LOSS = False
+        config.USE_EMA_STOP_LOSS = False
         msg = "❌ <b>EMA Stop Loss Disattivato</b>\n\n"
         msg += "Stop loss calcolati con ATR tradizionale:\n"
         msg += "SL = Entry ± (ATR × 1.5)\n\n"
