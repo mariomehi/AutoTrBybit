@@ -603,9 +603,9 @@ def check_pattern_specific_trend(df: pd.DataFrame, pattern_name: str) -> tuple:
     
     Usa requirements custom per ogni pattern
     """
-    if pattern_name not in PATTERN_TREND_REQUIREMENTS:
+    if pattern_name not in config.PATTERN_TREND_REQUIREMENTS:
         # Default: usa check globale
-        return is_valid_trend_for_entry(df, mode=TREND_FILTER_MODE)
+        return is_valid_trend_for_entry(df, mode=config.TREND_FILTER_MODE)
     
     requirements = PATTERN_TREND_REQUIREMENTS[pattern_name]
     
@@ -5372,7 +5372,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
                     # Check trend per altri tier
                     if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE != 'pattern_only':
                         trend_valid, trend_reason, _ = is_valid_trend_for_sell(
-                            df, mode=TREND_FILTER_MODE, symbol=symbol
+                            df, mode=config.TREND_FILTER_MODE, symbol=symbol
                         )
                         
                         if not trend_valid:
@@ -8943,7 +8943,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"Trend: {config.TREND_FILTER_MODE.upper()}"
                     if TREND_FILTER_MODE == 'ema_based':
                         caption += f" (Price > EMA 60)\n"
-                    elif TREND_FILTER_MODE == 'structure':
+                    elif config.TREND_FILTER_MODE == 'structure':
                         caption += f" (HH+HL)\n"
                     else:
                         caption += f"\n"
@@ -9151,7 +9151,8 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
                 else:
                     risk_for_symbol = risk_base
-                
+
+                entry_price = last_price
                 # Position sizing
                 lastatr = atr(df, period=14).iloc[-1]
                 if math.isnan(lastatr):
@@ -11616,8 +11617,8 @@ async def cmd_trend_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not args:
         # Mostra status
         msg = "📈 <b>Trend Filter Status</b>\n\n"
-        msg += f"Enabled: {'✅' if TREND_FILTER_ENABLED else '❌'}\n"
-        msg += f"Mode: <b>{TREND_FILTER_MODE.upper()}</b>\n\n"
+        msg += f"Enabled: {'✅' if config.TREND_FILTER_ENABLED else '❌'}\n"
+        msg += f"Mode: <b>{config.TREND_FILTER_MODE.upper()}</b>\n\n"
         
         msg += "<b>Available Modes:</b>\n"
         msg += "• <code>structure</code> - HH+HL (originale, stretto)\n"
@@ -11626,16 +11627,16 @@ async def cmd_trend_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += "• <code>pattern_only</code> - Ogni pattern decide\n\n"
         
         msg += "<b>Current Mode Details:</b>\n"
-        if TREND_FILTER_MODE == 'ema_based':
+        if config.TREND_FILTER_MODE == 'ema_based':
             msg += "✅ Permette consolidamenti sopra EMA 60\n"
             msg += "✅ Permette pullback sopra EMA 60\n"
             msg += "✅ Rileva breakout early\n"
             msg += "📊 Win rate mantiene: ~60-70%\n"
-        elif TREND_FILTER_MODE == 'structure':
+        elif config.TREND_FILTER_MODE == 'structure':
             msg += "⚠️ Blocca consolidamenti\n"
             msg += "⚠️ Blocca pullback\n"
             msg += "📊 Perde ~40-60% segnali\n"
-        elif TREND_FILTER_MODE == 'hybrid':
+        elif config.TREND_FILTER_MODE == 'hybrid':
             msg += "✅ Permissivo (OR logic)\n"
             msg += "📊 Balance qualità/quantità\n"
         else:
