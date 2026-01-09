@@ -8805,7 +8805,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 # Calcola TP
                 if not math.isnan(last_atr) and last_atr > 0:
-                    tp_price = last_close + last_atr * ATR_MULT_TP
+                    tp_price = last_close + last_atr * config.ATR_MULT_TP
                 else:
                     tp_price = last_close * 1.02
             
@@ -9302,7 +9302,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             
             # TP (sotto il prezzo per SHORT)
             if not math.isnan(last_atr) and last_atr > 0:
-                tp_price = last_close - last_atr * ATR_MULT_TP
+                tp_price = last_close - last_atr * config.ATR_MULT_TP
             else:
                 tp_price = last_close * 0.98
             
