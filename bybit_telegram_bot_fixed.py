@@ -8030,7 +8030,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 if config.TREND_FILTER_ENABLED:
                     caption += f"Trend: {config.TREND_FILTER_MODE.upper()}"
-                    if TREND_FILTER_MODE == 'ema_based':
+                    if config.TREND_FILTER_MODE == 'ema_based':
                         caption += f" (Price > EMA 60)\n"
                     elif config.TREND_FILTER_MODE == 'structure':
                         caption += f" (HH+HL)\n"
