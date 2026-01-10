@@ -5553,8 +5553,8 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
             
             # ===== INIZIALIZZA TP TRACKING =====
             if config.MULTI_TP_ENABLED and tp_levels:
-                with TP_TRACKING_LOCK:
-                    TP_TRACKING[symbol] = {
+                with config.TP_TRACKING_LOCK:
+                    config.TP_TRACKING[symbol] = {
                         'tp1_hit': False,
                         'tp2_hit': False,
                         'tp3_hit': False,
@@ -6475,10 +6475,10 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
                                 )
                         
                         # Aggiorna TP tracking
-                        with TP_TRACKING_LOCK:
-                            if symbol in TP_TRACKING:
-                                TP_TRACKING[symbol][f'tp{i}_hit'] = True
-                                TP_TRACKING[symbol][f'tp{i}_qty_closed'] = qty_to_close
+                        with config.TP_TRACKING_LOCK:
+                            if symbol in config.TP_TRACKING:
+                                config.TP_TRACKING[symbol][f'tp{i}_hit'] = True
+                                config.TP_TRACKING[symbol][f'tp{i}_qty_closed'] = qty_to_close
                         
                         # ===== ATTIVA TRAILING DOPO TP1 =====
                         if i == 1 and config.MULTI_TP_CONFIG.get('activate_trailing_after_tp1', True):
@@ -7171,7 +7171,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 sl_price = pattern_data['suggested_sl']
                 tp_price = pattern_data['suggested_tp']
                 ema_used = 'Engulfing Enhanced'
-                ema_value = pattern_data['ema60']  # Per riferimento
+                ema_value = pattern_data.get('ema60', pattern_data.get('ema10', pattern_data.get('support_level', 0)))
                 
                 # Caption speciale per Engulfing
                 tier = pattern_data['tier']
@@ -7302,7 +7302,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     return  # oppure continue / skip ordine
                      
                 ema_used = 'Pin Bar Enhanced'
-                ema_value = pattern_data['ema60']
+                ema_value = pattern_data.get('ema60', pattern_data.get('ema10', pattern_data.get('support_level', 0)))
                 
                 tier = pattern_data['tier']
                 score = pattern_data['quality_score']
@@ -7660,7 +7660,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 sl_price = pattern_data['suggested_sl']
                 tp_price = pattern_data['suggested_tp']
                 ema_used = 'Morning Star Enhanced'
-                ema_value = pattern_data['ema60']
+                ema_value = pattern_data.get('ema60', pattern_data.get('ema10', pattern_data.get('support_level', 0)))
                 
                 tier = pattern_data['tier']
                 score = pattern_data['quality_score']
