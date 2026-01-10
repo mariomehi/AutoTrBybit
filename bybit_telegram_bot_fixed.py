@@ -9456,10 +9456,10 @@ async def cmd_analizza(update: Update, context: ContextTypes.DEFAULT_TYPE):
     timeframe = args[1].lower()
     autotrade = (len(args) > 2 and args[2].lower() in ['yes', 'true', '1', 'si', 'sì'])
 
-    if timeframe not in ENABLED_TFS:
+    if timeframe not in config.ENABLED_TFS:
         await update.message.reply_text(
             f'❌ Timeframe non supportato.\n'
-            f'Timeframes disponibili: {", ".join(ENABLED_TFS)}'
+            f'Timeframes disponibili: {", ".join(config.ENABLED_TFS)}'
         )
         return
 
@@ -9902,10 +9902,10 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = args[0].upper()
     timeframe = args[1].lower()
     
-    if timeframe not in ENABLED_TFS:
+    if timeframe not in config.ENABLED_TFS:
         await update.message.reply_text(
             f'❌ Timeframe non supportato.\n'
-            f'Disponibili: {", ".join(ENABLED_TFS)}'
+            f'Disponibili: {", ".join(config.ENABLED_TFS)}'
         )
         return
     
