@@ -8465,13 +8465,13 @@ async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     
     # Rimuovi dalle notifiche complete (torna a default = solo pattern)
-    with FULL_NOTIFICATIONS_LOCK:
-        if chat_id in FULL_NOTIFICATIONS and key in FULL_NOTIFICATIONS[chat_id]:
-            FULL_NOTIFICATIONS[chat_id].remove(key)
+    with config.FULL_NOTIFICATIONS_LOCK:
+        if chat_id in config.FULL_NOTIFICATIONS and key in config.FULL_NOTIFICATIONS[chat_id]:
+            config.FULL_NOTIFICATIONS[chat_id].remove(key)
             
             # Pulisci se il set è vuoto
-            if not FULL_NOTIFICATIONS[chat_id]:
-                del FULL_NOTIFICATIONS[chat_id]
+            if not config.FULL_NOTIFICATIONS[chat_id]:
+                del config.FULL_NOTIFICATIONS[chat_id]
             
             await update.message.reply_text(
                 f'🔕 <b>Modalità default attivata per {symbol} {timeframe}</b>\n\n'
@@ -8522,16 +8522,16 @@ async def cmd_abilita(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     
     # Aggiungi alle notifiche complete
-    with FULL_NOTIFICATIONS_LOCK:
-        if chat_id not in FULL_NOTIFICATIONS:
-            FULL_NOTIFICATIONS[chat_id] = set()
+    with config.FULL_NOTIFICATIONS_LOCK:
+        if chat_id not in config.FULL_NOTIFICATIONS:
+            config.FULL_NOTIFICATIONS[chat_id] = set()
         
-        if key in FULL_NOTIFICATIONS[chat_id]:
+        if key in config.FULL_NOTIFICATIONS[chat_id]:
             await update.message.reply_text(
                 f'ℹ️ Le notifiche complete per {symbol} {timeframe} sono già attive.'
             )
         else:
-            FULL_NOTIFICATIONS[chat_id].add(key)
+            config.FULL_NOTIFICATIONS[chat_id].add(key)
             
             await update.message.reply_text(
                 f'🔔 <b>Notifiche complete attivate per {symbol} {timeframe}</b>\n\n'
@@ -8684,7 +8684,7 @@ async def cmd_patterns(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Comando /patterns
     Mostra tutti i pattern disponibili e il loro stato (abilitato/disabilitato)
     """
-    with PATTERNS_LOCK:
+    with config.PATTERNS_LOCK:
         # Separa pattern per tipo
         buy_patterns = []
         sell_patterns = []
@@ -8745,7 +8745,7 @@ async def cmd_pattern_on(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     pattern_key = args[0].lower()
     
-    with PATTERNS_LOCK:
+    with config.PATTERNS_LOCK:
         if pattern_key not in config.AVAILABLE_PATTERNS:
             await update.message.reply_text(
                 f'❌ Pattern "{pattern_key}" non trovato.\n\n'
@@ -8797,7 +8797,7 @@ async def cmd_pattern_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     pattern_key = args[0].lower()
     
-    with PATTERNS_LOCK:
+    with config.PATTERNS_LOCK:
         if pattern_key not in config.AVAILABLE_PATTERNS:
             await update.message.reply_text(
                 f'❌ Pattern "{pattern_key}" non trovato.\n\n'
@@ -8845,7 +8845,7 @@ async def cmd_pattern_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     pattern_key = args[0].lower()
     
-    with PATTERNS_LOCK:
+    with config.PATTERNS_LOCK:
         if pattern_key not in config.AVAILABLE_PATTERNS:
             await update.message.reply_text(
                 f'❌ Pattern "{pattern_key}" non trovato.\n\n'
