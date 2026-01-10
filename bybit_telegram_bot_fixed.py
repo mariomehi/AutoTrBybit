@@ -5261,8 +5261,8 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
     # Determina tipo ordine
     order_type = 'Market'  # Default
 
-    if pattern_name and pattern_name in PATTERN_ORDER_TYPE:
-        order_type = 'Market' if PATTERN_ORDER_TYPE[pattern_name] == 'market' else 'Limit'
+    if pattern_name and pattern_name in config.PATTERN_ORDER_TYPE:
+        order_type = 'Market' if config.PATTERN_ORDER_TYPE[pattern_name] == 'market' else 'Limit'
 
     logging.info(f'📤 Placing {order_type} order: {symbol} {side} qty={qty:.4f} Entry: ${entry_price:.4f} SL: ${sl_price:.4f} TP: ${tp_price:.4f} Mode: {config.TRADING_MODE}')
     
