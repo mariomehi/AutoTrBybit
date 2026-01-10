@@ -15,6 +15,8 @@ from datetime import datetime, timezone, timedelta
 import threading
 import io
 import tempfile
+from functools import lru_cache
+from typing import Tuple
 
 # IMPORTANTE: Configura matplotlib prima di altri import
 import matplotlib
@@ -41,6 +43,11 @@ import config
 
 # Import pattern statistics tracker
 import track_patterns
+
+# Cache globale per klines
+_KLINES_CACHE = {}
+_KLINES_CACHE_LOCK = threading.Lock()
+_KLINES_CACHE_TTL = 60  # Secondi (1 minuto)
 
 def is_good_trading_time_utc(now=None) -> tuple[bool, str]:
     """
@@ -142,6 +149,64 @@ def bybit_get_klines(symbol: str, interval: str, limit: int = 200):
         logging.error(f'Errore nel parsing klines: {e}')
         return pd.DataFrame()
 
+def _get_cache_key(symbol: str, interval: str, limit: int) -> str:
+    """Genera chiave cache"""
+    # Bucket temporale: refresh ogni 60 secondi
+    timestamp_bucket = int(time.time() // _KLINES_CACHE_TTL)
+    return f"{symbol}:{interval}:{limit}:{timestamp_bucket}"
+
+def bybit_get_klines_cached(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
+    """
+    Versione CACHED di bybit_get_klines
+    
+    Cache Strategy:
+    - Invalida automaticamente ogni 60s (timestamp bucket)
+    - Thread-safe con lock
+    - Max 100 entries in memoria
+    
+    Usage:
+        df = bybit_get_klines_cached('BTCUSDT', '15m', 200)
+    """
+    cache_key = _get_cache_key(symbol, interval, limit)
+    
+    with _KLINES_CACHE_LOCK:
+        # Check cache hit
+        if cache_key in _KLINES_CACHE:
+            cached_df, cached_time = _KLINES_CACHE[cache_key]
+            age = time.time() - cached_time
+            
+            logging.debug(
+                f"📦 Cache HIT: {symbol} {interval} "
+                f"(age: {age:.1f}s, entries: {len(_KLINES_CACHE)})"
+            )
+            return cached_df.copy()  # Return copy per safety
+        
+        # Cache miss - cleanup old entries se troppi
+        if len(_KLINES_CACHE) > 100:
+            # Rimuovi entry più vecchie
+            sorted_keys = sorted(
+                _KLINES_CACHE.keys(),
+                key=lambda k: _KLINES_CACHE[k][1]  # Sort by timestamp
+            )
+            for old_key in sorted_keys[:50]:  # Rimuovi 50 più vecchie
+                del _KLINES_CACHE[old_key]
+            
+            logging.debug(f"🧹 Cache cleanup: removed 50 old entries")
+    
+    # Download dati (FUORI dal lock per non bloccare altre richieste)
+    logging.debug(f"📡 Cache MISS: {symbol} {interval} - downloading...")
+    df = bybit_get_klines(symbol, interval, limit)
+    
+    if not df.empty:
+        # Salva in cache
+        with _KLINES_CACHE_LOCK:
+            _KLINES_CACHE[cache_key] = (df, time.time())
+            logging.debug(
+                f"💾 Cached: {symbol} {interval} "
+                f"({len(df)} candles, cache size: {len(_KLINES_CACHE)})"
+            )
+    
+    return df
 
 def get_instrument_info_cached(session, symbol: str) -> dict:
     """
@@ -4955,7 +5020,7 @@ def check_higher_timeframe_resistance(symbol, current_tf, current_price):
     htf = htf_map[current_tf]
     
     # Scarica dati HTF
-    df_htf = bybit_get_klines(symbol, htf, limit=100)
+    df_htf = bybit_get_klines_cached(symbol, htf, limit=100)
     
     if df_htf.empty:
         logging.warning(f'⚠️ Nessun dato HTF per {symbol} {htf}')
@@ -5152,7 +5217,7 @@ def check_compression_htf_resistance(symbol: str, current_tf: str, current_price
     
     try:
         # Scarica dati HTF
-        df_htf = bybit_get_klines(symbol, htf, limit=100)
+        df_htf = bybit_get_klines_cached(symbol, htf, limit=100)
         
         if df_htf.empty:
             logging.warning(f'⚠️ Nessun dato HTF per {symbol} {htf}')
@@ -5726,7 +5791,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
                     continue
             
             # Verifica dati disponibili
-            test_df = bybit_get_klines(symbol, timeframe, limit=10)
+            test_df = bybit_get_klines_cached(symbol, timeframe, limit=10)
             if test_df.empty:
                 logging.warning(f'⚠️ Skip {symbol}: nessun dato disponibile')
                 continue
@@ -6032,7 +6097,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             ema_tf = TRAILING_EMA_TIMEFRAME.get(timeframe_entry, '5m')
             
             # Scarica dati per calcolare EMA 10
-            df = bybit_get_klines(symbol, ema_tf, limit=20)
+            df = bybit_get_klines_cached(symbol, ema_tf, limit=20)
             if df.empty:
                 logging.warning(f"{symbol}: No data for trailing EMA calculation")
                 continue
@@ -6315,7 +6380,7 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
             chat_id = pos_info.get('chat_id')
             
             # Scarica prezzo corrente
-            df = bybit_get_klines(symbol, timeframe, limit=5)
+            df = bybit_get_klines_cached(symbol, timeframe, limit=5)
             if df.empty:
                 continue
             
@@ -6660,7 +6725,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # ===== STEP 1: OTTIENI DATI =====
-        df = bybit_get_klines(symbol, timeframe, limit=200)
+        df = bybit_get_klines_cached(symbol, timeframe, limit=200)
         if df.empty:
             logging.warning(f'Nessun dato per {symbol} {timeframe}')
             if full_mode:
@@ -7404,6 +7469,35 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"✅ SOLID SETUP:\n"
                     caption += f"• EMA 10 support\n"
                     caption += f"• Swing trade zone\n"
+
+
+                # ✅ AGGIUNGI PRIMA:
+                autotrade_enabled = job_ctx.get('autotrade', False)
+                with config.POSITIONS_LOCK:
+                    position_exists = symbol in config.ACTIVE_POSITIONS
+                
+                logging.info(
+                    f"🤖 ORDER CHECK: {symbol} - "
+                    f"autotrade={autotrade_enabled}, "
+                    f"qty={qty:.4f}, "
+                    f"position_exists={position_exists}, "
+                    f"time_filter={'ON' if config.MARKET_TIME_FILTER_ENABLED else 'OFF'}"
+                )
+                
+                if autotrade_enabled and qty > 0 and not position_exists:
+                    logging.info(f"🚀 PLACING ORDER: {symbol}")
+                    order_res = await place_bybit_order(...)
+                else:
+                    # Log perché NON viene piazzato
+                    reasons = []
+                    if not autotrade_enabled:
+                        reasons.append("Autotrade OFF")
+                    if qty <= 0:
+                        reasons.append(f"Qty invalid ({qty})")
+                    if position_exists:
+                        reasons.append("Position exists")
+                    
+                    logging.warning(f"🚫 ORDER SKIPPED: {symbol} - Reasons: {', '.join(reasons)}")
                 
                 # Autotrade
                 if job_ctx.get('autotrade') and qty > 0 and not position_exists:
@@ -7535,6 +7629,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 if position_exists:
                     caption += "\n\n🚫 <b>Posizione già aperta</b>"
                     caption += f"\nOrdine NON eseguito per {symbol}"
+
+                autotrade_enabled = job_ctx.get('autotrade', False)
+                logging.info(f"🤖 {symbol}: Autotrade={'ON' if autotrade_enabled else 'OFF'}, qty={qty}, position_exists={position_exists}")
                 
                 # Autotrade
                 if job_ctx.get('autotrade') and qty > 0 and not position_exists:
@@ -7736,6 +7833,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     caption += f"• EMA 10 support\n"
                     caption += f"• Good volume confirmation\n"
                     caption += f"• Swing trade zone\n"
+
+                autotrade_enabled = job_ctx.get('autotrade', False)
+                logging.info(f"🤖 {symbol}: Autotrade={'ON' if autotrade_enabled else 'OFF'}, qty={qty}, position_exists={position_exists}")     
                 
                 # Autotrade
                 if job_ctx.get('autotrade') and qty > 0 and not position_exists:
@@ -7816,14 +7916,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             if lastatr > 0:
                 volatility_pct = (lastatr / entry_price) * 100
                 caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
-
             
-            position_exists = symbol in config.ACTIVE_POSITIONS
-            if position_exists:
-                logging.warning(f'🚫 Position already exists for {symbol}, skip order')
-            else:
-                logging.info(f'✅ No position for {symbol}, ready to place order')
-
+            #position_exists = symbol in config.ACTIVE_POSITIONS
+            #if position_exists:
+            #    logging.warning(f'🚫 Position already exists for {symbol}, skip order')
+            #else:
+            #    logging.info(f'✅ No position for {symbol}, ready to place order')
             
             # ===== COSTRUISCI CAPTION =====
             quality_emoji_map = {
@@ -7939,6 +8037,9 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             if position_exists:
                 caption += "\n\n🚫 <b>Posizione già aperta</b>"
                 caption += f"\nOrdine NON eseguito per {symbol}"
+
+            autotrade_enabled = job_ctx.get('autotrade', False)
+            logging.info(f"🤖 {symbol}: Autotrade={'ON' if autotrade_enabled else 'OFF'}, qty={qty}, position_exists={position_exists}")
             
             # Autotrade
             if job_ctx.get('autotrade') and qty > 0 and not position_exists:
@@ -9363,7 +9464,7 @@ async def cmd_analizza(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Verifica che il symbol esista
-    test_df = bybit_get_klines(symbol, timeframe, limit=10)
+    test_df = bybit_get_klines_cached(symbol, timeframe, limit=10)
     if test_df.empty:
         await update.message.reply_text(
             f'❌ Impossibile ottenere dati per {symbol}.\n'
@@ -9520,7 +9621,7 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 # Scarica dati per calcolare EMA 10
                 ema_tf = config.TRAILING_EMA_TIMEFRAME.get(timeframe, '5m')
-                df = bybit_get_klines(symbol, ema_tf, limit=20)
+                df = bybit_get_klines_cached(symbol, ema_tf, limit=20)
                 
                 if df.empty:
                     errors.append(f"{symbol}: No data")
@@ -9626,7 +9727,7 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         trailing_active = pos.get('trailing_active', False)
         
         # Scarica prezzo corrente
-        df = bybit_get_klines(symbol, timeframe_entry, limit=5)
+        df = bybit_get_klines_cached(symbol, timeframe_entry, limit=5)
         current_price = df['close'].iloc[-1] if not df.empty else entry
         profit_pct = ((current_price - entry) / entry) * 100
         
@@ -9812,7 +9913,7 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # ===== STEP 1: OTTIENI DATI =====
-        df = bybit_get_klines(symbol, timeframe, limit=200)
+        df = bybit_get_klines_cached(symbol, timeframe, limit=200)
         if df.empty:
             await update.message.reply_text(f'❌ Nessun dato per {symbol}')
             return
@@ -10304,7 +10405,7 @@ async def cmd_debug_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # Ottieni dati
-        df = bybit_get_klines(symbol, timeframe, limit=200)
+        df = bybit_get_klines_cached(symbol, timeframe, limit=200)
         if df.empty:
             await update.message.reply_text(f'❌ Nessun dato per {symbol}')
             return
@@ -10500,7 +10601,7 @@ async def cmd_force_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f'🔍 Force testing NO FILTERS {symbol} {timeframe}...')
     
     try:
-        df = bybit_get_klines(symbol, timeframe, limit=200)
+        df = bybit_get_klines_cached(symbol, timeframe, limit=200)
         if df.empty:
             await update.message.reply_text(f'❌ Nessun dato')
             return
@@ -10909,13 +11010,45 @@ async def cmd_multitp(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
 
+async def cmd_cache_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mostra statistiche cache klines"""
+    with _KLINES_CACHE_LOCK:
+        cache_size = len(_KLINES_CACHE)
+        
+        if cache_size == 0:
+            await update.message.reply_text("📦 Cache vuota")
+            return
+        
+        # Calcola metriche
+        total_candles = sum(len(df) for df, _ in _KLINES_CACHE.values())
+        oldest_entry = min(ts for _, ts in _KLINES_CACHE.values())
+        age_oldest = time.time() - oldest_entry
+        
+        # Raggruppa per symbol
+        symbols = {}
+        for key in _KLINES_CACHE.keys():
+            symbol = key.split(':')[0]
+            symbols[symbol] = symbols.get(symbol, 0) + 1
+        
+        msg = f"📦 <b>Klines Cache Stats</b>\n\n"
+        msg += f"Entries: {cache_size}/100\n"
+        msg += f"Total Candles: {total_candles}\n"
+        msg += f"Oldest Entry: {age_oldest:.1f}s ago\n"
+        msg += f"TTL: {_KLINES_CACHE_TTL}s\n\n"
+        msg += f"<b>Symbols Cached:</b>\n"
+        
+        for sym, count in sorted(symbols.items(), key=lambda x: -x[1])[:10]:
+            msg += f"• {sym}: {count} entries\n"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+
 # ----------------------------- MAIN -----------------------------
 
 def main():
     """Funzione principale"""
     # Setup logging
     logging.basicConfig(
-        level=logging.DEBUG,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
+        level=logging.INFO,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
@@ -10980,6 +11113,7 @@ def main():
     application.add_handler(CommandHandler('export_pattern_stats', track_patterns.cmd_export_pattern_stats))
     application.add_handler(CommandHandler('testcache', cmd_testcache))
     application.add_handler(CommandHandler('multitp', cmd_multitp))
+    application.add_handler(CommandHandler('cache_stats', cmd_cache_stats))
 
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
