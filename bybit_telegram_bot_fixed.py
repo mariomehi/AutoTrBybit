@@ -265,18 +265,44 @@ def get_instrument_info_cached(session, symbol: str) -> dict:
                     return info
                 else:
                     logging.warning(f"{symbol} - No instrument data found, using defaults")
-                    return _get_default_instrument_info()
+                    return _get_default_instrument_info(symbol)
             else:
                 logging.error(f"Bybit API error: {instrument_info.get('retMsg')}")
-                return _get_default_instrument_info()
+                return _get_default_instrument_info(symbol)
                 
         except Exception as e:
             logging.error(f"Error fetching instrument info for {symbol}: {e}")
-            return _get_default_instrument_info()
+            return _get_default_instrument_info(symbol)
 
 
-def _get_default_instrument_info() -> dict:
-    """Fallback con valori di default sicuri"""
+def _get_default_instrument_info(symbol: str = None) -> dict:
+    """Fallback con valori di default sicuri per symbol specifico"""
+    
+    # Defaults specifici per alcuni symbol problematici
+    if symbol:
+        # Crypto a basso prezzo (es. SHIB, PEPE)
+        if 'SHIB' in symbol or 'PEPE' in symbol:
+            return {
+                'min_order_qty': 100.0,  # Min 100 tokens
+                'max_order_qty': 10000000,
+                'qty_step': 100.0,
+                'tick_size': 0.0000001,
+                'qty_decimals': 0,  # Numeri interi
+                'price_decimals': 7
+            }
+        
+        # Crypto mid-cap (es. POL, RIVER, RENDER)
+        if symbol in ['POLUSDT', 'RIVERUSDT', 'RENDERUSDT']:
+            return {
+                'min_order_qty': 1.0,
+                'max_order_qty': 100000,
+                'qty_step': 1.0,  # Step 1.0 per questi symbol
+                'tick_size': 0.0001,
+                'qty_decimals': 1,
+                'price_decimals': 4
+            }
+    
+    # Default generico
     return {
         'min_order_qty': 0.001,
         'max_order_qty': 1000000,
