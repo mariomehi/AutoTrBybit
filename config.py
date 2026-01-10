@@ -212,200 +212,6 @@ AUTO_DISCOVERY_CONFIG = {
 AUTO_DISCOVERED_SYMBOLS = set()
 AUTO_DISCOVERED_LOCK = threading.Lock()
 
-# Pattern Management System
-AVAILABLE_PATTERNS = {
-    # ═══════════════════════════════════════════
-    # TIER 1: HIGH PROBABILITY (60-72% win)
-    # ═══════════════════════════════════════════
-    'volume_spike_breakout': {
-        'name': 'Volume Spike Breakout',
-        'enabled': True,  # ✅
-        'description': 'Breakout volume 3x+, EMA alignment',
-        'side': 'Buy',
-        'emoji': '📊💥'
-    },
-    'breakout_retest': {
-        'name': 'Breakout + Retest',
-        'enabled': True,  # ✅
-        'description': 'Consolidation → Breakout → Retest → Bounce',
-        'side': 'Buy',
-        'emoji': '🔄📈'
-    },
-    'triple_touch_breakout': {
-        'name': 'Triple Touch Breakout',
-        'enabled': True,  # ✅
-        'description': '3 tocchi resistance + breakout sopra EMA 60',
-        'side': 'Buy',
-        'emoji': '🎯3️⃣'
-    },
-    'liquidity_sweep_reversal': {
-        'name': 'Liquidity Sweep + Reversal',
-        'enabled': True,  # ✅
-        'description': 'Smart money sweep + reversal',
-        'side': 'Buy',
-        'emoji': '💎'
-    },
-    
-    # ═══════════════════════════════════════════
-    # TIER 2: GOOD (52-62% win)
-    # ═══════════════════════════════════════════
-    'sr_bounce': {
-        'name': 'Support/Resistance Bounce',
-        'enabled': True,  # ✅
-        'description': 'Bounce su S/R con rejection',
-        'side': 'Buy',
-        'emoji': '🎯'
-    },
-    'bullish_comeback': {
-        'name': 'Bullish Comeback',
-        'enabled': True,  # ✅
-        'description': 'Inversione dopo tentativo ribassista',
-        'side': 'Buy',
-        'emoji': '🔄'
-    },
-    'compression_breakout': {
-        'name': 'Compression Breakout (Enhanced)',
-        'enabled': True,  # ✅
-        'description': 'EMA compression + breakout (RSI, vol, HTF)',
-        'side': 'Buy',
-        'emoji': '💥'
-    },
-    'bullish_flag_breakout': {
-        'name': 'Bullish Flag Breakout (Enhanced)',
-        'enabled': True,  # ✅
-        'description': 'Pole + flag + breakout (vol 2x+)',
-        'side': 'Buy',
-        'emoji': '🚩'
-    },
-    'morning_star_ema_breakout': {
-        'name': 'Morning Star + EMA Breakout',
-        'enabled': True,  # ✅
-        'description': 'Morning Star + rottura EMA',
-        'side': 'Buy',
-        'emoji': '⭐💥'
-    },
-    'higher_low_breakout': {
-        'name': 'Higher Low Consolidation Breakout',
-        'enabled': True,  # ✅
-        'description': 'Impulso + higher lows + breakout',
-        'side': 'Buy',
-        'emoji': '📈🔺'
-    },
-        'bud_pattern': {
-        'name': 'BUD Pattern',
-        'enabled': True,
-        'description': 'Breakout + 2 candele riposo nel range',
-        'side': 'Buy',
-        'emoji': '🌱'
-    },
-    'maxi_bud_pattern': {
-        'name': 'MAXI BUD Pattern',
-        'enabled': True,
-        'description': 'Breakout + 3+ candele riposo (setup più forte)',
-        'side': 'Buy',
-        'emoji': '🌟🌱'
-    },
-    
-    # ═══════════════════════════════════════════
-    # TIER 3: CLASSIC PATTERNS - USA ENHANCED
-    # ═══════════════════════════════════════════
-    'bullish_engulfing': {
-        'name': 'Bullish Engulfing',
-        'enabled': True,  # ✅ MA USA ENHANCED VERSION
-        'description': 'Engulfing su EMA (Enhanced)',
-        'side': 'Buy',
-        'emoji': '🟢'
-    },
-    'hammer': {
-        'name': 'Hammer',
-        'enabled': False,  # ❌ DISABILITA (coperto da Pin Bar)
-        'description': 'Coperto da Pin Bar Enhanced',
-        'side': 'Buy',
-        'emoji': '🔨'
-    },
-    'pin_bar_bullish': {
-        'name': 'Pin Bar Bullish',
-        'enabled': True,  # ✅ MA USA ENHANCED VERSION
-        'description': 'Pin bar su EMA (Enhanced)',
-        'side': 'Buy',
-        'emoji': '📍'
-    },
-    'morning_star': {
-        'name': 'Morning Star',
-        'enabled': True,  # ✅ ABILITA + USA ENHANCED VERSION
-        'description': '3 candele reversal su EMA (Enhanced)',
-        'side': 'Buy',
-        'emoji': '⭐'
-    },
-    'three_white_soldiers': {
-        'name': 'Three White Soldiers',
-        'enabled': False,  # ❌ DISABILITA (troppo raro)
-        'description': '3 candele rialziste consecutive',
-        'side': 'Buy',
-        'emoji': '⬆️'
-    },
-    
-    # ═══════════════════════════════════════════
-    # PATTERN SELL - Abilitati
-    # ═══════════════════════════════════════════
-    'bearish_engulfing': {
-        'name': 'Bearish Engulfing',
-        'enabled': True,  # ← ABILITA
-        'description': 'Engulfing ribassista con EMA breakdown (Enhanced)',
-        'side': 'Sell',
-        'emoji': '🔴'
-    },
-    'bud_bearish_pattern': {
-        'name': 'BUD Bearish Pattern',
-        'enabled': True,
-        'description': 'Breakdown + 2 candele riposo nel range (SHORT)',
-        'side': 'Sell',
-        'emoji': '🔴🌱'
-    },
-    'maxi_bud_bearish_pattern': {
-        'name': 'MAXI BUD Bearish Pattern',
-        'enabled': True,
-        'description': 'Breakdown + 3+ candele riposo (SHORT forte)',
-        'side': 'Sell',
-        'emoji': '🌟🔴🌱'
-    },
-    'shooting_star': {
-        'name': 'Shooting Star',
-        'enabled': True,  # ✅ ABILITATO
-        'description': 'Ombra superiore lunga, corpo in basso',
-        'side': 'Sell',
-        'emoji': '💫'
-    },
-    'pin_bar_bearish': {
-        'name': 'Pin Bar Bearish',
-        'enabled': True,  # ✅ ABILITATO
-        'description': 'Pin bar con ombra superiore lunga',
-        'side': 'Sell',
-        'emoji': '📍🔻'
-    },
-    'evening_star': {
-        'name': 'Evening Star',
-        'enabled': True,  # ✅ ABILITATO
-        'description': '3 candele bearish reversal',
-        'side': 'Sell',
-        'emoji': '🌙'
-    },
-    'three_black_crows': {
-        'name': 'Three Black Crows',
-        'enabled': True,  # ✅ ABILITATO
-        'description': '3 candele ribassiste consecutive',
-        'side': 'Sell',
-        'emoji': '⬇️'
-    },
-    'doji': {
-        'name': 'Doji',
-        'enabled': False,  # ❌ Lascia disabilitato (indecisione, non direzionale)
-        'description': 'Indecisione - non direzionale',
-        'side': 'Both',
-        'emoji': '➖'
-    },
-}
-
 # Lock per modifiche thread-safe
 PATTERNS_LOCK = threading.Lock()
 
@@ -525,3 +331,154 @@ MULTI_TP_CONFIG = {
 # Tracking TP hit per posizione
 TP_TRACKING = {}  # symbol -> {'tp1': False, 'tp2': False, 'tp3': False, 'tp1_qty': 0, ...}
 TP_TRACKING_LOCK = threading.Lock()
+
+# Pattern Management System
+AVAILABLE_PATTERNS = {
+    # ═══════════════════════════════════════════
+    # TIER 1: HIGH PROBABILITY (60-72% win)
+    # ═══════════════════════════════════════════
+    'volume_spike_breakout': {
+        'name': 'Volume Spike Breakout',
+        'enabled': True,  # ✅
+        'description': 'Breakout volume 3x+, EMA alignment',
+        'side': 'Buy',
+        'emoji': '📊💥'
+    },
+    'breakout_retest': {
+        'name': 'Breakout + Retest',
+        'enabled': True,  # ✅
+        'description': 'Consolidation → Breakout → Retest → Bounce',
+        'side': 'Buy',
+        'emoji': '🔄📈'
+    },
+    'triple_touch_breakout': {
+        'name': 'Triple Touch Breakout',
+        'enabled': True,  # ✅
+        'description': '3 tocchi resistance + breakout sopra EMA 60',
+        'side': 'Buy',
+        'emoji': '🎯3️⃣'
+    },
+    'liquidity_sweep_reversal': {
+        'name': 'Liquidity Sweep + Reversal',
+        'enabled': True,  # ✅
+        'description': 'Smart money sweep + reversal',
+        'side': 'Buy',
+        'emoji': '💎'
+    },
+    
+    # ═══════════════════════════════════════════
+    # TIER 2: GOOD (52-62% win)
+    # ═══════════════════════════════════════════
+    'sr_bounce': {
+        'name': 'Support/Resistance Bounce',
+        'enabled': True,  # ✅
+        'description': 'Bounce su S/R con rejection',
+        'side': 'Buy',
+        'emoji': '🎯'
+    },
+    'bullish_comeback': {
+        'name': 'Bullish Comeback',
+        'enabled': True,  # ✅
+        'description': 'Inversione dopo tentativo ribassista',
+        'side': 'Buy',
+        'emoji': '🔄'
+    },
+    'compression_breakout': {
+        'name': 'Compression Breakout (Enhanced)',
+        'enabled': True,  # ✅
+        'description': 'EMA compression + breakout (RSI, vol, HTF)',
+        'side': 'Buy',
+        'emoji': '💥'
+    },
+    'bullish_flag_breakout': {
+        'name': 'Bullish Flag Breakout (Enhanced)',
+        'enabled': True,  # ✅
+        'description': 'Pole + flag + breakout (vol 2x+)',
+        'side': 'Buy',
+        'emoji': '🚩'
+    },
+    'morning_star_ema_breakout': {
+        'name': 'Morning Star + EMA Breakout',
+        'enabled': True,  # ✅
+        'description': 'Morning Star + rottura EMA',
+        'side': 'Buy',
+        'emoji': '⭐💥'
+    },
+    'higher_low_breakout': {
+        'name': 'Higher Low Consolidation Breakout',
+        'enabled': True,  # ✅
+        'description': 'Impulso + higher lows + breakout',
+        'side': 'Buy',
+        'emoji': '📈🔺'
+    },
+        'bud_pattern': {
+        'name': 'BUD Pattern',
+        'enabled': True,
+        'description': 'Breakout + 2 candele riposo nel range',
+        'side': 'Buy',
+        'emoji': '🌱'
+    },
+    'maxi_bud_pattern': {
+        'name': 'MAXI BUD Pattern',
+        'enabled': True,
+        'description': 'Breakout + 3+ candele riposo (setup più forte)',
+        'side': 'Buy',
+        'emoji': '🌟🌱'
+    },
+    
+    # ═══════════════════════════════════════════
+    # TIER 3: CLASSIC PATTERNS - USA ENHANCED
+    # ═══════════════════════════════════════════
+    'bullish_engulfing': {
+        'name': 'Bullish Engulfing',
+        'enabled': True,  # ✅ MA USA ENHANCED VERSION
+        'description': 'Engulfing su EMA (Enhanced)',
+        'side': 'Buy',
+        'emoji': '🟢'
+    },
+    'pin_bar_bullish': {
+        'name': 'Pin Bar Bullish',
+        'enabled': True,  # ✅ MA USA ENHANCED VERSION
+        'description': 'Pin bar su EMA (Enhanced)',
+        'side': 'Buy',
+        'emoji': '📍'
+    },
+    'morning_star': {
+        'name': 'Morning Star',
+        'enabled': True,  # ✅ ABILITA + USA ENHANCED VERSION
+        'description': '3 candele reversal su EMA (Enhanced)',
+        'side': 'Buy',
+        'emoji': '⭐'
+    },
+}
+
+# ===== PATTERN-SPECIFIC OVERRIDES =====
+PATTERN_TREND_REQUIREMENTS = {
+    # Pattern che RICHIEDONO consolidamento
+    'Triple Touch Breakout': {
+        'allow_consolidation': True,
+        'require_ema60': True,  # MA solo EMA 60, non structure
+    },
+    'Breakout + Retest': {
+        'allow_consolidation': True,
+        'require_ema60': True,
+    },
+    'Bullish Flag Breakout': {
+        'allow_consolidation': True,  # Flag è consolidamento!
+        'require_ema60': True,
+    },
+    'Compression Breakout': {
+        'allow_consolidation': True,  # Compression è consolidamento!
+        'require_ema60': False,  # EMA check interno
+    },
+    
+    # Pattern che richiedono uptrend forte
+    'Volume Spike Breakout': {
+        'require_momentum': True,
+        'require_ema60': True,
+    },
+    'Liquidity Sweep + Reversal': {
+        'require_ema60': True,  # MA permetti pullback
+        'allow_pullback': True,
+    },
+}
