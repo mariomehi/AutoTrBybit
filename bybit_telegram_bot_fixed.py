@@ -5404,14 +5404,30 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                 # Arrotonda al tick_size
                 tp_level_price = round_to_tick(tp_level_price, tick_size)
                 
+                # Calcola qty rispettando qty_step
+                tp_qty_raw = qty * level['close_pct']
+                tp_qty_stepped = round(tp_qty_raw / qty_step) * qty_step
+                tp_qty_final = max(min_order_qty, round(tp_qty_stepped, qty_decimals))
+                
+                # Verifica che non superi qty totale
+                if tp_qty_final > qty:
+                    tp_qty_final = qty
+                
                 tp_levels.append({
                     'label': level['label'],
                     'price': tp_level_price,
                     'close_pct': level['close_pct'],
-                    'qty': round(qty * level['close_pct'], qty_decimals),
+                    'qty': tp_qty_final,  # ← Qty corretta
                     'emoji': level['emoji'],
                     'hit': False
                 })
+                
+                logging.debug(
+                    f"{symbol}: TP{i} qty calculation - "
+                    f"raw: {tp_qty_raw:.{qty_decimals}f}, "
+                    f"stepped: {tp_qty_stepped:.{qty_decimals}f}, "
+                    f"final: {tp_qty_final:.{qty_decimals}f}"
+                )
             
             logging.info(f'🎯 Multi-TP configurato:')
             for i, tp in enumerate(tp_levels, 1):
@@ -6432,6 +6448,44 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
                 # ===== CHIUDI POSIZIONE PARZIALE =====
                 try:
                     session = create_bybit_session()
+                    instrument_info = get_instrument_info_cached(session, symbol)
+                    
+                    min_order_qty = instrument_info['min_order_qty']
+                    qty_step = instrument_info['qty_step']
+                    qty_decimals = instrument_info['qty_decimals']
+                    
+                    # Ricalcola qty con qty_step CORRETTO
+                    qty_to_close = round(current_qty * close_pct / qty_step) * qty_step
+                    qty_to_close = round(qty_to_close, qty_decimals)
+                    
+                    # Verifica min_order_qty del symbol (più importante di min_partial_qty)
+                    if qty_to_close < min_order_qty:
+                        logging.warning(
+                            f"{symbol}: TP{i} qty too small ({qty_to_close:.{qty_decimals}f} < min {min_order_qty}), "
+                            f"using min_order_qty instead"
+                        )
+                        qty_to_close = min_order_qty
+                    
+                    # Double-check: se anche min_order_qty supera current_qty, skip
+                    if qty_to_close > current_qty:
+                        logging.warning(
+                            f"{symbol}: TP{i} cannot close {qty_to_close:.{qty_decimals}f} "
+                            f"(only {current_qty:.{qty_decimals}f} available), skipping"
+                        )
+                        tp_level['hit'] = True  # Marca hit per non riprovare
+                        continue
+                    
+                    logging.info(
+                        f"{symbol}: TP{i} qty adjusted - "
+                        f"raw: {current_qty * close_pct:.{qty_decimals}f}, "
+                        f"final: {qty_to_close:.{qty_decimals}f} "
+                        f"(step: {qty_step}, decimals: {qty_decimals})"
+                    )
+                
+                except Exception as e:
+                    logging.error(f"{symbol}: Error getting instrument info for TP: {e}")
+                    tp_level['hit'] = True
+                    continue
                     
                     # Usa Market order con reduceOnly per chiusura parziale
                     close_order = session.place_order(
@@ -8303,7 +8357,7 @@ async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Verifica che l'analisi sia attiva
     with config.ACTIVE_ANALYSES_LOCK:
-        chat_map = ACTIVE_ANALYSES.get(chat_id, {})
+        chat_map = config.ACTIVE_ANALYSES.get(chat_id, {})
         if key not in chat_map:
             await update.message.reply_text(
                 f'⚠️ Non c\'è un\'analisi attiva per {symbol} {timeframe}.\n'
@@ -8360,7 +8414,7 @@ async def cmd_abilita(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Verifica che l'analisi sia attiva
     with config.ACTIVE_ANALYSES_LOCK:
-        chat_map = ACTIVE_ANALYSES.get(chat_id, {})
+        chat_map = config.ACTIVE_ANALYSES.get(chat_id, {})
         if key not in chat_map:
             await update.message.reply_text(
                 f'⚠️ Non c\'è un\'analisi attiva per {symbol} {timeframe}.\n'
@@ -9475,7 +9529,7 @@ async def cmd_analizza(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = f'{symbol}-{timeframe}'
     
     with config.ACTIVE_ANALYSES_LOCK:
-        chat_map = ACTIVE_ANALYSES.setdefault(chat_id, {})
+        chat_map = config.ACTIVE_ANALYSES.setdefault(chat_id, {})
         
         if key in chat_map:
             await update.message.reply_text(
@@ -9534,7 +9588,7 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target = args[0].upper()
     
     with config.ACTIVE_ANALYSES_LOCK:
-        chat_map = ACTIVE_ANALYSES.get(chat_id, {})
+        chat_map = config.ACTIVE_ANALYSES.get(chat_id, {})
         
         if not chat_map:
             await update.message.reply_text('⚠️ Nessuna analisi attiva in questa chat.')
@@ -9798,7 +9852,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
     with config.ACTIVE_ANALYSES_LOCK:
-        chat_map = ACTIVE_ANALYSES.get(chat_id, {})
+        chat_map = config.ACTIVE_ANALYSES.get(chat_id, {})
     
     if not chat_map:
         await update.message.reply_text(
@@ -10857,7 +10911,7 @@ async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
             
             # Invia notifica a tutte le chat che stanno tracciando questo symbol
             with config.ACTIVE_ANALYSES_LOCK:
-                for chat_id, analyses in ACTIVE_ANALYSES.items():
+                for chat_id, analyses in config.ACTIVE_ANALYSES.items():
                     # Verifica se questa chat stava analizzando questo symbol
                     is_tracking = any(key.startswith(f'{symbol}-') for key in analyses.keys())
                     
