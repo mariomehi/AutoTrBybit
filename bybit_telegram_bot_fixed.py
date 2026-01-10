@@ -503,38 +503,6 @@ def check_hybrid_trend(df: pd.DataFrame) -> tuple:
     
     return (valid, reason, details)
 
-# ===== PATTERN-SPECIFIC OVERRIDES =====
-
-PATTERN_TREND_REQUIREMENTS = {
-    # Pattern che RICHIEDONO consolidamento
-    'Triple Touch Breakout': {
-        'allow_consolidation': True,
-        'require_ema60': True,  # MA solo EMA 60, non structure
-    },
-    'Breakout + Retest': {
-        'allow_consolidation': True,
-        'require_ema60': True,
-    },
-    'Bullish Flag Breakout': {
-        'allow_consolidation': True,  # Flag è consolidamento!
-        'require_ema60': True,
-    },
-    'Compression Breakout': {
-        'allow_consolidation': True,  # Compression è consolidamento!
-        'require_ema60': False,  # EMA check interno
-    },
-    
-    # Pattern che richiedono uptrend forte
-    'Volume Spike Breakout': {
-        'require_momentum': True,
-        'require_ema60': True,
-    },
-    'Liquidity Sweep + Reversal': {
-        'require_ema60': True,  # MA permetti pullback
-        'allow_pullback': True,
-    },
-}
-
 def check_pattern_specific_trend(df: pd.DataFrame, pattern_name: str) -> tuple:
     """
     Check trend specifico per pattern
@@ -545,7 +513,7 @@ def check_pattern_specific_trend(df: pd.DataFrame, pattern_name: str) -> tuple:
         # Default: usa check globale
         return is_valid_trend_for_entry(df, mode=config.TREND_FILTER_MODE)
     
-    requirements = PATTERN_TREND_REQUIREMENTS[pattern_name]
+    requirements = config.PATTERN_TREND_REQUIREMENTS[pattern_name]
     
     # Check EMA 60 se richiesto
     if requirements.get('require_ema60'):
@@ -10947,7 +10915,7 @@ def main():
     """Funzione principale"""
     # Setup logging
     logging.basicConfig(
-        level=logging.INFO,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
+        level=logging.DEBUG,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
