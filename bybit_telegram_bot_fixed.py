@@ -256,7 +256,7 @@ def get_instrument_info_cached(session, symbol: str) -> dict:
                     info['price_decimals'] = len(str(info['tick_size']).split('.')[-1]) if '.' in str(info['tick_size']) else 0
                     
                     # Salva in cache con timestamp
-                    INSTRUMENT_INFO_CACHE[symbol] = {
+                    config.INSTRUMENT_INFO_CACHE[symbol] = {
                         'info': info,
                         'timestamp': now
                     }
