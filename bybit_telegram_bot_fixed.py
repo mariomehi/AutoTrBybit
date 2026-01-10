@@ -647,6 +647,39 @@ def get_price_decimals(price: float) -> int:
     else:
         return 6
 
+def validate_position_info(symbol: str, pos_info: dict) -> tuple[bool, str]:
+    """
+    Valida che pos_info contenga tutti i campi necessari
+    
+    Returns:
+        (is_valid, error_message)
+    """
+    required_fields = {
+        'side': str,
+        'qty': (int, float),
+        'entry_price': (int, float),
+        'sl': (int, float),
+        'tp': (int, float),
+    }
+    
+    for field, expected_type in required_fields.items():
+        value = pos_info.get(field)
+        
+        # Check esistenza
+        if value is None:
+            return (False, f"Missing field: {field}")
+        
+        # Check tipo
+        if not isinstance(value, expected_type):
+            return (False, f"Invalid type for {field}: {type(value)}")
+        
+        # Check valori numerici > 0
+        if field in ['qty', 'entry_price', 'sl', 'tp']:
+            if value <= 0:
+                return (False, f"Invalid value for {field}: {value} (must be > 0)")
+    
+    return (True, "Valid")
+
 # ===== DYNAMIC RISK CALCULATION =====
 def calculate_dynamic_risk(ema_score: int) -> float:
     """
@@ -5455,9 +5488,12 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                     f"final: {tp_qty_final:.{qty_decimals}f}"
                 )
             
-            logging.info(f'🎯 Multi-TP configurato:')
-            for i, tp in enumerate(tp_levels, 1):
-                logging.info(f'   TP{i}: ${tp["price"]:.{price_decimals}f} ({tp["close_pct"]*100:.0f}% = {tp["qty"]:.4f})')
+            logging.info(f'🎯 Multi-TP configurato per {symbol}:')
+            for idx, tp in enumerate(tp_levels, 1):
+                logging.info(
+                    f'   TP{idx}: ${tp["price"]:.{price_decimals}f} '
+                    f'({tp["close_pct"]*100:.0f}% = {tp["qty"]:.{qty_decimals}f})'
+                )
             
             # Per Bybit: Usa TP più lontano come "main TP" (TP3)
             # TP1 e TP2 saranno gestiti da monitor_partial_tp()
@@ -6056,19 +6092,37 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
         new_sl = None  # ← AGGIUNGI QUESTA RIGA ALL'INIZIO DEL LOOP
         
         try:
+            # ✅ VALIDA pos_info PRIMA di usarlo
+            is_valid, error_msg = validate_position_info(symbol, pos_info)
+            if not is_valid:
+                logging.error(f"{symbol}: Invalid pos_info - {error_msg}")
+                # Rimuovi posizione corrotta
+                with config.POSITIONS_LOCK:
+                    if symbol in config.ACTIVE_POSITIONS:
+                        del config.ACTIVE_POSITIONS[symbol]
+                continue
+                    
             side = pos_info.get('side')
             entry_price = pos_info.get('entry_price')  # ← USA .get() per safety
             
-            # ✅ FIX: Verifica che entry_price esista prima di continuare
-            if not entry_price or entry_price <= 0:
-                logging.error(f"{symbol}: Missing or invalid entry_price ({entry_price}), skipping trailing stop")
+            #Verifica SUBITO e salta se invalido
+            if entry_price is None or entry_price <= 0:
+                logging.error(
+                    f"{symbol}: Invalid entry_price ({entry_price}), "
+                    f"skipping trailing stop"
+                )
+                continue
+        
+            current_sl = pos_info.get('sl')
+            if current_sl is None:
+                logging.error(f"{symbol}: Missing SL, skipping")
                 continue
 
             # ===== VERIFICA POSIZIONE REALE SU BYBIT =====
             try:
                 session = create_bybit_session()
 
-                # ✅ FIX: Preserva TP quando aggiorni SL
+                #Preserva TP quando aggiorni SL
                 # Alcuni broker resettano TP se non lo passi esplicitamente
                 tp_price = pos_info.get('tp', 0)
 
@@ -6084,7 +6138,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                     "positionIdx": 0
                 }
 
-                # ✅ Includi TP se esistente per preservarlo
+                #Includi TP se esistente per preservarlo
                 if tp_price > 0:
                     tp_rounded = round(tp_price, price_decimals)
                     params["takeProfit"] = str(tp_rounded)
@@ -6409,17 +6463,27 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
     logging.debug(f"Multi-TP check: {len(positions_copy)} positions")
     
     for symbol, pos_info in positions_copy.items():
-        # Skip se non ha multi-TP configurato
         tp_levels = pos_info.get('multi_tp_levels')
         if not tp_levels:
             continue
         
         try:
+            # ✅ VALIDA pos_info
+            is_valid, error_msg = validate_position_info(symbol, pos_info)
+            if not is_valid:
+                logging.error(f"{symbol}: Invalid pos_info in TP monitor - {error_msg}")
+                continue
+                
             side = pos_info['side']
             entry_price = pos_info['entry_price']
             current_qty = pos_info['qty']
             timeframe = pos_info.get('timeframe', '15m')
             chat_id = pos_info.get('chat_id')
+
+            # ✅ VERIFICA qty disponibile
+            if current_qty <= 0:
+                logging.warning(f"{symbol}: No qty available for TP")
+                continue
             
             # Scarica prezzo corrente
             df = bybit_get_klines_cached(symbol, timeframe, limit=5)
@@ -6438,6 +6502,15 @@ async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
                 
                 # Skip se già hit
                 if tp_level.get('hit', False):
+                    continue
+
+                # ✅ VALIDA valori numerici
+                if tp_price <= 0 or close_pct <= 0 or tp_qty <= 0:
+                    logging.error(
+                        f"{symbol}: TP{i} invalid values - "
+                        f"price={tp_price}, pct={close_pct}, qty={tp_qty}"
+                    )
+                    tp_level['hit'] = True  # Marca come hit per non riprovare
                     continue
                 
                 # Check se prezzo ha raggiunto TP (con buffer)
