@@ -10473,6 +10473,7 @@ async def cmd_time_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"Status: {'✅ ON' if config.MARKET_TIME_FILTER_ENABLED else '❌ OFF'}\n"
         msg += f"Mode: <b>{mode}</b>\n"
         msg += f"Blocked UTC hours: <b>{hours if hours else 'None'}</b>\n\n"
+        msg += f"UTC Now: <b>{datetime.utcnow()}</b>\n\n"
         msg += "<b>Comandi</b>\n"
         msg += "<code>timefilter on</code> | <code>timefilter off</code>\n"
         msg += "<code>timefilter hours 1 2 3 4</code>\n"
