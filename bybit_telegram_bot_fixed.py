@@ -330,14 +330,7 @@ def clear_instrument_cache(symbol: str = None):
             config.INSTRUMENT_INFO_CACHE.clear()
             logging.info("全 cache cleared")
 
-def validate_prices(
-        symbol: str,
-        side: str,
-        entry_price: float,
-        sl_price: float,
-        tp_price: float,
-        tick_size: float
-    ) -> Dict[str, Any]:
+def validate_prices(symbol: str, side: str, entry_price: float, sl_price: float, tp_price: float, tick_size: float) -> dict[str, Any]:
         """
         Valida e arrotonda prezzi secondo tick_size
         
@@ -463,14 +456,7 @@ def validate_prices(
             'reward_pct': (reward / entry_rounded) * 100
         }
 
-def validate_quantity(
-        symbol: str,
-        qty: float,
-        min_order_qty: float,
-        max_order_qty: float,
-        qty_step: float,
-        qty_decimals: int
-    ) -> float:
+def validate_quantity(symbol: str, qty: float, min_order_qty: float, max_order_qty: float, qty_step: float, qty_decimals: int) -> float:
         """
         Valida e arrotonda quantity secondo step
         
@@ -518,17 +504,7 @@ def validate_quantity(
         )
         
         return qty_rounded
-def calculate_tp_levels(
-        symbol: str,
-        side: str,
-        entry_price: float,
-        sl_price: float,
-        qty_total: float,
-        tick_size: float,
-        qty_step: float,
-        qty_decimals: int,
-        min_order_qty: float
-    ) -> list:
+def calculate_tp_levels(symbol: str,side: str,entry_price: float,sl_price: float,qty_total: float,tick_size: float,qty_step: float,qty_decimals: int,min_order_qty: float) -> list:
         """
         Calcola livelli TP per Multi-TP system
         
