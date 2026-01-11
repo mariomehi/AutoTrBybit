@@ -3665,6 +3665,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
         "lower_wick_pct": lower_wick_pct * 100,
         "close_position": close_position * 100,
         "volume_ratio": vol_ratio,
+        "body_pct": body_pct,
         "near_ema10": near_ema10,
         "near_ema60": near_ema60,
         "swept_liquidity": swept_liquidity,
@@ -7693,7 +7694,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 caption += f"  High: ${pattern_data['breakout_high']:.{price_decimals}f}\n"
                 caption += f"  Low: ${pattern_data['breakout_low']:.{price_decimals}f}\n"
                 caption += f"  Range: ${pattern_data['breakout_range']:.{price_decimals}f}\n"
-                caption += f"  Body: {pattern_data['breakout_body_pct']:.1f}%\n\n"
+                caption += f"  Body: {pattern_data['breakout_']:.1f}%\n\n"
                 
                 caption += f"🛌 <b>Rest Phase:</b>\n"
                 caption += f"  Candele: {pattern_data['rest_count']}\n"
@@ -7834,12 +7835,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 # Pattern Structure (3 candele)
                 caption += f"<b>📊 Pattern Structure:</b>\n"
                 caption += f"Candela A (ribassista):\n"
-                caption += f"  Body: {pattern_data['candle_a']['body_pct']:.1f}% range\n"
+                caption += f"  Body: {pattern_data['candle_a']['']:.1f}% range\n"
                 caption += f"Candela B (indecisione):\n"
-                caption += f"  Body: {pattern_data['candle_b']['body_pct']:.1f}% range\n"
+                caption += f"  Body: {pattern_data['candle_b']['']:.1f}% range\n"
                 caption += f"  Low: ${pattern_data['candle_b']['low']:.{price_decimals}f}\n"
                 caption += f"Candela C (rialzista):\n"
-                caption += f"  Body: {pattern_data['candle_c']['body_pct']:.1f}% range\n\n"
+                caption += f"  Body: {pattern_data['candle_c']['']:.1f}% range\n\n"
                 
                 # Recovery
                 caption += f"<b>🔄 Recovery Analysis:</b>\n"
