@@ -330,7 +330,7 @@ def clear_instrument_cache(symbol: str = None):
             config.INSTRUMENT_INFO_CACHE.clear()
             logging.info("全 cache cleared")
 
-def validate_prices(symbol: str, side: str, entry_price: float, sl_price: float, tp_price: float, tick_size: float) -> dict[str, Any]:
+def validate_prices(symbol: str, side: str, entry_price: float, sl_price: float, tp_price: float, tick_size: float) -> dict[str, any]:
         """
         Valida e arrotonda prezzi secondo tick_size
         
