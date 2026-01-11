@@ -330,6 +330,275 @@ def clear_instrument_cache(symbol: str = None):
             config.INSTRUMENT_INFO_CACHE.clear()
             logging.info("全 cache cleared")
 
+def validate_prices(
+        symbol: str,
+        side: str,
+        entry_price: float,
+        sl_price: float,
+        tp_price: float,
+        tick_size: float
+    ) -> Dict[str, Any]:
+        """
+        Valida e arrotonda prezzi secondo tick_size
+        
+        Args:
+            symbol: Symbol (es. BTCUSDT)
+            side: 'Buy' o 'Sell'
+            entry_price: Prezzo di entrata
+            sl_price: Stop Loss
+            tp_price: Take Profit
+            tick_size: Tick size del symbol
+        
+        Returns:
+            Dict con prezzi validati e arrotondati
+        
+        Raises:
+            OrderValidationError: Se prezzi non validi
+        """
+        
+        # Helper per arrotondare al tick_size
+        def round_to_tick(price: float, tick: float) -> float:
+            if tick == 0:
+                return round(price, 8)
+            return round(price / tick) * tick
+        
+        # Valida che i prezzi siano > 0
+        if entry_price <= 0:
+            raise OrderValidationError(f"Entry price invalid: {entry_price}")
+        if sl_price <= 0:
+            raise OrderValidationError(f"Stop Loss invalid: {sl_price}")
+        if tp_price <= 0:
+            raise OrderValidationError(f"Take Profit invalid: {tp_price}")
+        
+        # Arrotonda prezzi
+        entry_rounded = round_to_tick(entry_price, tick_size)
+        sl_rounded = round_to_tick(sl_price, tick_size)
+        tp_rounded = round_to_tick(tp_price, tick_size)
+        
+        # Valida logica SL/TP per LONG
+        if side == 'Buy':
+            # SL deve essere SOTTO entry
+            if sl_rounded >= entry_rounded:
+                raise OrderValidationError(
+                    f"LONG: SL ({sl_rounded}) must be < Entry ({entry_rounded})"
+                )
+            
+            # TP deve essere SOPRA entry
+            if tp_rounded <= entry_rounded:
+                raise OrderValidationError(
+                    f"LONG: TP ({tp_rounded}) must be > Entry ({entry_rounded})"
+                )
+            
+            # SL non troppo vicino (min 0.3%)
+            sl_distance_pct = abs(entry_rounded - sl_rounded) / entry_rounded
+            if sl_distance_pct < 0.003:
+                logging.warning(
+                    f"{symbol}: SL very close to entry ({sl_distance_pct*100:.2f}%), "
+                    f"adjusting to 0.3%"
+                )
+                sl_rounded = entry_rounded * 0.997
+                sl_rounded = round_to_tick(sl_rounded, tick_size)
+            
+            # TP non troppo vicino (min 0.5%)
+            tp_distance_pct = abs(tp_rounded - entry_rounded) / entry_rounded
+            if tp_distance_pct < 0.005:
+                logging.warning(
+                    f"{symbol}: TP very close to entry ({tp_distance_pct*100:.2f}%), "
+                    f"adjusting to 0.5%"
+                )
+                tp_rounded = entry_rounded * 1.005
+                tp_rounded = round_to_tick(tp_rounded, tick_size)
+        
+        # Valida logica SL/TP per SHORT
+        else:  # Sell
+            # SL deve essere SOPRA entry
+            if sl_rounded <= entry_rounded:
+                raise OrderValidationError(
+                    f"SHORT: SL ({sl_rounded}) must be > Entry ({entry_rounded})"
+                )
+            
+            # TP deve essere SOTTO entry
+            if tp_rounded >= entry_rounded:
+                raise OrderValidationError(
+                    f"SHORT: TP ({tp_rounded}) must be < Entry ({entry_rounded})"
+                )
+            
+            # SL non troppo vicino (min 0.3%)
+            sl_distance_pct = abs(sl_rounded - entry_rounded) / entry_rounded
+            if sl_distance_pct < 0.003:
+                logging.warning(
+                    f"{symbol}: SL very close to entry ({sl_distance_pct*100:.2f}%), "
+                    f"adjusting to 0.3%"
+                )
+                sl_rounded = entry_rounded * 1.003
+                sl_rounded = round_to_tick(sl_rounded, tick_size)
+            
+            # TP non troppo vicino (min 0.5%)
+            tp_distance_pct = abs(entry_rounded - tp_rounded) / entry_rounded
+            if tp_distance_pct < 0.005:
+                logging.warning(
+                    f"{symbol}: TP very close to entry ({tp_distance_pct*100:.2f}%), "
+                    f"adjusting to 0.5%"
+                )
+                tp_rounded = entry_rounded * 0.995
+                tp_rounded = round_to_tick(tp_rounded, tick_size)
+        
+        # Calcola Risk:Reward
+        risk = abs(entry_rounded - sl_rounded)
+        reward = abs(tp_rounded - entry_rounded)
+        rr_ratio = reward / risk if risk > 0 else 0
+        
+        logging.info(
+            f"{symbol} {side}: Price validation OK - "
+            f"Entry: {entry_rounded}, SL: {sl_rounded}, TP: {tp_rounded}, "
+            f"R:R = {rr_ratio:.2f}"
+        )
+        
+        return {
+            'entry': entry_rounded,
+            'sl': sl_rounded,
+            'tp': tp_rounded,
+            'rr_ratio': rr_ratio,
+            'risk_pct': (risk / entry_rounded) * 100,
+            'reward_pct': (reward / entry_rounded) * 100
+        }
+
+def validate_quantity(
+        symbol: str,
+        qty: float,
+        min_order_qty: float,
+        max_order_qty: float,
+        qty_step: float,
+        qty_decimals: int
+    ) -> float:
+        """
+        Valida e arrotonda quantity secondo step
+        
+        Args:
+            symbol: Symbol
+            qty: Quantità richiesta
+            min_order_qty: Min qty dal symbol
+            max_order_qty: Max qty dal symbol
+            qty_step: Step qty
+            qty_decimals: Decimali per arrotondamento
+        
+        Returns:
+            Quantity validata
+        
+        Raises:
+            OrderValidationError: Se qty non valida
+        """
+        
+        if qty <= 0:
+            raise OrderValidationError(f"Quantity must be > 0, got {qty}")
+        
+        # Arrotonda al qty_step
+        if qty_step > 0:
+            qty_rounded = round(qty / qty_step) * qty_step
+        else:
+            qty_rounded = qty
+        
+        # Arrotonda ai decimali corretti
+        qty_rounded = round(qty_rounded, qty_decimals)
+        
+        # Valida limiti
+        if qty_rounded < min_order_qty:
+            raise OrderValidationError(
+                f"{symbol}: Qty {qty_rounded} < min {min_order_qty}"
+            )
+        
+        if qty_rounded > max_order_qty:
+            raise OrderValidationError(
+                f"{symbol}: Qty {qty_rounded} > max {max_order_qty}"
+            )
+        
+        logging.info(
+            f"{symbol}: Quantity validation OK - "
+            f"Qty: {qty_rounded} (min: {min_order_qty}, max: {max_order_qty})"
+        )
+        
+        return qty_rounded
+def calculate_tp_levels(
+        symbol: str,
+        side: str,
+        entry_price: float,
+        sl_price: float,
+        qty_total: float,
+        tick_size: float,
+        qty_step: float,
+        qty_decimals: int,
+        min_order_qty: float
+    ) -> list:
+        """
+        Calcola livelli TP per Multi-TP system
+        
+        Returns:
+            Lista di dict con TP levels
+        """
+        
+        if not config.MULTI_TP_ENABLED or not config.MULTI_TP_CONFIG['enabled']:
+            return []
+        
+        risk = abs(entry_price - sl_price)
+        tp_levels = []
+        
+        for level in config.MULTI_TP_CONFIG['levels']:
+            # Calcola prezzo TP
+            if side == 'Buy':
+                tp_price = entry_price + (risk * level['rr_ratio'])
+            else:  # Sell
+                tp_price = entry_price - (risk * level['rr_ratio'])
+            
+            # Arrotonda al tick_size
+            if tick_size > 0:
+                tp_price = round(tp_price / tick_size) * tick_size
+            else:
+                tp_price = round(tp_price, 8)
+            
+            # Calcola qty per questo TP
+            tp_qty_raw = qty_total * level['close_pct']
+            
+            # Arrotonda al qty_step
+            if qty_step > 0:
+                tp_qty = round(tp_qty_raw / qty_step) * qty_step
+            else:
+                tp_qty = tp_qty_raw
+            
+            tp_qty = round(tp_qty, qty_decimals)
+            
+            # Verifica min_order_qty
+            if tp_qty < min_order_qty:
+                logging.warning(
+                    f"{symbol}: TP{len(tp_levels)+1} qty too small "
+                    f"({tp_qty} < {min_order_qty}), using min_order_qty"
+                )
+                tp_qty = min_order_qty
+            
+            # Verifica che non superi qty_total
+            if tp_qty > qty_total:
+                logging.warning(
+                    f"{symbol}: TP{len(tp_levels)+1} qty capped to qty_total"
+                )
+                tp_qty = qty_total
+            
+            tp_levels.append({
+                'label': level['label'],
+                'price': tp_price,
+                'close_pct': level['close_pct'],
+                'qty': tp_qty,
+                'emoji': level['emoji'],
+                'hit': False
+            })
+        
+        # Log summary
+        logging.info(f"🎯 Multi-TP configured for {symbol}:")
+        for idx, tp in enumerate(tp_levels, 1):
+            logging.info(
+                f"   TP{idx}: ${tp['price']:.8f} "
+                f"({tp['close_pct']*100:.0f}% = {tp['qty']:.{qty_decimals}f})"
+            )
+        
+        return tp_levels
 
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -4927,25 +5196,48 @@ def check_compression_htf_resistance(symbol: str, current_tf: str, current_price
         return {'blocked': False}
 
 
-async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float, tp_price: float, entry_price: float, timeframe: str, chat_id: int, pattern_name: str = None):
+async def place_bybit_order(
+    symbol: str,
+    side: str,
+    qty: float,
+    sl_price: float,
+    tp_price: float,
+    entry_price: float,
+    timeframe: str,
+    chat_id: int,
+    pattern_name: str = None
+) -> Dict[str, Any]:
     """
-    NEW: Invece di 1 TP fisso, calcola 3 TP levels
-    Piazza ordine su Bybit (Market o Limit)
-    NEW: Supporta ordini LIMIT per pattern lenti
+    Piazza ordine su Bybit con gestione robusta di SL/TP
     
-    Piazza ordine market su Bybit (Demo o Live)
-    Controlla REALMENTE su Bybit se esiste già una posizione aperta
+    FEATURES:
+    - Validazione completa prezzi (logica LONG/SHORT)
+    - Arrotondamento corretto a tick_size
+    - Gestione Multi-TP (opzionale)
+    - Market Time Filter check
+    - Position existence check
+    - Order type selection (Market/Limit)
+    - Gestione errori dettagliata
     
-    Parametri:
-    - symbol: es. 'BTCUSDT'
-    - side: 'Buy' o 'Sell'
-    - qty: quantità in contratti
-    - sl_price: prezzo stop loss
-    - tp_price: prezzo take profit
+    Args:
+        symbol: Symbol (es. BTCUSDT)
+        side: 'Buy' o 'Sell'
+        qty: Quantità contratti
+        sl_price: Stop Loss
+        tp_price: Take Profit
+        entry_price: Entry price (per limit orders)
+        timeframe: Timeframe pattern
+        chat_id: Chat ID per notifiche
+        pattern_name: Nome pattern (opzionale)
+    
+    Returns:
+        Dict con risultato ordine o errore
     """
-
-    # ===== CRITICAL: Check Market Time Filter PRIMA di piazzare ordine =====
+    
+    # ===== STEP 1: MARKET TIME FILTER CHECK =====
     if config.MARKET_TIME_FILTER_ENABLED:
+        from bybit_telegram_bot_fixed import is_good_trading_time_utc
+        
         time_ok, time_reason = is_good_trading_time_utc()
         
         if not time_ok:
@@ -4962,27 +5254,20 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                 'message': f'Trading blocked during UTC hour {current_hour:02d}',
                 'reason': time_reason
             }
-            
-    # Determina tipo ordine
-    order_type = 'Market'  # Default
-
-    if pattern_name and pattern_name in config.PATTERN_ORDER_TYPE:
-        order_type = 'Market' if config.PATTERN_ORDER_TYPE[pattern_name] == 'market' else 'Limit'
-
-    logging.info(f'📤 Placing {order_type} order: {symbol} {side} qty={qty:.4f} Entry: ${entry_price:.4f} SL: ${sl_price:.4f} TP: ${tp_price:.4f} Mode: {config.TRADING_MODE}')
     
-    if BybitHTTP is None:
-        return {'error': 'pybit non disponibile'}
-    
-    # SINCRONIZZA con Bybit prima di controllare
-    await sync_positions_with_bybit()
-
-    # ✅ FIX PUNTO #3: Check con lock prima di verificare su Bybit
+    # ===== STEP 2: CHECK POSITION ESISTENTE =====
     with config.POSITIONS_LOCK:
         if symbol in config.ACTIVE_POSITIONS:
             logging.warning(f'{symbol}: Position already tracked locally')
-            return {'error': 'position_exists', 'message': f'Posizione già tracciata per {symbol}'}
-    # Controlla se esiste VERAMENTE una posizione aperta per questo symbol
+            return {
+                'error': 'position_exists',
+                'message': f'Posizione già tracciata per {symbol}'
+            }
+    
+    # Sincronizza con Bybit
+    from bybit_telegram_bot_fixed import sync_positions_with_bybit, get_open_positions_from_bybit
+    
+    await sync_positions_with_bybit()
     real_positions = await get_open_positions_from_bybit(symbol)
     
     if real_positions:
@@ -4994,132 +5279,142 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
             'existing_position': existing
         }
     
+    # ===== STEP 3: OTTIENI INSTRUMENT INFO =====
+    from bybit_telegram_bot_fixed import create_bybit_session, get_instrument_info_cached
+    
     try:
         session = create_bybit_session()
+        instrument_info = get_instrument_info_cached(session, symbol)
         
-        # Verifica il balance prima di tradare
-        try:
-            wallet = session.get_wallet_balance(accountType="UNIFIED")
-            logging.info(f'💰 Wallet Balance check completato')
-        except Exception as e:
-            logging.warning(f'Non riesco a verificare il balance: {e}')
-        
-        # Ottieni info sul symbol per determinare qty corretta
-        try:
-            instrument_info = get_instrument_info_cached(session, symbol)
-            
-            # ✅ FIX: get_instrument_info_cached() ritorna DIRETTAMENTE il dict con info
-            min_order_qty = instrument_info['min_order_qty']
-            max_order_qty = instrument_info['max_order_qty']
-            qty_step = instrument_info['qty_step']
-            qty_decimals = instrument_info['qty_decimals']
-            
-            logging.info(f'📊 {symbol} - Min: {min_order_qty}, Max: {max_order_qty}, Step: {qty_step}')
-            
-            # Arrotonda qty al qty_step più vicino
-            qty = round(qty / qty_step) * qty_step
-            
-            # Limita qty tra min e max
-            qty = max(min_order_qty, min(qty, max_order_qty))
-            
-            # Arrotonda ai decimali corretti
-            qty = round(qty, qty_decimals)
-            
-        except KeyError as e:
-            logging.error(f'Missing key in instrument_info: {e}')
-            logging.warning(f'Using default qty rounding for {symbol}')
-            qty = round(qty, 3)
-        except Exception as e:
-            logging.warning(f'Errore nel recuperare instrument info: {e}')
-            # Fallback: arrotondamento generico
-            qty = round(qty, 3)
-        
-        # Verifica qty minima sensata
-        if qty < 0.001:
-            return {'error': f'Qty troppo piccola ({qty}). Aumenta RISK_USD o riduci ATR.'}
-        
-        # Arrotonda prezzi con decimali dinamici
-        # ✅ FIX CRITICO: Arrotonda prezzi SL/TP al tick_size corretto
-        price_decimals = instrument_info['price_decimals']
+        min_order_qty = instrument_info['min_order_qty']
+        max_order_qty = instrument_info['max_order_qty']
+        qty_step = instrument_info['qty_step']
+        qty_decimals = instrument_info['qty_decimals']
         tick_size = instrument_info['tick_size']
-
-        # Arrotonda al tick_size più vicino (non solo ai decimali!)
-        def round_to_tick(price, tick):
-            """Arrotonda prezzo al tick_size più vicino"""
-            if tick == 0:
-                return round(price, price_decimals)
-            return round(price / tick) * tick
-
-        sl_price = round_to_tick(sl_price, tick_size)
-        tp_price = round_to_tick(tp_price, tick_size)
-
-        # Fallback: assicurati almeno i decimali corretti
-        #sl_price = round(sl_price, price_decimals)
-        #tp_price = round(tp_price, price_decimals)
+        price_decimals = instrument_info['price_decimals']
         
-        logging.info(f'📤 Piazzando ordine {side} per {symbol}')
-        logging.info(f'   Qty: {qty} | SL: {sl_price} | TP: {tp_price}')
-        logging.info(f'   Tick size: {tick_size}, Price decimals: {price_decimals}')
-
-        # ===== CALCOLA MULTI-TP SE ABILITATO =====
-        tp_levels = []
+        logging.info(
+            f"📊 {symbol} - "
+            f"Min qty: {min_order_qty}, "
+            f"Max qty: {max_order_qty}, "
+            f"Qty step: {qty_step}, "
+            f"Tick size: {tick_size}"
+        )
         
-        if config.MULTI_TP_ENABLED and config.MULTI_TP_CONFIG['enabled']:
-            risk = abs(entry_price - sl_price)
+    except Exception as e:
+        logging.error(f"{symbol}: Error getting instrument info: {e}")
+        return {
+            'error': 'instrument_info_failed',
+            'message': f'Cannot get symbol info: {str(e)}'
+        }
+    
+    # ===== STEP 4: VALIDA QUANTITY =====
+    try:
+        qty_validator = QuantityValidator()
+        qty_validated = qty_validator.validate_quantity(
+            symbol=symbol,
+            qty=qty,
+            min_order_qty=min_order_qty,
+            max_order_qty=max_order_qty,
+            qty_step=qty_step,
+            qty_decimals=qty_decimals
+        )
+    except OrderValidationError as e:
+        logging.error(f"{symbol}: Quantity validation failed: {e}")
+        return {
+            'error': 'quantity_invalid',
+            'message': str(e)
+        }
+    
+    # ===== STEP 5: VALIDA PREZZI =====
+    try:
+        price_validator = PriceValidator()
+        prices_validated = price_validator.validate_prices(
+            symbol=symbol,
+            side=side,
+            entry_price=entry_price,
+            sl_price=sl_price,
+            tp_price=tp_price,
+            tick_size=tick_size
+        )
+        
+        entry_validated = prices_validated['entry']
+        sl_validated = prices_validated['sl']
+        tp_validated = prices_validated['tp']
+        rr_ratio = prices_validated['rr_ratio']
+        
+    except OrderValidationError as e:
+        logging.error(f"{symbol}: Price validation failed: {e}")
+        return {
+            'error': 'prices_invalid',
+            'message': str(e)
+        }
+    
+    # ===== STEP 6: CALCOLA MULTI-TP (se abilitato) =====
+    tp_levels = []
+    
+    if config.MULTI_TP_ENABLED and config.MULTI_TP_CONFIG['enabled']:
+        try:
+            tp_calculator = MultiTPCalculator()
+            tp_levels = tp_calculator.calculate_tp_levels(
+                symbol=symbol,
+                side=side,
+                entry_price=entry_validated,
+                sl_price=sl_validated,
+                qty_total=qty_validated,
+                tick_size=tick_size,
+                qty_step=qty_step,
+                qty_decimals=qty_decimals,
+                min_order_qty=min_order_qty
+            )
             
-            for level in config.MULTI_TP_CONFIG['levels']:
-                if side == 'Buy':
-                    tp_level_price = entry_price + (risk * level['rr_ratio'])
-                else:  # Sell
-                    tp_level_price = entry_price - (risk * level['rr_ratio'])
-                
-                # Arrotonda al tick_size
-                tp_level_price = round_to_tick(tp_level_price, tick_size)
-                
-                # Calcola qty rispettando qty_step
-                tp_qty_raw = qty * level['close_pct']
-                tp_qty_stepped = round(tp_qty_raw / qty_step) * qty_step
-                tp_qty_final = max(min_order_qty, round(tp_qty_stepped, qty_decimals))
-                
-                # Verifica che non superi qty totale
-                if tp_qty_final > qty:
-                    tp_qty_final = qty
-                
-                tp_levels.append({
-                    'label': level['label'],
-                    'price': tp_level_price,
-                    'close_pct': level['close_pct'],
-                    'qty': tp_qty_final,  # ← Qty corretta
-                    'emoji': level['emoji'],
-                    'hit': False
-                })
+            # Per Bybit: usa TP più lontano come main TP
+            if tp_levels:
+                tp_validated = tp_levels[-1]['price']
+                logging.info(f"🎯 Using Multi-TP system, main TP: ${tp_validated}")
             
-            logging.info(f'🎯 Multi-TP configurato per {symbol}:')
-            for idx, tp in enumerate(tp_levels, 1):
-                logging.info(
-                    f'   TP{idx}: ${tp["price"]:.{price_decimals}f} '
-                    f'({tp["close_pct"]*100:.0f}% = {tp["qty"]:.{qty_decimals}f})'
-                )
-            
-            # Per Bybit: Usa TP più lontano come "main TP" (TP3)
-            # TP1 e TP2 saranno gestiti da monitor_partial_tp()
-            tp_price = tp_levels[-1]['price']  # TP3
-
+        except Exception as e:
+            logging.error(f"{symbol}: Multi-TP calculation failed: {e}")
+            # Continua con TP singolo
+    
+    # ===== STEP 7: DETERMINA ORDER TYPE =====
+    order_type = 'Market'  # Default
+    
+    if pattern_name and pattern_name in config.PATTERN_ORDER_TYPE:
+        order_type_config = config.PATTERN_ORDER_TYPE[pattern_name]
+        order_type = 'Market' if order_type_config == 'market' else 'Limit'
+    
+    logging.info(
+        f"📤 Placing {order_type} order: {symbol} {side} "
+        f"qty={qty_validated:.{qty_decimals}f} "
+        f"Entry: ${entry_validated:.{price_decimals}f} "
+        f"SL: ${sl_validated:.{price_decimals}f} "
+        f"TP: ${tp_validated:.{price_decimals}f} "
+        f"R:R: {rr_ratio:.2f} "
+        f"Mode: {config.TRADING_MODE}"
+    )
+    
+    # ===== STEP 8: PIAZZA ORDINE SU BYBIT =====
+    try:
         if order_type == 'Limit':
             # ===== LIMIT ORDER =====
-            # Calcola prezzo limit (entry - offset per BUY)
-            offset = LIMIT_ORDER_CONFIG['offset_pct']
+            offset = config.LIMIT_ORDER_CONFIG['offset_pct']
             
             if side == 'Buy':
-                limit_price = entry_price * (1 - offset)  # Sotto prezzo corrente
+                limit_price = entry_validated * (1 - offset)
             else:
-                limit_price = entry_price * (1 + offset)  # Sopra prezzo corrente
+                limit_price = entry_validated * (1 + offset)
             
-            # Arrotonda prezzo
-            price_decimals = get_price_decimals(limit_price)
-            limit_price = round(limit_price, price_decimals)
+            # Arrotonda
+            if tick_size > 0:
+                limit_price = round(limit_price / tick_size) * tick_size
+            else:
+                limit_price = round(limit_price, price_decimals)
             
-            logging.info(f'📍 Limit price: ${limit_price:.{price_decimals}f} (entry: ${entry_price:.{price_decimals}f})')
+            logging.info(
+                f"📍 Limit price: ${limit_price:.{price_decimals}f} "
+                f"(entry: ${entry_validated:.{price_decimals}f})"
+            )
             
             # Piazza ordine LIMIT
             order = session.place_order(
@@ -5127,36 +5422,24 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                 symbol=symbol,
                 side=side,
                 orderType='Limit',
-                qty=str(qty),
-                price=str(limit_price),  # ← Prezzo limit
-                stopLoss=str(sl_price),
-                takeProfit=str(tp_price),
+                qty=str(qty_validated),
+                price=str(limit_price),
+                stopLoss=str(sl_validated),
+                takeProfit=str(tp_validated),
                 positionIdx=0,
-                timeInForce='GTC'  # Good Till Cancel
+                timeInForce='GTC'
             )
             
             if order.get('retCode') == 0:
-                with config.POSITIONS_LOCK:
-                    # ✅ DOUBLE-CHECK dopo ordine eseguito (pattern standard)
-                    if symbol in config.ACTIVE_POSITIONS:
-                        logging.warning(f'{symbol}: Race condition detected, position already added')
-                    else:
-                        config.ACTIVE_POSITIONS[symbol] = {
-                            'side': side,
-                            'qty': qty,
-                            'entry_price': entry_price,
-                            # ... altri campi
-                        }
-                
                 order_id = order.get('result', {}).get('orderId')
                 
-                # ===== WAIT FOR FILL (con timeout) =====
-                timeout = LIMIT_ORDER_CONFIG['timeout_seconds']
-                start_time = time.time()
+                # Wait for fill (con timeout)
+                import asyncio
+                timeout = config.LIMIT_ORDER_CONFIG['timeout_seconds']
+                start_time = asyncio.get_event_loop().time()
                 filled = False
                 
-                while time.time() - start_time < timeout:
-                    # Check se ordine è fillato
+                while asyncio.get_event_loop().time() - start_time < timeout:
                     order_status = session.get_open_orders(
                         category='linear',
                         symbol=symbol,
@@ -5166,130 +5449,137 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                     if order_status.get('retCode') == 0:
                         orders = order_status.get('result', {}).get('list', [])
                         
-                        if not orders:  # Ordine non più in open = fillato
+                        if not orders:  # Ordine fillato
                             filled = True
-                            logging.info(f'✅ Limit order FILLED: {symbol}')
+                            logging.info(f"✅ Limit order FILLED: {symbol}")
                             break
                     
-                    await asyncio.sleep(2)  # Check ogni 2 secondi
+                    await asyncio.sleep(2)
                 
                 if not filled:
-                    logging.warning(f'⏱️ Limit order TIMEOUT: {symbol} (not filled in {timeout}s)')
+                    logging.warning(f"⏱️ Limit order TIMEOUT: {symbol}")
                     
                     # Cancella ordine
-                    cancel = session.cancel_order(
+                    session.cancel_order(
                         category='linear',
                         symbol=symbol,
                         orderId=order_id
                     )
                     
-                    if LIMIT_ORDER_CONFIG['fallback_to_market']:
-                        logging.info(f'🔄 Fallback to MARKET order: {symbol}')
-                        
-                        # Riprova con MARKET
-                        order = session.place_order(
-                            category='linear',
-                            symbol=symbol,
-                            side=side,
-                            orderType='Market',
-                            qty=str(qty),
-                            stopLoss=str(sl_price),
-                            takeProfit=str(tp_price),
-                            positionIdx=0
-                        )
+                    # Fallback to market
+                    if config.LIMIT_ORDER_CONFIG['fallback_to_market']:
+                        logging.info(f"🔄 Fallback to MARKET order: {symbol}")
+                        order_type = 'Market'
+                        # Prosegui al market order sotto
                     else:
-                        return {'error': 'Limit order timeout, no fill'}
+                        return {
+                            'error': 'limit_timeout',
+                            'message': 'Limit order timeout, no fill'
+                        }
         
-        else:
-            # Piazza ordine market con SL e TP
+        if order_type == 'Market':
+            # ===== MARKET ORDER =====
             order = session.place_order(
-                category='linear',  # USDT Perpetual
+                category='linear',
                 symbol=symbol,
                 side=side,
                 orderType='Market',
-                qty=str(qty),
-                stopLoss=str(sl_price),
-                takeProfit=str(tp_price),
-                positionIdx=0  # One-way mode
+                qty=str(qty_validated),
+                stopLoss=str(sl_validated),
+                takeProfit=str(tp_validated),
+                positionIdx=0
             )
         
-        logging.info(f'✅ Ordine eseguito: {order_type} - {order}')
-
-        # ===== SALVA POSIZIONE CON MULTI-TP TRACKING =====
-        if order.get('retCode') == 0:
-            with config.POSITIONS_LOCK:
+        # ===== STEP 9: VERIFICA RISULTATO =====
+        if order.get('retCode') != 0:
+            error_msg = order.get('retMsg', 'Unknown error')
+            logging.error(f"❌ {symbol}: Bybit API error: {error_msg}")
+            
+            return {
+                'error': 'bybit_api_error',
+                'message': error_msg,
+                'code': order.get('retCode')
+            }
+        
+        logging.info(f"✅ Order executed successfully: {order}")
+        
+        # ===== STEP 10: SALVA POSIZIONE NEL TRACKING =====
+        with config.POSITIONS_LOCK:
+            # Double-check prima di salvare
+            if symbol in config.ACTIVE_POSITIONS:
+                logging.warning(
+                    f"{symbol}: Race condition detected, "
+                    f"position already added"
+                )
+            else:
                 config.ACTIVE_POSITIONS[symbol] = {
                     'side': side,
-                    'qty': qty,
-                    'qty_original': qty,  # ← NUOVO: Qty iniziale (prima dei TP parziali)
-                    'entry_price': entry_price,
-                    'sl': sl_price,
-                    'tp': tp_price,  # TP finale (TP3)
+                    'qty': qty_validated,
+                    'qty_original': qty_validated,
+                    'entry_price': entry_validated,
+                    'sl': sl_validated,
+                    'tp': tp_validated,
                     'order_id': order.get('result', {}).get('orderId'),
                     'timestamp': datetime.now(timezone.utc).isoformat(),
                     'timeframe': timeframe,
                     'pattern_name': pattern_name,
                     'trailing_active': False,
-                    'highest_price': entry_price,
+                    'highest_price': entry_validated,
                     'chat_id': chat_id,
-                    'multi_tp_levels': tp_levels if config.MULTI_TP_ENABLED else None  # ← NUOVO
+                    'multi_tp_levels': tp_levels if tp_levels else None
                 }
-            
-            # ===== INIZIALIZZA TP TRACKING =====
-            if config.MULTI_TP_ENABLED and tp_levels:
-                with config.TP_TRACKING_LOCK:
-                    config.TP_TRACKING[symbol] = {
-                        'tp1_hit': False,
-                        'tp2_hit': False,
-                        'tp3_hit': False,
-                        'tp1_qty_closed': 0.0,
-                        'tp2_qty_closed': 0.0,
-                        'tp3_qty_closed': 0.0,
-                        'last_check': datetime.now(timezone.utc)
-                    }
                 
-                logging.info(f'📝 Multi-TP tracking inizializzato per {symbol}')
-            
-            logging.info(f'📝 Posizione salvata per {symbol}')
+                logging.info(f"📝 Position saved for {symbol}")
         
-        return order
-        
-        # Salva la posizione come attiva
-        if order.get('retCode') == 0:
-            with config.POSITIONS_LOCK:
-                config.ACTIVE_POSITIONS[symbol] = {
-                    'side': side,
-                    'qty': qty,
-                    'entry_price': entry_price,  # 👈 AGGIUNGI (pass come parametro)
-                    'sl': sl_price,
-                    'tp': tp_price,
-                    'order_id': order.get('result', {}).get('orderId'),
-                    'timestamp': datetime.now(timezone.utc).isoformat(),
-                    'timeframe': timeframe,  # 👈 AGGIUNGI (pass come parametro)
-                    'pattern_name': pattern_name,  # ← AGGIUNGI
-                    'trailing_active': False,
-                    'highest_price': entry_price,  # 👈 AGGIUNGI
-                    'chat_id': chat_id  # 👈 AGGIUNGI
+        # ===== STEP 11: INIZIALIZZA TP TRACKING (se Multi-TP) =====
+        if tp_levels:
+            with config.TP_TRACKING_LOCK:
+                config.TP_TRACKING[symbol] = {
+                    'tp1_hit': False,
+                    'tp2_hit': False,
+                    'tp3_hit': False,
+                    'tp1_qty_closed': 0.0,
+                    'tp2_qty_closed': 0.0,
+                    'tp3_qty_closed': 0.0,
+                    'last_check': datetime.now(timezone.utc)
                 }
-            logging.info(f'📝 Posizione salvata per {symbol}')
+            
+            logging.info(f"📝 Multi-TP tracking initialized for {symbol}")
         
         return order
         
     except Exception as e:
         error_msg = str(e)
-        logging.exception('❌ Errore nel piazzare ordine')
+        logging.exception(f"❌ Error placing order for {symbol}")
         
         # Errori comuni con suggerimenti
         if 'insufficient' in error_msg.lower():
-            return {'error': 'Balance insufficiente. Verifica il tuo saldo con /balance'}
+            return {
+                'error': 'insufficient_balance',
+                'message': 'Balance insufficiente. Verifica il tuo saldo con /balance'
+            }
         elif 'qty invalid' in error_msg.lower() or '10001' in error_msg:
-            return {'error': f'Quantità non valida per {symbol}. Il symbol potrebbe avere limiti specifici o qty troppo grande/piccola.'}
+            return {
+                'error': 'qty_invalid',
+                'message': f'Quantità non valida per {symbol}. '
+                          f'Il symbol potrebbe avere limiti specifici.'
+            }
         elif 'invalid' in error_msg.lower():
-            return {'error': f'Parametri non validi: {error_msg}'}
+            return {
+                'error': 'invalid_params',
+                'message': f'Parametri non validi: {error_msg}'
+            }
         elif 'risk limit' in error_msg.lower():
-            return {'error': 'Limite di rischio raggiunto. Riduci la posizione o aumenta il risk limit su Bybit.'}
+            return {
+                'error': 'risk_limit',
+                'message': 'Limite di rischio raggiunto. '
+                          'Riduci la posizione o aumenta il risk limit su Bybit.'
+            }
         else:
-            return {'error': f'{error_msg}'}
+            return {
+                'error': 'unknown_error',
+                'message': f'{error_msg}'
+            }
 
 
 def get_top_profitable_symbols():
