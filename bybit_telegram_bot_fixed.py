@@ -16,7 +16,7 @@ import threading
 import io
 import tempfile
 from functools import lru_cache
-from typing import Tuple
+from typing import Tuple, Dict, Optional, Any
 
 # IMPORTANTE: Configura matplotlib prima di altri import
 import matplotlib
@@ -330,7 +330,7 @@ def clear_instrument_cache(symbol: str = None):
             config.INSTRUMENT_INFO_CACHE.clear()
             logging.info("全 cache cleared")
 
-def validate_prices(symbol: str, side: str, entry_price: float, sl_price: float, tp_price: float, tick_size: float) -> dict[str, any]:
+def validate_prices(symbol: str, side: str, entry_price: float, sl_price: float, tp_price: float, tick_size: float) -> Dict[str, Any]:
         """
         Valida e arrotonda prezzi secondo tick_size
         
