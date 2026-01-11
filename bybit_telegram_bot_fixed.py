@@ -6307,270 +6307,635 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             logging.exception(f"Errore trailing SL per {symbol}: {e}")
 
 
-async def monitor_partial_tp(context: ContextTypes.DEFAULT_TYPE):
+class PartialTPManager:
+    """Manager per gestione Take Profit parziali"""
+    
+    def __init__(self):
+        self.last_notifications = {}  # Evita notifiche duplicate
+    
+    def get_current_price(self, symbol: str, timeframe: str) -> Optional[float]:
+        """
+        Ottiene prezzo corrente per symbol
+        
+        Args:
+            symbol: Symbol (es. BTCUSDT)
+            timeframe: Timeframe (per cache)
+        
+        Returns:
+            Prezzo corrente o None se errore
+        """
+        from bybit_telegram_bot_fixed import bybit_get_klines_cached
+        
+        try:
+            df = bybit_get_klines_cached(symbol, timeframe, limit=5)
+            
+            if df.empty:
+                logging.warning(f"{symbol}: No klines data for price check")
+                return None
+            
+            current_price = df['close'].iloc[-1]
+            logging.debug(f"{symbol}: Current price = ${current_price:.4f}")
+            
+            return current_price
+            
+        except Exception as e:
+            logging.error(f"{symbol}: Error getting current price: {e}")
+            return None
+    
+    def check_tp_reached(
+        self,
+        current_price: float,
+        tp_price: float,
+        side: str,
+        buffer_pct: float = 0.002
+    ) -> bool:
+        """
+        Verifica se TP è stato raggiunto
+        
+        Args:
+            current_price: Prezzo corrente
+            tp_price: Prezzo TP target
+            side: 'Buy' o 'Sell'
+            buffer_pct: Buffer % per considerare TP hit
+        
+        Returns:
+            True se TP raggiunto
+        """
+        if side == 'Buy':
+            # LONG: prezzo deve essere >= TP (con buffer)
+            threshold = tp_price * (1 - buffer_pct)
+            reached = current_price >= threshold
+            
+            if reached:
+                logging.info(
+                    f"✅ LONG TP reached: "
+                    f"${current_price:.4f} >= ${threshold:.4f} "
+                    f"(target: ${tp_price:.4f})"
+                )
+            
+            return reached
+        
+        else:  # Sell
+            # SHORT: prezzo deve essere <= TP (con buffer)
+            threshold = tp_price * (1 + buffer_pct)
+            reached = current_price <= threshold
+            
+            if reached:
+                logging.info(
+                    f"✅ SHORT TP reached: "
+                    f"${current_price:.4f} <= ${threshold:.4f} "
+                    f"(target: ${tp_price:.4f})"
+                )
+            
+            return reached
+    
+    def calculate_partial_qty(
+        self,
+        current_qty: float,
+        close_pct: float,
+        qty_step: float,
+        qty_decimals: int,
+        min_order_qty: float
+    ) -> Optional[float]:
+        """
+        Calcola quantity da chiudere per TP parziale
+        
+        Args:
+            current_qty: Quantity corrente in posizione
+            close_pct: % da chiudere (es. 0.4 = 40%)
+            qty_step: Step quantity del symbol
+            qty_decimals: Decimali per arrotondamento
+            min_order_qty: Min order qty del symbol
+        
+        Returns:
+            Qty da chiudere o None se troppo piccola
+        """
+        # Calcola qty raw
+        qty_to_close = current_qty * close_pct
+        
+        # Arrotonda al qty_step
+        if qty_step > 0:
+            qty_to_close = round(qty_to_close / qty_step) * qty_step
+        
+        # Arrotonda ai decimali
+        qty_to_close = round(qty_to_close, qty_decimals)
+        
+        logging.info(
+            f"Partial close calculation: "
+            f"{current_qty:.{qty_decimals}f} * {close_pct*100:.0f}% = "
+            f"{qty_to_close:.{qty_decimals}f}"
+        )
+        
+        # Verifica min_order_qty
+        if qty_to_close < min_order_qty:
+            logging.warning(
+                f"Qty too small: {qty_to_close:.{qty_decimals}f} < "
+                f"min {min_order_qty:.{qty_decimals}f}"
+            )
+            
+            # Usa min_order_qty se possibile
+            if min_order_qty <= current_qty:
+                logging.info(f"Using min_order_qty: {min_order_qty:.{qty_decimals}f}")
+                return min_order_qty
+            else:
+                logging.warning(
+                    f"Cannot close: min_order_qty ({min_order_qty}) > "
+                    f"current_qty ({current_qty})"
+                )
+                return None
+        
+        # Verifica che non superi qty corrente
+        if qty_to_close > current_qty:
+            logging.warning(
+                f"Qty capped to current: {qty_to_close:.{qty_decimals}f} > "
+                f"{current_qty:.{qty_decimals}f}"
+            )
+            qty_to_close = current_qty
+        
+        return qty_to_close
+    
+    def execute_partial_close(
+        self,
+        session,
+        symbol: str,
+        side: str,
+        qty_to_close: float,
+        qty_decimals: int
+    ) -> Dict:
+        """
+        Esegue chiusura parziale su Bybit
+        
+        Args:
+            session: Bybit session
+            symbol: Symbol
+            side: 'Buy' o 'Sell'
+            qty_to_close: Quantity da chiudere
+            qty_decimals: Decimali
+        
+        Returns:
+            Dict con risultato
+        """
+        try:
+            # Inverti lato per chiudere (Buy → Sell, Sell → Buy)
+            close_side = 'Sell' if side == 'Buy' else 'Buy'
+            
+            logging.info(
+                f"📤 Closing partial: {symbol} {close_side} "
+                f"{qty_to_close:.{qty_decimals}f} (reduceOnly)"
+            )
+            
+            # Piazza ordine Market con reduceOnly
+            order = session.place_order(
+                category='linear',
+                symbol=symbol,
+                side=close_side,
+                orderType='Market',
+                qty=str(qty_to_close),
+                reduceOnly=True,
+                positionIdx=0
+            )
+            
+            if order.get('retCode') == 0:
+                order_id = order.get('result', {}).get('orderId')
+                logging.info(
+                    f"✅ Partial close order placed: {symbol} "
+                    f"OrderID: {order_id}"
+                )
+                return {
+                    'success': True,
+                    'order_id': order_id,
+                    'qty_closed': qty_to_close
+                }
+            else:
+                error_msg = order.get('retMsg', 'Unknown error')
+                logging.error(f"❌ Bybit error: {error_msg}")
+                return {
+                    'success': False,
+                    'error': error_msg
+                }
+        
+        except Exception as e:
+            logging.exception(f"❌ Exception during partial close: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    async def send_tp_notification(
+        self,
+        context,
+        chat_id: int,
+        symbol: str,
+        side: str,
+        timeframe: str,
+        tp_index: int,
+        tp_label: str,
+        tp_emoji: str,
+        tp_price: float,
+        current_price: float,
+        qty_closed: float,
+        profit_usd: float,
+        profit_pct: float,
+        remaining_qty: float,
+        entry_price: float,
+        remaining_tps: List[Dict]
+    ):
+        """
+        Invia notifica Telegram per TP hit
+        
+        Args:
+            context: Telegram context
+            chat_id: Chat ID destinazione
+            symbol: Symbol
+            side: 'Buy' o 'Sell'
+            timeframe: Timeframe
+            tp_index: Indice TP (1, 2, 3)
+            tp_label: Label TP
+            tp_emoji: Emoji TP
+            tp_price: Prezzo TP
+            current_price: Prezzo corrente
+            qty_closed: Qty chiusa
+            profit_usd: Profit in USD
+            profit_pct: Profit in %
+            remaining_qty: Qty rimanente
+            entry_price: Prezzo entry
+            remaining_tps: Lista TP rimanenti
+        """
+        from bybit_telegram_bot_fixed import get_price_decimals
+        
+        try:
+            side_emoji = '🟢' if side == 'Buy' else '🔴'
+            price_decimals = get_price_decimals(current_price)
+            
+            # Costruisci messaggio
+            msg = f"{side_emoji} {tp_emoji} <b>TAKE PROFIT {tp_index} HIT!</b>\n\n"
+            msg += f"<b>Symbol:</b> {symbol} ({timeframe})\n"
+            msg += f"<b>{tp_label}</b>\n\n"
+            
+            msg += f"<b>📊 Chiusura Parziale:</b>\n"
+            msg += f"• Qty chiusa: {qty_closed:.4f}\n"
+            msg += f"• Prezzo: ${current_price:.{price_decimals}f}\n"
+            msg += f"• Entry: ${entry_price:.{price_decimals}f}\n"
+            msg += f"• TP Target: ${tp_price:.{price_decimals}f}\n\n"
+            
+            msg += f"<b>💰 Profit Parziale:</b>\n"
+            msg += f"• ${profit_usd:+.2f} ({profit_pct:+.2f}%)\n\n"
+            
+            msg += f"<b>📦 Posizione Residua:</b>\n"
+            msg += f"• Qty: {remaining_qty:.4f}\n"
+            
+            # Info TP rimanenti
+            if remaining_tps:
+                msg += f"\n<b>🎯 TP Rimanenti:</b>\n"
+                for tp in remaining_tps:
+                    msg += (
+                        f"• TP{remaining_tps.index(tp)+tp_index+1}: "
+                        f"${tp['price']:.{price_decimals}f} "
+                        f"({tp['close_pct']*100:.0f}%)\n"
+                    )
+            else:
+                msg += f"\n✅ <b>Tutti i TP eseguiti!</b>\n"
+            
+            # Status trailing
+            if tp_index == 1 and config.MULTI_TP_CONFIG.get('activate_trailing_after_tp1'):
+                msg += f"\n🔄 <b>Trailing SL ora ATTIVO</b>\n"
+                msg += f"Stop Loss proteggerà il residuo automaticamente"
+            
+            # Invia notifica
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=msg,
+                parse_mode='HTML'
+            )
+            
+            logging.info(f"📨 TP{tp_index} notification sent to chat {chat_id}")
+            
+            # Salva timestamp per evitare duplicati
+            notification_key = f"{symbol}_tp{tp_index}"
+            self.last_notifications[notification_key] = datetime.now(timezone.utc)
+            
+        except Exception as e:
+            logging.error(f"❌ Error sending TP notification: {e}")
+
+
+# ============================================
+# GLOBAL INSTANCE
+# ============================================
+
+TP_MANAGER = PartialTPManager()
+
+
+# ============================================
+# MAIN MONITORING FUNCTION
+# ============================================
+
+async def monitor_partial_tp(context):
     """
     Monitora prezzo vs TP levels e chiude posizioni parzialmente
     
-    Eseguito ogni 30 secondi
+    NUOVA VERSIONE:
+    - Logging dettagliato per ogni step
+    - Gestione robusta errori
+    - Notifiche Telegram affidabili
+    - Verifica posizione reale su Bybit
     
-    LOGICA:
-    1. Per ogni posizione con multi-TP attivo
-    2. Scarica prezzo corrente
-    3. Se prezzo >= TP1 (non ancora hit) → Chiudi 40%
-    4. Se prezzo >= TP2 (non ancora hit) → Chiudi 30%
-    5. Se prezzo >= TP3 (non ancora hit) → Chiudi 30% (residuo)
-    6. Aggiorna qty posizione e attiva trailing
-    7. Invia notifica Telegram
+    Eseguito ogni 30 secondi
     """
     
     if not config.MULTI_TP_ENABLED or not config.MULTI_TP_CONFIG['enabled']:
+        logging.debug("Multi-TP monitoring: DISABLED")
         return
     
+    # Ottieni copia posizioni
     with config.POSITIONS_LOCK:
         positions_copy = dict(config.ACTIVE_POSITIONS)
     
     if not positions_copy:
+        logging.debug("Multi-TP monitoring: No positions")
         return
     
-    logging.debug(f"Multi-TP check: {len(positions_copy)} positions")
+    logging.info(f"🎯 Multi-TP check: {len(positions_copy)} positions")
     
+    # Crea sessione Bybit
+    from bybit_telegram_bot_fixed import create_bybit_session, get_instrument_info_cached
+    
+    try:
+        session = create_bybit_session()
+    except Exception as e:
+        logging.error(f"Failed to create Bybit session: {e}")
+        return
+    
+    # Processa ogni posizione
     for symbol, pos_info in positions_copy.items():
         tp_levels = pos_info.get('multi_tp_levels')
+        
         if not tp_levels:
+            logging.debug(f"{symbol}: No Multi-TP configured")
             continue
         
         try:
-            # ✅ VALIDA pos_info
-            is_valid, error_msg = validate_position_info(symbol, pos_info)
-            if not is_valid:
-                logging.error(f"{symbol}: Invalid pos_info in TP monitor - {error_msg}")
-                continue
-                
-            side = pos_info['side']
-            entry_price = pos_info['entry_price']
-            current_qty = pos_info['qty']
+            logging.info(f"{'='*50}")
+            logging.info(f"🎯 Checking Multi-TP for {symbol}")
+            logging.info(f"{'='*50}")
+            
+            # ===== STEP 1: VALIDA POS_INFO =====
+            side = pos_info.get('side')
+            entry_price = pos_info.get('entry_price')
+            current_qty = pos_info.get('qty')
             timeframe = pos_info.get('timeframe', '15m')
             chat_id = pos_info.get('chat_id')
-
-            # ✅ VERIFICA qty disponibile
+            
+            if not all([side, entry_price, current_qty, chat_id]):
+                logging.error(
+                    f"{symbol}: Missing required fields - "
+                    f"side={side}, entry={entry_price}, qty={current_qty}, "
+                    f"chat_id={chat_id}"
+                )
+                continue
+            
             if current_qty <= 0:
-                logging.warning(f"{symbol}: No qty available for TP")
+                logging.warning(f"{symbol}: No qty available (qty={current_qty})")
                 continue
             
-            # Scarica prezzo corrente
-            df = bybit_get_klines_cached(symbol, timeframe, limit=5)
-            if df.empty:
-                continue
+            logging.info(
+                f"{symbol}: Side={side}, Entry=${entry_price:.4f}, "
+                f"Qty={current_qty:.4f}"
+            )
             
-            current_price = df['close'].iloc[-1]
-            
-            # Check ogni TP level
-            for i, tp_level in enumerate(tp_levels, 1):
-                tp_price = tp_level['price']
-                close_pct = tp_level['close_pct']
-                tp_qty = tp_level['qty']
-                label = tp_level['label']
-                emoji = tp_level['emoji']
+            # ===== STEP 2: VERIFICA POSIZIONE SU BYBIT =====
+            try:
+                positions_response = session.get_positions(
+                    category='linear',
+                    symbol=symbol
+                )
                 
+                if positions_response.get('retCode') != 0:
+                    logging.error(
+                        f"{symbol}: Error getting position from Bybit: "
+                        f"{positions_response.get('retMsg')}"
+                    )
+                    continue
+                
+                pos_list = positions_response.get('result', {}).get('list', [])
+                
+                # Cerca posizione attiva
+                real_position = None
+                for p in pos_list:
+                    if float(p.get('size', 0)) > 0:
+                        real_position = p
+                        break
+                
+                if not real_position:
+                    logging.warning(
+                        f"{symbol}: No active position on Bybit, "
+                        f"removing from tracking"
+                    )
+                    
+                    with config.POSITIONS_LOCK:
+                        if symbol in config.ACTIVE_POSITIONS:
+                            del config.ACTIVE_POSITIONS[symbol]
+                    
+                    continue
+                
+                # Verifica qty su Bybit
+                bybit_qty = float(real_position.get('size', 0))
+                
+                if abs(bybit_qty - current_qty) > 0.001:
+                    logging.warning(
+                        f"{symbol}: Qty mismatch - "
+                        f"Local: {current_qty:.4f}, Bybit: {bybit_qty:.4f}"
+                    )
+                    
+                    # Aggiorna qty locale
+                    with config.POSITIONS_LOCK:
+                        if symbol in config.ACTIVE_POSITIONS:
+                            config.ACTIVE_POSITIONS[symbol]['qty'] = bybit_qty
+                            current_qty = bybit_qty
+                
+                logging.info(f"{symbol}: Position verified on Bybit (qty={bybit_qty:.4f})")
+                
+            except Exception as e:
+                logging.error(f"{symbol}: Error verifying position: {e}")
+                continue
+            
+            # ===== STEP 3: OTTIENI PREZZO CORRENTE =====
+            current_price = TP_MANAGER.get_current_price(symbol, timeframe)
+            
+            if current_price is None:
+                logging.error(f"{symbol}: Cannot get current price")
+                continue
+            
+            # Calcola profit attuale
+            if side == 'Buy':
+                profit_per_unit = current_price - entry_price
+            else:
+                profit_per_unit = entry_price - current_price
+            
+            profit_pct = (profit_per_unit / entry_price) * 100
+            
+            logging.info(
+                f"{symbol}: Current price=${current_price:.4f}, "
+                f"Profit={profit_pct:+.2f}%"
+            )
+            
+            # ===== STEP 4: OTTIENI INSTRUMENT INFO =====
+            try:
+                instrument_info = get_instrument_info_cached(session, symbol)
+                
+                min_order_qty = instrument_info['min_order_qty']
+                qty_step = instrument_info['qty_step']
+                qty_decimals = instrument_info['qty_decimals']
+                
+                logging.info(
+                    f"{symbol}: Instrument info - "
+                    f"min_qty={min_order_qty}, step={qty_step}, "
+                    f"decimals={qty_decimals}"
+                )
+                
+            except Exception as e:
+                logging.error(f"{symbol}: Error getting instrument info: {e}")
+                continue
+            
+            # ===== STEP 5: CHECK OGNI TP LEVEL =====
+            buffer_pct = config.MULTI_TP_CONFIG.get('buffer_pct', 0.002)
+            
+            for i, tp_level in enumerate(tp_levels, 1):
                 # Skip se già hit
                 if tp_level.get('hit', False):
-                    continue
-
-                # ✅ VALIDA valori numerici
-                if tp_price <= 0 or close_pct <= 0 or tp_qty <= 0:
-                    logging.error(
-                        f"{symbol}: TP{i} invalid values - "
-                        f"price={tp_price}, pct={close_pct}, qty={tp_qty}"
-                    )
-                    tp_level['hit'] = True  # Marca come hit per non riprovare
+                    logging.debug(f"{symbol}: TP{i} already hit, skipping")
                     continue
                 
-                # Check se prezzo ha raggiunto TP (con buffer)
-                buffer = config.MULTI_TP_CONFIG['buffer_pct']
+                tp_price = tp_level['price']
+                close_pct = tp_level['close_pct']
+                tp_label = tp_level['label']
+                tp_emoji = tp_level['emoji']
                 
-                if side == 'Buy':
-                    tp_reached = current_price >= tp_price * (1 - buffer)
-                else:  # Sell
-                    tp_reached = current_price <= tp_price * (1 + buffer)
+                logging.info(
+                    f"{symbol}: Checking TP{i} - "
+                    f"Target=${tp_price:.4f} ({close_pct*100:.0f}%)"
+                )
+                
+                # Check se prezzo ha raggiunto TP
+                tp_reached = TP_MANAGER.check_tp_reached(
+                    current_price=current_price,
+                    tp_price=tp_price,
+                    side=side,
+                    buffer_pct=buffer_pct
+                )
                 
                 if not tp_reached:
+                    logging.debug(f"{symbol}: TP{i} not reached yet")
                     continue
                 
                 # ===== TP RAGGIUNTO! =====
-                logging.info(
-                    f"🎯 {symbol}: TP{i} REACHED! "
-                    f"Price ${current_price:.4f} >= TP ${tp_price:.4f}"
+                logging.info(f"🎯 {symbol}: TP{i} REACHED!")
+                
+                # Calcola qty da chiudere
+                qty_to_close = TP_MANAGER.calculate_partial_qty(
+                    current_qty=current_qty,
+                    close_pct=close_pct,
+                    qty_step=qty_step,
+                    qty_decimals=qty_decimals,
+                    min_order_qty=min_order_qty
                 )
                 
-                # Calcola qty da chiudere (% del qty CORRENTE, non originale)
-                qty_to_close = round(current_qty * close_pct, pos_info.get('qty_decimals', 3))
-                
-                # Verifica min qty
-                min_qty = config.MULTI_TP_CONFIG.get('min_partial_qty', 0.001)
-                if qty_to_close < min_qty:
-                    logging.warning(
-                        f"{symbol}: TP{i} qty too small ({qty_to_close:.4f} < {min_qty}), "
-                        f"skipping partial close"
-                    )
+                if qty_to_close is None:
+                    logging.warning(f"{symbol}: TP{i} qty too small, skipping")
                     # Marca come hit comunque per non riprovare
                     tp_level['hit'] = True
                     continue
                 
-                # ===== CHIUDI POSIZIONE PARZIALE =====
-                try:
-                    session = create_bybit_session()
-                    instrument_info = get_instrument_info_cached(session, symbol)
-                    
-                    min_order_qty = instrument_info['min_order_qty']
-                    qty_step = instrument_info['qty_step']
-                    qty_decimals = instrument_info['qty_decimals']
-                    
-                    # Ricalcola qty con qty_step CORRETTO
-                    qty_to_close = round(current_qty * close_pct / qty_step) * qty_step
-                    qty_to_close = round(qty_to_close, qty_decimals)
-                    
-                    # Verifica min_order_qty del symbol (più importante di min_partial_qty)
-                    if qty_to_close < min_order_qty:
-                        logging.warning(
-                            f"{symbol}: TP{i} qty too small ({qty_to_close:.{qty_decimals}f} < min {min_order_qty}), "
-                            f"using min_order_qty instead"
-                        )
-                        qty_to_close = min_order_qty
-                    
-                    # Double-check: se anche min_order_qty supera current_qty, skip
-                    if qty_to_close > current_qty:
-                        logging.warning(
-                            f"{symbol}: TP{i} cannot close {qty_to_close:.{qty_decimals}f} "
-                            f"(only {current_qty:.{qty_decimals}f} available), skipping"
-                        )
-                        tp_level['hit'] = True  # Marca hit per non riprovare
-                        continue
-                    
-                    logging.info(
-                        f"{symbol}: TP{i} qty adjusted - "
-                        f"raw: {current_qty * close_pct:.{qty_decimals}f}, "
-                        f"final: {qty_to_close:.{qty_decimals}f} "
-                        f"(step: {qty_step}, decimals: {qty_decimals})"
-                    )
+                # Esegui chiusura parziale
+                result = TP_MANAGER.execute_partial_close(
+                    session=session,
+                    symbol=symbol,
+                    side=side,
+                    qty_to_close=qty_to_close,
+                    qty_decimals=qty_decimals
+                )
                 
-                except Exception as e:
-                    logging.error(f"{symbol}: Error getting instrument info for TP: {e}")
-                    tp_level['hit'] = True
+                if not result['success']:
+                    logging.error(
+                        f"{symbol}: TP{i} close FAILED - {result['error']}"
+                    )
                     continue
-                    
-                    # Usa Market order con reduceOnly per chiusura parziale
-                    close_order = session.place_order(
-                        category='linear',
-                        symbol=symbol,
-                        side='Sell' if side == 'Buy' else 'Buy',  # Inverti lato
-                        orderType='Market',
-                        qty=str(qty_to_close),
-                        reduceOnly=True,  # Solo riduce posizione esistente
-                        positionIdx=0
-                    )
-                    
-                    if close_order.get('retCode') == 0:
-                        # ===== SUCCESS: Aggiorna tracking =====
+                
+                # ===== SUCCESS: Aggiorna tracking =====
+                
+                # Calcola profit
+                profit_usd = profit_per_unit * qty_to_close
+                
+                # Aggiorna posizione
+                new_qty = current_qty - qty_to_close
+                
+                with config.POSITIONS_LOCK:
+                    if symbol in config.ACTIVE_POSITIONS:
+                        config.ACTIVE_POSITIONS[symbol]['qty'] = new_qty
                         
-                        # Calcola profit
-                        if side == 'Buy':
-                            profit_per_unit = current_price - entry_price
-                        else:
-                            profit_per_unit = entry_price - current_price
+                        # Marca TP come hit
+                        for level in config.ACTIVE_POSITIONS[symbol]['multi_tp_levels']:
+                            if level['price'] == tp_price:
+                                level['hit'] = True
                         
-                        profit_usd = profit_per_unit * qty_to_close
-                        profit_pct = (profit_per_unit / entry_price) * 100
-                        
-                        # Aggiorna posizione
-                        new_qty = current_qty - qty_to_close
-                        
-                        with config.POSITIONS_LOCK:
-                            if symbol in config.ACTIVE_POSITIONS:
-                                config.ACTIVE_POSITIONS[symbol]['qty'] = new_qty
-                                
-                                # Marca TP come hit
-                                for level in config.ACTIVE_POSITIONS[symbol]['multi_tp_levels']:
-                                    if level['price'] == tp_price:
-                                        level['hit'] = True
-                                
-                                logging.info(
-                                    f"✅ {symbol}: TP{i} executed! "
-                                    f"Closed {qty_to_close:.4f} (${profit_usd:+.2f}), "
-                                    f"Remaining: {new_qty:.4f}"
-                                )
-                        
-                        # Aggiorna TP tracking
-                        with config.TP_TRACKING_LOCK:
-                            if symbol in config.TP_TRACKING:
-                                config.TP_TRACKING[symbol][f'tp{i}_hit'] = True
-                                config.TP_TRACKING[symbol][f'tp{i}_qty_closed'] = qty_to_close
-                        
-                        # ===== ATTIVA TRAILING DOPO TP1 =====
-                        if i == 1 and config.MULTI_TP_CONFIG.get('activate_trailing_after_tp1', True):
-                            with config.POSITIONS_LOCK:
-                                if symbol in config.ACTIVE_POSITIONS:
-                                    config.ACTIVE_POSITIONS[symbol]['trailing_active'] = True
-                            
-                            logging.info(f"🔄 {symbol}: Trailing SL attivato dopo TP1")
-                        
-                        # ===== NOTIFICA TELEGRAM =====
-                        if chat_id:
-                            try:
-                                side_emoji = '🟢' if side == 'Buy' else '🔴'
-                                price_decimals = get_price_decimals(current_price)
-                                
-                                notification = f"{side_emoji} {emoji} <b>TAKE PROFIT {i} HIT!</b>\n\n"
-                                notification += f"<b>Symbol:</b> {symbol} ({timeframe})\n"
-                                notification += f"<b>{label}</b>\n\n"
-                                
-                                notification += f"<b>📊 Chiusura Parziale:</b>\n"
-                                notification += f"• Qty chiusa: {qty_to_close:.4f} ({close_pct*100:.0f}%)\n"
-                                notification += f"• Prezzo: ${current_price:.{price_decimals}f}\n"
-                                notification += f"• Entry: ${entry_price:.{price_decimals}f}\n\n"
-                                
-                                notification += f"<b>💰 Profit Parziale:</b>\n"
-                                notification += f"• ${profit_usd:+.2f} ({profit_pct:+.2f}%)\n\n"
-                                
-                                notification += f"<b>📦 Posizione Residua:</b>\n"
-                                notification += f"• Qty: {new_qty:.4f}\n"
-                                
-                                # Info TP rimanenti
-                                remaining_tps = [
-                                    (j, tp) for j, tp in enumerate(tp_levels, 1) 
-                                    if not tp.get('hit', False)
-                                ]
-                                
-                                if remaining_tps:
-                                    notification += f"\n<b>🎯 TP Rimanenti:</b>\n"
-                                    for tp_idx, tp in remaining_tps:
-                                        notification += f"• TP{tp_idx}: ${tp['price']:.{price_decimals}f} ({tp['close_pct']*100:.0f}%)\n"
-                                else:
-                                    notification += f"\n✅ <b>Tutti i TP eseguiti!</b>\n"
-                                
-                                # Status trailing
-                                if i == 1 and config.MULTI_TP_CONFIG.get('activate_trailing_after_tp1'):
-                                    notification += f"\n🔄 <b>Trailing SL ora ATTIVO</b>\n"
-                                    notification += f"Stop Loss proteggerà il residuo automaticamente"
-                                
-                                await context.bot.send_message(
-                                    chat_id=chat_id,
-                                    text=notification,
-                                    parse_mode='HTML'
-                                )
-                            
-                            except Exception as e:
-                                logging.error(f"Errore invio notifica TP{i}: {e}")
-                    
-                    else:
-                        logging.error(
-                            f"{symbol}: Errore chiusura TP{i}: {close_order.get('retMsg')}"
+                        logging.info(
+                            f"✅ {symbol}: TP{i} executed! "
+                            f"Closed {qty_to_close:.{qty_decimals}f} "
+                            f"(${profit_usd:+.2f}), "
+                            f"Remaining: {new_qty:.{qty_decimals}f}"
                         )
                 
-                except Exception as e:
-                    logging.error(f"{symbol}: Errore esecuzione TP{i}: {e}")
+                # Aggiorna TP tracking
+                with config.TP_TRACKING_LOCK:
+                    if symbol not in config.TP_TRACKING:
+                        config.TP_TRACKING[symbol] = {}
+                    
+                    config.TP_TRACKING[symbol][f'tp{i}_hit'] = True
+                    config.TP_TRACKING[symbol][f'tp{i}_qty_closed'] = qty_to_close
+                    config.TP_TRACKING[symbol]['last_check'] = datetime.now(timezone.utc)
+                
+                # ===== ATTIVA TRAILING DOPO TP1 =====
+                if i == 1 and config.MULTI_TP_CONFIG.get('activate_trailing_after_tp1', True):
+                    with config.POSITIONS_LOCK:
+                        if symbol in config.ACTIVE_POSITIONS:
+                            config.ACTIVE_POSITIONS[symbol]['trailing_active'] = True
+                    
+                    logging.info(f"🔄 {symbol}: Trailing SL activated after TP1")
+                
+                # ===== INVIA NOTIFICA TELEGRAM =====
+                if chat_id:
+                    # TP rimanenti
+                    remaining_tps = [
+                        tp for j, tp in enumerate(tp_levels, 1)
+                        if j > i and not tp.get('hit', False)
+                    ]
+                    
+                    await TP_MANAGER.send_tp_notification(
+                        context=context,
+                        chat_id=chat_id,
+                        symbol=symbol,
+                        side=side,
+                        timeframe=timeframe,
+                        tp_index=i,
+                        tp_label=tp_label,
+                        tp_emoji=tp_emoji,
+                        tp_price=tp_price,
+                        current_price=current_price,
+                        qty_closed=qty_to_close,
+                        profit_usd=profit_usd,
+                        profit_pct=profit_pct,
+                        remaining_qty=new_qty,
+                        entry_price=entry_price,
+                        remaining_tps=remaining_tps
+                    )
+                
+                # Aggiorna current_qty per prossimi TP
+                current_qty = new_qty
         
         except Exception as e:
-            logging.exception(f"Errore monitoring TP per {symbol}: {e}")
+            logging.exception(f"❌ Error monitoring TP for {symbol}: {e}")
+    
+    logging.info("🎯 Multi-TP check completed\n")
+
 
 # ===== FUNZIONE per schedulare il job =====
 def schedule_trailing_stop_job(application):
