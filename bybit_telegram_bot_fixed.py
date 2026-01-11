@@ -31,6 +31,12 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import telegram.error
 
+from notifications import (
+    send_pattern_notification,
+    send_market_notification,
+    NOTIFICATION_MANAGER
+)
+
 # Import pybit
 try:
     from pybit.unified_trading import HTTP as BybitHTTP
@@ -6401,15 +6407,10 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     """
     Job che viene eseguito ad ogni chiusura candela
     
-    LOGICA EMA-FIRST (ottimizzata):
-    1. Analizza condizioni EMA
-    2. Se EMA non valide → SKIP ricerca pattern (risparmio risorse)
-    3. Se EMA OK → Cerca pattern
-    4. Se pattern trovato → Invia segnale
-    
-    COMPORTAMENTO:
-    - DEFAULT: Invia grafico SOLO quando trova pattern
-    - FULL_MODE: Invia sempre (anche senza pattern, con analisi EMA)
+    REFACTORED:
+    - Usa notifications module per caption/chart
+    - Eliminato codice duplicato (300+ righe → 50 righe)
+    - Logica più pulita e mantenibile
     """
     
     job_ctx = context.job.data
@@ -6417,17 +6418,12 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
     symbol = job_ctx['symbol']
     timeframe = job_ctx['timeframe']
     key = f'{symbol}-{timeframe}'
-    momentum_reason = ""   # default
-
-    #logging.info(f'🔍 Analyzing {symbol} {timeframe}...')
-    logging.debug(f'   Volume mode: {config.VOLUME_FILTER_MODE}')
-    logging.debug(f'   Trend mode: {config.TREND_FILTER_MODE}')
-    logging.debug(f'   EMA mode: {config.EMA_FILTER_MODE if config.EMA_FILTER_ENABLED else "OFF"}')
-    logging.debug(f'   Market time: {"ON" if config.MARKET_TIME_FILTER_ENABLED else "OFF"}')
+    
+    logging.debug(f'🔍 Analyzing {symbol} {timeframe}...')
     
     # Check se auto-discovered
     is_auto = job_ctx.get('auto_discovered', False)
-
+    
     # ===== MARKET TIME FILTER (PRIORITY CHECK) =====
     if config.MARKET_TIME_FILTER_ENABLED:
         time_ok, time_reason = is_good_trading_time_utc()
@@ -6444,45 +6440,16 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             if config.MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
                 # Blocca SOLO autotrade, analisi continua
                 logging.info(f'   Mode: AUTOTRADE_ONLY - Analysis continues, trading disabled')
-                
-                # Forza autotrade = False per questo ciclo
                 job_ctx['autotrade'] = False
-                
-                # IMPORTANTE: Continua con l'analisi ma senza trading
             else:
                 # Blocca TUTTO (analisi + trading)
                 logging.info(f'   Mode: ALL_ANALYSIS - Skipping analysis completely')
-                
-                # Invia notifica opzionale (solo 1 volta per ciclo di blocco)
-                if not hasattr(analyze_job, f'notified_{symbol}_{timeframe}'):
-                    try:
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text=(
-                                f"⏰ <b>Market Time Filter Active</b>\n\n"
-                                f"Symbol: {symbol} {timeframe}\n"
-                                f"UTC Hour: {current_hour:02d}\n"
-                                f"Blocked Hours: {sorted(config.MARKET_TIME_FILTER_BLOCKED_UTC_HOURS)}\n\n"
-                                f"Analysis paused during low liquidity hours.\n"
-                                f"Will resume automatically."
-                            ),
-                            parse_mode='HTML'
-                        )
-                        # Marca come notificato per questa sessione
-                        setattr(analyze_job, f'notified_{symbol}_{timeframe}', True)
-                    except:
-                        pass
-                
-                return  # STOP: Skip analysis completamente
-        else:
-            # Reset flag notifica quando orario torna OK
-            if hasattr(analyze_job, f'notified_{symbol}_{timeframe}'):
-                delattr(analyze_job, f'notified_{symbol}_{timeframe}')
-
-    # Verifica se le notifiche complete sono attive
+                return  # STOP
+    
+    # ===== VERIFICA NOTIFICHE COMPLETE =====
     with config.FULL_NOTIFICATIONS_LOCK:
         full_mode = chat_id in config.FULL_NOTIFICATIONS and key in config.FULL_NOTIFICATIONS[chat_id]
-
+    
     try:
         # ===== STEP 1: OTTIENI DATI =====
         df = bybit_get_klines_cached(symbol, timeframe, limit=200)
@@ -6494,22 +6461,16 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     text=f'⚠️ Nessun dato disponibile per {symbol} {timeframe}'
                 )
             return
-
-        # ===== AGGIUNGI QUESTO CHECK =====
-        # Verifica età ultima candela per escludere quella corrente (in formazione)
+        
+        # ===== VERIFICA ETÀ ULTIMA CANDELA =====
         last_candle_time = df.index[-1]
         if last_candle_time.tzinfo is None:
             last_candle_time = last_candle_time.tz_localize('UTC')
         
-        # Calcola quanti secondi sono passati dall'apertura dell'ultima candela
         now_utc = datetime.now(timezone.utc)
         time_diff = (now_utc - last_candle_time).total_seconds()
         
-        # Ottieni durata timeframe in secondi
         interval_seconds = config.INTERVAL_SECONDS.get(timeframe, 300)
-        
-        # Se l'ultima candela è troppo recente (meno del 90% del timeframe),
-        # è ancora in formazione → usa la penultima
         threshold = interval_seconds * 0.9  # 90% del timeframe
         
         if time_diff < threshold:
@@ -6518,35 +6479,26 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 f"({time_diff:.0f}s < {threshold:.0f}s threshold), "
                 f"using previous closed candle"
             )
-            # Rimuovi ultima candela (quella in formazione)
             df = df.iloc[:-1]
             
             if df.empty:
                 logging.warning(f'{symbol} {timeframe}: No closed candles available')
                 return
         
-        # Ora df contiene SOLO candele chiuse
-        # ===== FINE BLOCCO =====
-
+        # ===== ESTRAI DATI CANDELA =====
         last_close = df['close'].iloc[-1]
         last_time = df.index[-1]
-        timestamp_str = last_time.strftime('%Y-%m-%d %H:%M UTC')
-
-        # ✅ FIX PUNTO #3: Lock per lettura thread-safe
+        
+        # ===== CHECK POSIZIONE ESISTENTE =====
         with config.POSITIONS_LOCK:
             position_exists = symbol in config.ACTIVE_POSITIONS
-
-        # Log per debug
+        
         if position_exists:
             logging.debug(f'{symbol}: Position already exists, skip order')
-
-        caption = ""  # ← AGGIUNGI QUESTA RIGA
-        # ===== CALCOLA DECIMALI UNA SOLA VOLTA =====
-        price_decimals = get_price_decimals(last_close)
         
-        # ===== STEP 2: PRE-FILTER EMA (PRIMA DI CERCARE PATTERN) =====
+        # ===== STEP 2: ANALISI EMA (PRE-FILTER) =====
         ema_analysis = None
-        pattern_search_allowed = True  # Default: cerca pattern
+        pattern_search_allowed = True
         
         if config.EMA_FILTER_ENABLED:
             ema_analysis = analyze_ema_conditions(df, timeframe, None)
@@ -6558,7 +6510,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 f'Passed={ema_analysis["passed"]}'
             )
             
-            # STRICT MODE: Blocca completamente se EMA non passa
+            # STRICT MODE: Blocca se EMA non passa
             if config.EMA_FILTER_MODE == 'strict' and not ema_analysis['passed']:
                 pattern_search_allowed = False
                 logging.warning(
@@ -6568,34 +6520,17 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 
                 # Se full mode, invia comunque analisi mercato
                 if full_mode:
-                    caption = (
-                        f"📊 <b>{symbol}</b> ({timeframe})\n"
-                        f"🕐 {timestamp_str}\n"
-                        f"💵 Price: ${last_close:.{price_decimals}f}\n\n"
-                        f"🚫 <b>ZONA NON VALIDA (EMA Strict)</b>\n\n"
-                        f"Score EMA: {ema_analysis['score']}/100\n"
-                        f"Quality: {ema_analysis['quality']}\n\n"
-                        f"{ema_analysis['details']}\n\n"
-                        f"⚠️ Pattern search DISABILITATA per score EMA insufficiente.\n"
-                        f"Attendi miglioramento condizioni EMA."
+                    await send_market_notification(
+                        context=context,
+                        chat_id=chat_id,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        current_price=last_close,
+                        df=df,
+                        ema_analysis=ema_analysis,
+                        timestamp=last_time
                     )
-                    
-                    try:
-                        chart_buffer = generate_chart(df, symbol, timeframe)
-                        await context.bot.send_photo(
-                            chat_id=chat_id,
-                            photo=chart_buffer,
-                            caption=caption,
-                            parse_mode='HTML'
-                        )
-                    except:
-                        await context.bot.send_message(
-                            chat_id=chat_id, 
-                            text=caption, 
-                            parse_mode='HTML'
-                        )
-                
-                #return  # STOP QUI - Non cerca pattern
+                return
             
             # LOOSE MODE: Blocca se score < 40
             elif config.EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
@@ -6605,78 +6540,38 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                     f'(score {ema_analysis["score"]}/100). Skip pattern search.'
                 )
                 
-                # Se full mode, invia comunque analisi
                 if full_mode:
-                    caption = (
-                        f"📊 <b>{symbol}</b> ({timeframe})\n"
-                        f"🕐 {timestamp_str}\n"
-                        f"💵 Price: ${last_close:.{price_decimals}f}\n\n"
-                        f"⚠️ <b>EMA Score troppo basso (Loose mode)</b>\n\n"
-                        f"Score EMA: {ema_analysis['score']}/100\n"
-                        f"Quality: {ema_analysis['quality']}\n\n"
-                        f"Minimo richiesto in LOOSE: 40/100\n"
-                        f"Attendi miglioramento condizioni."
+                    await send_market_notification(
+                        context=context,
+                        chat_id=chat_id,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        current_price=last_close,
+                        df=df,
+                        ema_analysis=ema_analysis,
+                        timestamp=last_time
                     )
-                    
-                    try:
-                        chart_buffer = generate_chart(df, symbol, timeframe)
-                        await context.bot.send_photo(
-                            chat_id=chat_id, 
-                            photo=chart_buffer, 
-                            caption=caption, 
-                            parse_mode='HTML'
-                        )
-                    except:
-                        await context.bot.send_message(
-                            chat_id=chat_id, 
-                            text=caption, 
-                            parse_mode='HTML'
-                        )
-                
-                #return  # STOP - Non cerca pattern
+                return
         
-        # ===== STEP 3: CERCA PATTERN (solo se EMA permette) =====
-        # I filtri globali sono DENTRO check_patterns() ora
+        # ===== STEP 3: CERCA PATTERN =====
         found, side, pattern, pattern_data = check_patterns(df, symbol=symbol)
         
         if found:
-            #logging.info(f'🎯 Pattern trovato: {pattern} ({side}) su {symbol} {timeframe}')
             logging.info(f'✅ {symbol} {timeframe} - Pattern FOUND: {pattern} ({side})')
-
-            # Registra segnale nelle statistiche
-            try:
-                track_patterns.integrate_pattern_stats_on_signal(
-                    pattern_name=pattern,
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    side=side,
-                    autotrade=job_ctx.get('autotrade', False)
-                )
-            except Exception as e:
-                logging.error(f'Errore tracking pattern signal: {e}')
-    
-            # Log pattern-specific data se disponibile
+            
+            # Log pattern-specific data
             if pattern_data:
-                    #logging.info(f'   {symbol} - Quality Score: {pattern_data["quality_score"]}/100 - Tier: {pattern_data["tier"]} - Volume: {pattern_data["volume_ratio"]:.1f}x')
-                    # ===== FIX: Check sicuro per quality_score =====
-                    quality_score = pattern_data.get('quality_score', 'N/A')
-                    tier = pattern_data.get('tier', 'N/A')
-                    volume_ratio = pattern_data.get('volume_ratio', 0)
-                    
-                    if quality_score != 'N/A' and tier != 'N/A' and volume_ratio > 0:
-                        logging.info(
-                            f'   {symbol} - Quality Score: {quality_score}/100 - '
-                            f'Tier: {tier} - Volume: {volume_ratio:.1f}x'
-                        )
-                    else:
-                        # Fallback per pattern senza questi dati
-                        logging.info(f'   {symbol} - Pattern: {pattern} (data structure varies)')
+                quality_score = pattern_data.get('quality_score', 'N/A')
+                tier = pattern_data.get('tier', 'N/A')
+                volume_ratio = pattern_data.get('volume_ratio', 0)
+                
+                if quality_score != 'N/A' and tier != 'N/A' and volume_ratio > 0:
+                    logging.info(
+                        f'   {symbol} - Quality Score: {quality_score}/100 - '
+                        f'Tier: {tier} - Volume: {volume_ratio:.1f}x'
+                    )
         else:
             logging.debug(f'❌ {symbol} {timeframe} - NO pattern detected')
-            # Log perché non ha trovato pattern (se EMA era OK)
-            if ema_analysis and ema_analysis['passed']:
-                logging.info(f'  {symbol} - EMA was OK ({ema_analysis["quality"]}) but no pattern matched')
-
         
         # Se NON pattern e NON full_mode → Skip notifica
         if not found and not full_mode:
@@ -6684,16 +6579,13 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             return
         
         # ===== STEP 4: CALCOLA PARAMETRI TRADING =====
-        atr_series = atr(df, period=14)
-        last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else np.nan
-
-        # 🔧 FIX: Dichiara position_exists SUBITO
-        position_exists = symbol in config.ACTIVE_POSITIONS
-        # ===== STEP 5: COSTRUISCI MESSAGGIO =====
-        
         if found and side == 'Buy':
             # Check Higher Timeframe EMA (tappo)
-            htf_block = check_higher_timeframe_resistance(symbol=symbol, current_tf=timeframe, current_price=last_close)
+            htf_block = check_higher_timeframe_resistance(
+                symbol=symbol,
+                current_tf=timeframe,
+                current_price=last_close
+            )
             
             if htf_block['blocked']:
                 logging.warning(
@@ -6728,937 +6620,57 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                         )
                 
                 return  # BLOCCA segnale
-
-            # Inizializza variabili default per evitare UnboundLocalError
-            entry_price = last_close  # ← AGGIUNGI all'inizio del blocco BUY
+            
+            # ===== CALCOLA ENTRY/SL/TP =====
+            entry_price = last_close
             sl_price = None
             tp_price = None
-            ema_used = 'ATR'
-            ema_value = 0
-
-            # ===== GESTIONE PATTERN-SPECIFIC ENTRY/SL/TP =====
-            if pattern == 'Volume Spike Breakout' and pattern_data:
-                entry_price = last_close  # Entry immediato
-                
-                # SL: EMA 10 o ATR
-                if config.USE_EMA_STOP_LOSS:
-                    sl_price, ema_used, ema_value = calculate_ema_stop_loss(
-                        df, timeframe, last_close, side
-                    )
-                else:
-                    if not math.isnan(last_atr) and last_atr > 0:
-                        sl_price = last_close - last_atr * 1.5
-                        ema_used = 'ATR'
-                        ema_value = last_atr
-                    else:
-                        sl_price = pattern_data['ema10'] * 0.998
-                        ema_used = 'EMA 10'
-                        ema_value = pattern_data['ema10']
-                
-                # TP: Standard ATR
-                tp_price = last_close + abs(last_close - sl_price) * 2.0
             
-            # === BULLISH FLAG BREAKOUT ===
-            elif pattern == 'Bullish Flag Breakout' and pattern_data:
-                entry_price = pattern_data['X']
-                sl_price = pattern_data['consolidation_low'] * 0.998
-                tp_price = pattern_data['X'] + (pattern_data['pole_height'] * 1.5)
-                ema_used = 'Flag Pattern'
-                ema_value = pattern_data['consolidation_low']
-                
-                logging.info(f'🚩 Bullish Flag Entry Setup:')
-                logging.info(f'   X (breakout): ${entry_price:.{price_decimals}f}')
-                logging.info(f'   Pole Height: {pattern_data["pole_height_pct"]:.2f}%')
-                logging.info(f'   Entry: ${entry_price:.{price_decimals}f}')
-                logging.info(f'   SL: ${sl_price:.{price_decimals}f}')
-                logging.info(f'   TP: ${tp_price:.{price_decimals}f}')
-
-            elif pattern == 'Triple Touch Breakout' and pattern_data:
-                """
-                ENTRY LOGIC per Triple Touch Breakout
-                
-                Entry: Al breakout del terzo tocco (prezzo corrente)
-                SL: Sotto consolidamento low (con buffer 0.2%)
-                TP: R + (2.5 × range consolidamento)
-                
-                R:R tipico: 1:2.5-3.5
-                """
-                
-                entry_price = pattern_data.get('suggested_entry')
-                sl_price   = pattern_data.get('suggested_sl')
-                tp_price   = pattern_data.get('suggested_tp')
-                
-                if entry_price is None or sl_price is None or tp_price is None:
-                    logging.error(f"{symbol} {timeframe} - Pattern {pattern}: missing suggested_* in pattern_data keys={list(pattern_data.keys())}")
-                    return  # oppure continue / skip ordine
-                
-                ema_used = 'Triple Touch Zone'
-                ema_value = pattern_data['resistance']
-                
-                # Calcola decimali
-                price_decimals = get_price_decimals(entry_price)
-                
-                # Log dettagliato
-                logging.info(f'🎯 Triple Touch Breakout Entry Setup:')
-                logging.info(f'   Resistance: ${pattern_data["resistance"]:.{price_decimals}f}')
-                logging.info(f'   Touch 1 rejection: {pattern_data["touch_1_rejection_pct"]:.1f}%')
-                logging.info(f'   Touch 2 rejection: {pattern_data["touch_2_rejection_pct"]:.1f}%')
-                logging.info(f'   Consolidation: {pattern_data["consolidation_duration"]} candele, {pattern_data["range_pct"]:.2f}%')
-                logging.info(f'   Entry: ${entry_price:.{price_decimals}f}')
-                logging.info(f'   SL: ${sl_price:.{price_decimals}f}')
-                logging.info(f'   TP: ${tp_price:.{price_decimals}f}')
-                logging.info(f'   Volume: {pattern_data["volume_ratio"]:.1f}x')
-                logging.info(f'   EMA 60: ${pattern_data["ema60"]:.{price_decimals}f}')
-                logging.info(f'   Min distance to EMA 60: {pattern_data["min_distance_to_ema60_pct"]:.2f}%')
-                
-                # Nel caption aggiungi info specifiche Triple Touch
-                caption += f"🎯 <b>Triple Touch Breakout</b> ({pattern_data['quality']})\n"
-                caption += f"📍 Resistance: ${pattern_data['resistance']:.{price_decimals}f}\n"
-                caption += f"🔄 Rejections: {pattern_data['touch_1_rejection_pct']:.1f}% + {pattern_data['touch_2_rejection_pct']:.1f}%\n"
-                caption += f"📊 Consolidation: {pattern_data['consolidation_duration']} candele ({pattern_data['range_pct']:.2f}%)\n\n"
-                
-                caption += f"💵 Entry: <b>${entry_price:.{price_decimals}f}</b>\n"
-                caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
-                caption += f"   (sotto consolidamento)\n"
-                caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
-                caption += f"   (2.5R projection)\n\n"
-                
-                caption += f"📊 <b>Quality Metrics:</b>\n"
-                caption += f"• Breakout volume: {pattern_data['volume_ratio']:.1f}x\n"
-                caption += f"• Breakout body: {pattern_data['breakout_body_pct']:.1f}%\n"
-                caption += f"• EMA 60: ${pattern_data['ema60']:.{price_decimals}f}\n"
-                caption += f"• Min dist EMA 60: {pattern_data['min_distance_to_ema60_pct']:.2f}%\n"
-                caption += f"• EMA aligned: {'✅' if pattern_data['ema_aligned'] else '⚠️'}\n"
-                caption += f"• Near EMA 60: {'✅' if pattern_data['near_ema60'] else '⚠️'}\n"
-            
-            # === LIQUIDITY SWEEP + REVERSAL ===
-            elif pattern == 'Liquidity Sweep + Reversal' and pattern_data:
-                entry_price = pattern_data.get('suggested_entry', last_close)
-                sl_price = pattern_data.get('suggested_sl', last_close * 0.98)
-                risk = entry_price - sl_price
-                tp_price = entry_price + (risk * 2.0)
-                ema_used = 'Sweep Low'
-                ema_value = pattern_data['sweep_low']
-                
-                # Verifica distanza entry
-                entry_distance = abs(entry_price - last_close) / last_close
-                if entry_distance > 0.005:
-                    logging.warning(f'⚠️ {symbol}: Entry price troppo lontano')
-                    entry_price = last_close
-                
-                logging.info(f'💎 Liquidity Sweep Entry Setup:')
-                logging.info(f'   Entry: ${entry_price:.{price_decimals}f}')
-                logging.info(f'   SL: ${sl_price:.{price_decimals}f}')
-                logging.info(f'   TP: ${tp_price:.{price_decimals}f} (2R)')
-            
-            # === SUPPORT/RESISTANCE BOUNCE ===
-            elif pattern == 'Support/Resistance Bounce' and pattern_data:
-                entry_price = last_close
-                support_level = pattern_data['support_level']
-                sl_price = support_level * 0.998
-                risk = entry_price - sl_price
-                tp_price = entry_price + (risk * 1.6)
-                ema_used = 'Support Level'
-                ema_value = support_level
-                
-                logging.info(f'🎯 S/R Bounce Entry Setup:')
-                logging.info(f'   Support: ${support_level:.{price_decimals}f}')
-                logging.info(f'   Entry: ${entry_price:.{price_decimals}f}')
-                logging.info(f'   SL: ${sl_price:.{price_decimals}f}')
-                logging.info(f'   TP: ${tp_price:.{price_decimals}f} (1.6R)')
-
-            elif pattern == 'Breakout + Retest' and pattern_data:
-                """
-                ENTRY LOGIC per Breakout + Retest
-                
-                Entry: Al bounce dal retest (prezzo corrente)
-                SL: Sotto retest low (con buffer 0.2%)
-                TP: Resistance + (2 × range consolidamento)
-                
-                R:R tipico: 1:2.5-3
-                """
-                
-                entry_price = pattern_data.get('suggested_entry')
-                sl_price   = pattern_data.get('suggested_sl')
-                tp_price   = pattern_data.get('suggested_tp')
-                
-                if entry_price is None or sl_price is None or tp_price is None:
-                    logging.error(f"{symbol} {timeframe} - Pattern {pattern}: missing suggested_* in pattern_data keys={list(pattern_data.keys())}")
-                    return  # oppure continue / skip ordine
-                
-                ema_used = 'Retest Zone'
-                ema_value = pattern_data['resistance']
-                
-                # Calcola decimali
-                price_decimals = get_price_decimals(entry_price)
-                
-                # Log dettagliato
-                logging.info(f'🔄 Breakout + Retest Entry Setup:')
-                logging.info(f'   Resistance (support): ${pattern_data["resistance"]:.{price_decimals}f}')
-                logging.info(f'   Range: {pattern_data["range_pct"]:.2f}%')
-                logging.info(f'   Breakout: ${pattern_data["breakout_price"]:.{price_decimals}f}')
-                logging.info(f'   Retest Low: ${pattern_data["retest_low"]:.{price_decimals}f}')
-                logging.info(f'   Entry: ${entry_price:.{price_decimals}f}')
-                logging.info(f'   SL: ${sl_price:.{price_decimals}f}')
-                logging.info(f'   TP: ${tp_price:.{price_decimals}f}')
-                logging.info(f'   Volume bounce: {pattern_data["retest_vol_ratio"]:.1f}x')
-                logging.info(f'   Rejection: {pattern_data["retest_rejection_pct"]:.1f}%')
-                
-                # Nel caption aggiungi info specifiche
-                caption += f"🔄 <b>Breakout + Retest</b>\n"
-                caption += f"📊 Range: {pattern_data['range_pct']:.2f}%\n"
-                caption += f"💥 Breakout: ${pattern_data['breakout_price']:.{price_decimals}f}\n"
-                caption += f"🔄 Retest Zone: ${pattern_data['resistance']:.{price_decimals}f}\n"
-                caption += f"📍 Retest Low: ${pattern_data['retest_low']:.{price_decimals}f}\n\n"
-                
-                caption += f"💵 Entry: <b>${entry_price:.{price_decimals}f}</b>\n"
-                caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
-                caption += f"   (sotto retest low)\n"
-                caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
-                caption += f"   (2R projection)\n\n"
-                
-                caption += f"📊 <b>Quality Metrics:</b>\n"
-                caption += f"• Breakout volume: {pattern_data['breakout_vol_ratio']:.1f}x\n"
-                caption += f"• Retest rejection: {pattern_data['retest_rejection_pct']:.1f}%\n"
-                caption += f"• Pullback: {pattern_data['pullback_duration']} candele\n"
-                caption += f"• R touches: {pattern_data['touches_resistance']}\n"
-
-            elif pattern == 'Bullish Engulfing (GOLD)' or \
-                 pattern == 'Bullish Engulfing (GOOD)' or \
-                 pattern == 'Bullish Engulfing (OK)':
-                
-                entry_price = pattern_data['entry_price']
+            # Gestione pattern-specific entry/sl/tp
+            if pattern_data and 'suggested_entry' in pattern_data:
+                entry_price = pattern_data['suggested_entry']
                 sl_price = pattern_data['suggested_sl']
                 tp_price = pattern_data['suggested_tp']
-                ema_used = 'Engulfing Enhanced'
-                ema_value = pattern_data.get('ema60', pattern_data.get('ema10', pattern_data.get('support_level', 0)))
-                
-                # Caption speciale per Engulfing
-                tier = pattern_data['tier']
-                score = pattern_data['quality_score']
-                
-                quality_emoji_map = {
-                    'GOLD': '🌟',
-                    'GOOD': '✅',
-                    'OK': '⚠️'
-                }
-                
-                q_emoji = quality_emoji_map.get(tier, '⚪')
-                
-                caption = f"🟢 <b>BULLISH ENGULFING {tier}</b> {q_emoji}\n\n"
-                
-                # Tier info
-                caption += f"<b>Quality Score: {score}/100</b>\n\n"
-                
-                # EMA Setup
-                caption += f"<b>📈 EMA Setup:</b>\n"
-                caption += f"EMA 10: ${pattern_data['ema10']:.{price_decimals}f}\n"
-                caption += f"EMA 60: ${pattern_data['ema60']:.{price_decimals}f}\n"
-                caption += f"Distance EMA 10: {pattern_data['distance_to_ema10']:.2f}%\n"
-                caption += f"Distance EMA 60: {pattern_data['distance_to_ema60']:.2f}%\n"
-                
-                if pattern_data['near_ema60']:
-                    caption += f"🌟 <b>VICINO EMA 60</b> (Institutional support!)\n"
-                elif pattern_data['near_ema10']:
-                    caption += f"✅ <b>VICINO EMA 10</b> (Short-term support)\n"
-                
-                caption += f"\n"
-                
-                # Pullback
-                if pattern_data['had_pullback']:
-                    caption += f"🔄 <b>Pullback confermato</b>\n"
-                
-                # Volume
-                caption += f"📊 Volume: {pattern_data['volume_ratio']:.1f}x\n"
-                
-                # Rejection
-                caption += f"📍 Rejection: {pattern_data['rejection_strength']:.2f}x corpo\n"
-                caption += f"Wick: {pattern_data['lower_wick_pct']:.1f}%\n\n"
-                
-                # Trading setup
-                caption += f"<b>🎯 Trade Setup:</b>\n"
-                caption += f"Entry: ${entry_price:.{price_decimals}f}\n"
-                caption += f"SL: ${sl_price:.{price_decimals}f}\n"
-                
-                if pattern_data['near_ema60']:
-                    caption += f"  (sotto EMA 60 + buffer)\n"
-                else:
-                    caption += f"  (sotto low candela)\n"
-                
-                caption += f"TP: ${tp_price:.{price_decimals}f} (2R)\n"
-                
-                # Risk calculation
-                # ===== DYNAMIC RISK CALCULATION =====
-                # Calcola risk basato su EMA score
-                # Prima di usare risk_base
-                risk_base = config.RISK_USD  # default sempre definito
-                if ema_analysis and 'score' in ema_analysis:
-                    ema_score = ema_analysis['score']
-                    risk_base = calculate_dynamic_risk(ema_score)
-                    logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
-                else:
-                    risk_base = config.RISK_USD
-                    logging.info(f"No EMA analysis, using base risk ${config.RISK_USD}")
-                
-                # Apply symbol-specific override se configurato
-                if symbol in config.SYMBOL_RISK_OVERRIDE:
-                    risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
-                    logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
-                else:
-                    risk_for_symbol = risk_base
-                
-                # ===== INTELLIGENT POSITION SIZING =====
-                # Calcola ATR per volatilità
-                lastatr = atr(df, period=14).iloc[-1]
-                if math.isnan(lastatr):
-                    lastatr = abs(entry_price - sl_price) * 0.01  # Fallback: 1% del range
-                
-                # Calcola qty con position sizing intelligente
-                ema_score = ema_analysis['score'] if ema_analysis else 50
-                qty = calculate_optimal_position_size(
-                    entry_price=entry_price,
-                    sl_price=sl_price,
-                    symbol=symbol,
-                    volatility_atr=lastatr,
-                    ema_score=ema_score,
-                    risk_usd=risk_for_symbol
-                )
-                
-                # Add info nel caption
-                caption += f"📊 Position Sizing:\n"
-                caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
-                if lastatr > 0:
-                    volatility_pct = (lastatr / entry_price) * 100
-                    caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
-
-                # Add risk info nel caption
-                caption += f"📊 Risk Management:\n"
-                caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
-                if ema_analysis:
-                    caption += f"EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n"
-                    caption += f"Risk Tier: "
-                    if ema_analysis['score'] >= 80:
-                        caption += "🌟 GOLD (Max Risk)\n"
-                    elif ema_analysis['score'] >= 60:
-                        caption += "✅ GOOD (Standard Risk)\n"
-                    elif ema_analysis['score'] >= 40:
-                        caption += "⚠️ OK (Reduced Risk)\n"
-                    else:
-                        caption += "❌ WEAK (Minimal Risk)\n"
-
-
-            elif pattern == 'Pin Bar Bullish (GOLD)' or \
-                 pattern == 'Pin Bar Bullish (GOOD)' or \
-                 pattern == 'Pin Bar Bullish (OK)':
-                
-                entry_price = pattern_data.get('suggested_entry')
-                sl_price   = pattern_data.get('suggested_sl')
-                tp_price   = pattern_data.get('suggested_tp')
-                
-                if entry_price is None or sl_price is None or tp_price is None:
-                    logging.error(f"{symbol} {timeframe} - Pattern {pattern}: missing suggested_* in pattern_data keys={list(pattern_data.keys())}")
-                    return  # oppure continue / skip ordine
-                     
-                ema_used = 'Pin Bar Enhanced'
-                ema_value = pattern_data.get('ema60', pattern_data.get('ema10', pattern_data.get('support_level', 0)))
-                
-                tier = pattern_data['tier']
-                score = pattern_data['quality_score']
-                
-                quality_emoji_map = {
-                    'GOLD': '🌟',
-                    'GOOD': '✅',
-                    'OK': '⚠️'
-                }
-                
-                q_emoji = quality_emoji_map.get(tier, '⚪')
-                
-                caption = f"📍 <b>PIN BAR BULLISH {tier}</b> {q_emoji}\n\n"
-                
-                # Quality score
-                caption += f"<b>Quality Score: {score}/100</b>\n\n"
-                
-                # Pin Bar Anatomy
-                caption += f"<b>📊 Pin Bar Anatomy:</b>\n"
-                caption += f"Lower Wick: <b>{pattern_data['lower_wick_pct']:.1f}%</b> (tail)\n"
-                caption += f"Body: {pattern_data['body_pct']:.1f}%\n"
-                caption += f"Upper Wick: {pattern_data['upper_wick_pct']:.1f}%\n"
-                caption += f"Close Position: {pattern_data['close_position']:.1f}% del range\n"
-                caption += f"Type: {'🟢 Bullish' if pattern_data['is_bullish'] else '⚪ Doji'}\n\n"
-                
-                # EMA Setup con ASCII art della tail
-                caption += f"<b>📈 EMA Setup:</b>\n"
-                caption += f"EMA 10: ${pattern_data['ema10']:.{price_decimals}f}\n"
-                caption += f"EMA 60: ${pattern_data['ema60']:.{price_decimals}f}\n"
-                
-                # Mostra dove la tail tocca
-                if pattern_data['tail_near_ema60']:
-                    caption += f"🌟 <b>TAIL TOCCA EMA 60!</b>\n"
-                    caption += f"   Distance: {pattern_data['tail_distance_to_ema60']:.2f}%\n"
-                    caption += f"   → Institutional support zone\n"
-                elif pattern_data['tail_near_ema10']:
-                    caption += f"✅ <b>TAIL TOCCA EMA 10</b>\n"
-                    caption += f"   Distance: {pattern_data['tail_distance_to_ema10']:.2f}%\n"
-                    caption += f"   → Short-term support\n"
-                else:
-                    caption += f"Tail→EMA 10: {pattern_data['tail_distance_to_ema10']:.2f}%\n"
-                    caption += f"Tail→EMA 60: {pattern_data['tail_distance_to_ema60']:.2f}%\n"
-                
-                caption += f"\n"
-                
-                # Liquidity Sweep (MAJOR signal)
-                if pattern_data['swept_liquidity']:
-                    caption += f"💎 <b>LIQUIDITY SWEEP DETECTED!</b>\n"
-                    caption += f"   Swept {pattern_data['sweep_depth']:.2f}% below previous low\n"
-                    caption += f"   → Stop hunt + reversal (institutional)\n\n"
-                
-                # Pullback
-                if pattern_data['pullback_detected']:
-                    caption += f"🔄 <b>Pullback: {pattern_data['pullback_depth']:.1f}%</b>\n"
-                    
-                    if pattern_data['fib_retracement']:
-                        caption += f"   📐 FIBONACCI ZONE (50-61.8%)\n"
-                        caption += f"   → Perfect retracement\n"
-                    
-                    caption += f"\n"
-                
-                # Volume
-                vol_emoji = "🔥" if pattern_data['volume_ratio'] >= 3.0 else "📊"
-                caption += f"{vol_emoji} <b>Volume: {pattern_data['volume_ratio']:.1f}x</b>\n"
-                
-                if pattern_data['volume_ratio'] >= 3.0:
-                    caption += f"   → Panic selling / Capitulation\n"
-                
-                caption += f"\n"
-                
-                # Rejection Zone
-                caption += f"<b>🎯 Rejection Zone (entry):</b>\n"
-                caption += f"Low: ${pattern_data['rejection_zone_low']:.{price_decimals}f}\n"
-                caption += f"High: ${pattern_data['rejection_zone_high']:.{price_decimals}f}\n"
-                caption += f"(primi 30% della tail)\n\n"
-                
-                # Trading Setup
-                caption += f"<b>💼 Trade Setup:</b>\n"
-                caption += f"Entry: ${entry_price:.{price_decimals}f}\n"
-                caption += f"SL: ${sl_price:.{price_decimals}f}\n"
-                
-                if pattern_data['tail_near_ema60']:
-                    caption += f"   (sotto tail + EMA 60)\n"
-                else:
-                    caption += f"   (sotto pin bar low)\n"
-                
-                caption += f"TP: ${tp_price:.{price_decimals}f} (2R)\n"
-                
-                # Risk calculation
-                # ===== DYNAMIC RISK CALCULATION =====
-                # Calcola risk basato su EMA score
-                # Prima di usare risk_base
-                risk_base = config.RISK_USD  # default sempre definito
-                if ema_analysis and 'score' in ema_analysis:
-                    ema_score = ema_analysis['score']
-                    risk_base = calculate_dynamic_risk(ema_score)
-                    logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
-                else:
-                    risk_base = config.RISK_USD
-                    logging.debug(f"No EMA analysis, using base risk ${config.RISK_USD}")
-                
-                # Apply symbol-specific override se configurato
-                if symbol in config.SYMBOL_RISK_OVERRIDE:
-                    risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
-                    logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
-                else:
-                    risk_for_symbol = risk_base
-                
-                # ===== INTELLIGENT POSITION SIZING =====
-                # Calcola ATR per volatilità
-                lastatr = atr(df, period=14).iloc[-1]
-                if math.isnan(lastatr):
-                    lastatr = abs(entry_price - sl_price) * 0.01  # Fallback: 1% del range
-                
-                # Calcola qty con position sizing intelligente
-                ema_score = ema_analysis['score'] if ema_analysis else 50
-                qty = calculate_optimal_position_size(
-                    entry_price=entry_price,
-                    sl_price=sl_price,
-                    symbol=symbol,
-                    volatility_atr=lastatr,
-                    ema_score=ema_score,
-                    risk_usd=risk_for_symbol
-                )
-                
-                # Add info nel caption
-                caption += f"📊 Position Sizing:\n"
-                caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
-                if lastatr > 0:
-                    volatility_pct = (lastatr / entry_price) * 100
-                    caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
-
-                # Add risk info nel caption
-                caption += f"📊 Risk Management:\n"
-                caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
-                if ema_analysis:
-                    caption += f"EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n"
-                    caption += f"Risk Tier: "
-                    if ema_analysis['score'] >= 80:
-                        caption += "🌟 GOLD (Max Risk)\n"
-                    elif ema_analysis['score'] >= 60:
-                        caption += "✅ GOOD (Standard Risk)\n"
-                    elif ema_analysis['score'] >= 40:
-                        caption += "⚠️ OK (Reduced Risk)\n"
-                    else:
-                        caption += "❌ WEAK (Minimal Risk)\n"
-                
-                # Strategic notes
-                caption += f"\n<b>💡 Strategic Notes:</b>\n"
-                
-                if pattern_data['swept_liquidity'] and pattern_data['tail_near_ema60']:
-                    caption += f"🌟 PREMIUM SETUP:\n"
-                    caption += f"• Liquidity sweep (stop hunt)\n"
-                    caption += f"• EMA 60 bounce\n"
-                    caption += f"• High probability reversal\n"
-                elif tier == 'GOLD':
-                    caption += f"🌟 GOLD SETUP:\n"
-                    caption += f"• EMA 60 support confirmed\n"
-                    caption += f"• Strong rejection\n"
-                    caption += f"• Expect continuation\n"
-                elif tier == 'GOOD':
-                    caption += f"✅ SOLID SETUP:\n"
-                    caption += f"• EMA 10 support\n"
-                    caption += f"• Swing trade zone\n"
-
-
-                # ✅ AGGIUNGI PRIMA:
-                autotrade_enabled = job_ctx.get('autotrade', False)
-                with config.POSITIONS_LOCK:
-                    position_exists = symbol in config.ACTIVE_POSITIONS
-                
-                logging.info(
-                    f"🤖 ORDER CHECK: {symbol} - "
-                    f"autotrade={autotrade_enabled}, "
-                    f"qty={qty:.4f}, "
-                    f"position_exists={position_exists}, "
-                    f"time_filter={'ON' if config.MARKET_TIME_FILTER_ENABLED else 'OFF'}"
-                )
-                
-                if autotrade_enabled and qty > 0 and not position_exists:
-                    logging.info(f"🚀 PLACING ORDER: {symbol}")
-                    order_res = await place_bybit_order(...)
-                else:
-                    # Log perché NON viene piazzato
-                    reasons = []
-                    if not autotrade_enabled:
-                        reasons.append("Autotrade OFF")
-                    if qty <= 0:
-                        reasons.append(f"Qty invalid ({qty})")
-                    if position_exists:
-                        reasons.append("Position exists")
-                    
-                    logging.warning(f"🚫 ORDER SKIPPED: {symbol} - Reasons: {', '.join(reasons)}")
-                
-                # Autotrade
-                if job_ctx.get('autotrade') and qty > 0 and not position_exists:
-                    order_res = await place_bybit_order(
-                        symbol, 
-                        side, 
-                        qty, 
-                        sl_price, 
-                        tp_price,
-                        entry_price,
-                        timeframe,
-                        chat_id,
-                        pattern
-                    )
-                    
-                    if 'error' in order_res:
-                        caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
-                    else:
-                        caption += f"\n\n✅ <b>Ordine su Bybit {config.TRADING_MODE.upper()}</b>"
-
-            # 🌱 BUD PATTERN CAPTION
-            elif pattern == 'BUD Pattern' or pattern == 'MAXI BUD Pattern':
-                
-                tier = 'MAXI' if 'MAXI' in pattern else 'STANDARD'
-                # ← AGGIUNGI fallback sicuro:
-                entry_price = pattern_data.get('suggested_entry', last_close)
-                sl_price = pattern_data.get('suggested_sl', last_close * 0.98)
-                tp_price = pattern_data.get('suggested_tp', last_close * 1.02)
-                
-                price_decimals = get_price_decimals(entry_price)
-                
-                caption = f"🌱 <b>{pattern.upper()}</b>\n\n"
-                
-                if tier == 'MAXI':
-                    caption += f"⭐ <b>Setup PREMIUM</b> ({pattern_data['rest_count']} candele riposo)\n\n"
-                else:
-                    caption += f"📊 <b>Setup VALIDO</b> ({pattern_data['rest_count']} candele riposo)\n\n"
-                
-                caption += f"💥 <b>Breakout Phase:</b>\n"
-                caption += f"  High: ${pattern_data['breakout_high']:.{price_decimals}f}\n"
-                caption += f"  Low: ${pattern_data['breakout_low']:.{price_decimals}f}\n"
-                caption += f"  Range: ${pattern_data['breakout_range']:.{price_decimals}f}\n"
-                caption += f"  Body: {pattern_data['breakout_']:.1f}%\n\n"
-                
-                caption += f"🛌 <b>Rest Phase:</b>\n"
-                caption += f"  Candele: {pattern_data['rest_count']}\n"
-                caption += f"  Avg Range: {pattern_data['rest_range_pct']:.1f}% del breakout\n"
-                caption += f"  Status: {'✅ Compresse' if pattern_data['rest_range_pct'] < 60 else '⚠️'}\n\n"
-                
-                caption += f"💥 <b>Trigger:</b>\n"
-                caption += f"  {'✅' if pattern_data['breaks_breakout_high'] else '⚠️'} Rompe breakout high\n"
-                caption += f"  Candela: {'🟢 Verde' if pattern_data['is_green'] else '⚪'}\n\n"
-                
-                caption += f"📊 <b>Volume & EMA:</b>\n"
-                if pattern_data['volume_ok']:
-                    caption += f"  ✅ Volume: {pattern_data['volume_ratio']:.1f}x\n"
-                else:
-                    caption += f"  ⚠️ Volume: {pattern_data['volume_ratio']:.1f}x (< 1.5x)\n"
-                
-                caption += f"  EMA 10: ${pattern_data['ema10']:.{price_decimals}f}\n"
-                caption += f"  EMA 60: ${pattern_data['ema60']:.{price_decimals}f}\n"
-                caption += f"  {'✅' if pattern_data['above_ema60'] else '⚠️'} Sopra EMA 60 (uptrend)\n\n"
-                
-                caption += f"🎯 <b>Trade Setup:</b>\n"
-                caption += f"  Entry: ${entry_price:.{price_decimals}f}\n"
-                caption += f"  SL: ${sl_price:.{price_decimals}f}\n"
-                caption += f"     (sotto breakout low)\n"
-                caption += f"  TP: ${tp_price:.{price_decimals}f} (2R)\n\n"
-                
-                # ===== DYNAMIC RISK CALCULATION =====
-                risk_base = config.RISK_USD
-                if ema_analysis and 'score' in ema_analysis:
-                    ema_score = ema_analysis['score']
-                    risk_base = calculate_dynamic_risk(ema_score)
-                    logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
-                else:
-                    risk_base = config.RISK_USD
-                    logging.debug(f"No EMA analysis, using base risk ${config.RISK_USD}")
-                
-                # Apply symbol-specific override
-                if symbol in config.SYMBOL_RISK_OVERRIDE:
-                    risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
-                    logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
-                else:
-                    risk_for_symbol = risk_base
-                
-                # ===== INTELLIGENT POSITION SIZING =====
-                lastatr = atr(df, period=14).iloc[-1]
-                if math.isnan(lastatr):
-                    lastatr = abs(entry_price - sl_price) * 0.01
-                
-                ema_score = ema_analysis['score'] if ema_analysis else 50
-                qty = calculate_optimal_position_size(
-                    entry_price=entry_price,
-                    sl_price=sl_price,
-                    symbol=symbol,
-                    volatility_atr=lastatr,
-                    ema_score=ema_score,
-                    risk_usd=risk_for_symbol
-                )
-                
-                caption += f"📊 <b>Risk Management:</b>\n"
-                caption += f"  Position Size: {qty:.4f}\n"
-                caption += f"  Risk per Trade: ${risk_for_symbol:.2f}\n"
-                
-                if ema_analysis:
-                    caption += f"  EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n"
-                    caption += f"  Risk Tier: "
-                    if ema_analysis['score'] >= 80:
-                        caption += "🌟 GOLD (Max Risk)\n"
-                    elif ema_analysis['score'] >= 60:
-                        caption += "✅ GOOD (Standard Risk)\n"
-                    elif ema_analysis['score'] >= 40:
-                        caption += "⚠️ OK (Reduced Risk)\n"
-                    else:
-                        caption += "❌ WEAK (Minimal Risk)\n"
-                
-                if lastatr > 0:
-                    volatility_pct = (lastatr / entry_price) * 100
-                    caption += f"  ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
-                
-                caption += f"\n💡 <b>Strategy Notes:</b>\n"
-                caption += f"  • Breakout + riposo = buyers confidenti\n"
-                caption += f"  • Pattern compresso = energia per pump\n"
-                if tier == 'MAXI':
-                    caption += f"  • ⭐ MAXI: 3+ riposo = setup superiore\n"
-                
-                # Position check
-                if position_exists:
-                    caption += "\n\n🚫 <b>Posizione già aperta</b>"
-                    caption += f"\nOrdine NON eseguito per {symbol}"
-
-                autotrade_enabled = job_ctx.get('autotrade', False)
-                logging.info(f"🤖 {symbol}: Autotrade={'ON' if autotrade_enabled else 'OFF'}, qty={qty}, position_exists={position_exists}")
-                
-                # Autotrade
-                if job_ctx.get('autotrade') and qty > 0 and not position_exists:
-                    order_res = await place_bybit_order(
-                        symbol, 
-                        side, 
-                        qty, 
-                        sl_price, 
-                        tp_price,
-                        entry_price,
-                        timeframe,
-                        chat_id,
-                        pattern
-                    )
-                    
-                    if 'error' in order_res:
-                        caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
-                    else:
-                        caption += f"\n\n✅ <b>Ordine su Bybit {config.TRADING_MODE.upper()}</b>"
-
-            elif pattern == 'Morning Star (GOLD)' or \
-                 pattern == 'Morning Star (GOOD)' or \
-                 pattern == 'Morning Star (OK)':
-                
-                entry_price = pattern_data['entry_price']
-                sl_price = pattern_data['suggested_sl']
-                tp_price = pattern_data['suggested_tp']
-                ema_used = 'Morning Star Enhanced'
-                ema_value = pattern_data.get('ema60', pattern_data.get('ema10', pattern_data.get('support_level', 0)))
-                
-                tier = pattern_data['tier']
-                score = pattern_data['quality_score']
-                
-                quality_emoji_map = {
-                    'GOLD': '🌟',
-                    'GOOD': '✅',
-                    'OK': '⚠️'
-                }
-                
-                q_emoji = quality_emoji_map.get(tier, '⚪')
-                
-                caption = f"⭐ <b>MORNING STAR {tier}</b> {q_emoji}\n\n"
-                
-                # Quality score
-                caption += f"<b>Quality Score: {score}/100</b>\n\n"
-                
-                # Pattern Structure (3 candele)
-                caption += f"<b>📊 Pattern Structure:</b>\n"
-                caption += f"Candela A (ribassista):\n"
-                caption += f"  Body: {pattern_data['candle_a']['']:.1f}% range\n"
-                caption += f"Candela B (indecisione):\n"
-                caption += f"  Body: {pattern_data['candle_b']['']:.1f}% range\n"
-                caption += f"  Low: ${pattern_data['candle_b']['low']:.{price_decimals}f}\n"
-                caption += f"Candela C (rialzista):\n"
-                caption += f"  Body: {pattern_data['candle_c']['']:.1f}% range\n\n"
-                
-                # Recovery
-                caption += f"<b>🔄 Recovery Analysis:</b>\n"
-                caption += f"Recupero: <b>{pattern_data['recovery_pct']:.1f}%</b>\n"
-                
-                if pattern_data['fib_recovery']:
-                    caption += f"📐 <b>FIBONACCI ZONE (61.8%)</b>\n"
-                    caption += f"   → Golden ratio reversal!\n"
-                
-                caption += f"\n"
-                
-                # EMA Setup
-                caption += f"<b>📈 EMA Setup:</b>\n"
-                caption += f"EMA 10: ${pattern_data['ema10']:.{price_decimals}f}\n"
-                caption += f"EMA 60: ${pattern_data['ema60']:.{price_decimals}f}\n"
-                
-                if pattern_data['b_touches_ema60']:
-                    caption += f"🌟 <b>CANDELA B TOCCA EMA 60!</b>\n"
-                    caption += f"   Distance: {pattern_data['b_distance_to_ema60']:.2f}%\n"
-                    caption += f"   → Institutional support zone\n"
-                elif pattern_data['b_touches_ema10']:
-                    caption += f"✅ <b>CANDELA B TOCCA EMA 10</b>\n"
-                    caption += f"   → Short-term support\n"
-                
-                if pattern_data['ema_sandwich']:
-                    caption += f"🎯 <b>EMA SANDWICH!</b>\n"
-                    caption += f"   Candela B tra EMA 10 e 60\n"
-                    caption += f"   → Accumulation zone\n"
-                
-                caption += f"\n"
-                
-                # Gap Detection
-                if pattern_data['gap_detected']:
-                    caption += f"💥 <b>GAP DOWN PANIC!</b>\n"
-                    caption += f"   Gap size: {pattern_data['gap_size']:.2f}%\n"
-                    caption += f"   → Capitulation + reversal\n\n"
-                
-                # Pullback
-                if pattern_data['pullback_detected']:
-                    caption += f"🔄 <b>Pullback: {pattern_data['pullback_depth']:.1f}%</b>\n"
-                    caption += f"   → Shakeout confirmed\n\n"
-                
-                # Volume Analysis
-                caption += f"<b>📊 Volume Progression:</b>\n"
-                caption += f"A: {pattern_data['vol_a']:.0f}\n"
-                caption += f"B: {pattern_data['vol_b']:.0f} (selling exhaustion)\n"
-                caption += f"C: {pattern_data['vol_c']:.0f} (<b>{pattern_data['vol_c_ratio']:.1f}x</b> surge)\n"
-                
-                if pattern_data['vol_progression_ok']:
-                    caption += f"✅ <b>PERFECT PROGRESSION!</b>\n"
-                    caption += f"   A > B < C (textbook pattern)\n"
-                
-                caption += f"\n"
-                
-                # Trading Setup
-                caption += f"<b>💼 Trade Setup:</b>\n"
-                caption += f"Entry: ${entry_price:.{price_decimals}f}\n"
-                caption += f"SL: ${sl_price:.{price_decimals}f}\n"
-                
-                if pattern_data['b_touches_ema60']:
-                    caption += f"   (sotto candela B + EMA 60)\n"
-                else:
-                    caption += f"   (sotto candela B low)\n"
-                
-                caption += f"TP: ${tp_price:.{price_decimals}f} (2R)\n"
-                
-                # Risk calculation
-                # ===== DYNAMIC RISK CALCULATION =====
-                # Calcola risk basato su EMA score
-                # Prima di usare risk_base
-                risk_base = config.RISK_USD  # default sempre definito
-                if ema_analysis and 'score' in ema_analysis:
-                    ema_score = ema_analysis['score']
-                    risk_base = calculate_dynamic_risk(ema_score)
-                    logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
-                else:
-                    risk_base = config.RISK_USD
-                    logging.debug(f"No EMA analysis, using base risk ${config.RISK_USD}")
-                
-                # Apply symbol-specific override se configurato
-                if symbol in config.SYMBOL_RISK_OVERRIDE:
-                    risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
-                    logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
-                else:
-                    risk_for_symbol = risk_base
-                
-                # ===== INTELLIGENT POSITION SIZING =====
-                # Calcola ATR per volatilità
-                lastatr = atr(df, period=14).iloc[-1]
-                if math.isnan(lastatr):
-                    lastatr = abs(entry_price - sl_price) * 0.01  # Fallback: 1% del range
-                
-                # Calcola qty con position sizing intelligente
-                ema_score = ema_analysis['score'] if ema_analysis else 50
-                qty = calculate_optimal_position_size(
-                    entry_price=entry_price,
-                    sl_price=sl_price,
-                    symbol=symbol,
-                    volatility_atr=lastatr,
-                    ema_score=ema_score,
-                    risk_usd=risk_for_symbol
-                )
-                
-                # Add info nel caption
-                caption += f"📊 Position Sizing:\n"
-                caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
-                if lastatr > 0:
-                    volatility_pct = (lastatr / entry_price) * 100
-                    caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
-
-                
-                # Add risk info nel caption
-                caption += f"📊 Risk Management:\n"
-                caption += f"Position Size: {qty:.4f}\n"
-                caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
-                if ema_analysis:
-                    caption += f"EMA Score: {ema_analysis['score']}/100 ({ema_analysis['quality']})\n"
-                    caption += f"Risk Tier: "
-                    if ema_analysis['score'] >= 80:
-                        caption += "🌟 GOLD (Max Risk)\n"
-                    elif ema_analysis['score'] >= 60:
-                        caption += "✅ GOOD (Standard Risk)\n"
-                    elif ema_analysis['score'] >= 40:
-                        caption += "⚠️ OK (Reduced Risk)\n"
-                    else:
-                        caption += "❌ WEAK (Minimal Risk)\n"
-
-                
-                # Strategic Notes
-                caption += f"\n<b>💡 Strategic Notes:</b>\n"
-                
-                if tier == 'GOLD':
-                    caption += f"🌟 <b>PREMIUM SETUP:</b>\n"
-                    if pattern_data['b_touches_ema60']:
-                        caption += f"• EMA 60 support (institutional)\n"
-                    if pattern_data['gap_detected']:
-                        caption += f"• Gap down panic → reversal\n"
-                    if pattern_data['fib_recovery']:
-                        caption += f"• Fibonacci golden ratio\n"
-                    caption += f"• High probability continuation\n"
-                elif tier == 'GOOD':
-                    caption += f"✅ <b>SOLID SETUP:</b>\n"
-                    caption += f"• EMA 10 support\n"
-                    caption += f"• Good volume confirmation\n"
-                    caption += f"• Swing trade zone\n"
-
-                autotrade_enabled = job_ctx.get('autotrade', False)
-                logging.info(f"🤖 {symbol}: Autotrade={'ON' if autotrade_enabled else 'OFF'}, qty={qty}, position_exists={position_exists}")     
-                
-                # Autotrade
-                if job_ctx.get('autotrade') and qty > 0 and not position_exists:
-                    order_res = await place_bybit_order(
-                        symbol, 
-                        side, 
-                        qty, 
-                        sl_price, 
-                        tp_price,
-                        entry_price,
-                        timeframe,
-                        chat_id,
-                        pattern
-                    )
-                    
-                    if 'error' in order_res:
-                        caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
-                    else:
-                        caption += f"\n\n✅ <b>Ordine su Bybit {config.TRADING_MODE.upper()}</b>"
-
-            
-            # === LOGICA STANDARD per altri pattern ===
             else:
-                entry_price = last_close
-                
-                # Calcola SL basato su EMA o ATR
+                # Calcola con EMA o ATR
                 if config.USE_EMA_STOP_LOSS:
                     sl_price, ema_used, ema_value = calculate_ema_stop_loss(
                         df, timeframe, last_close, side
                     )
                 else:
+                    atr_series = atr(df, period=14)
+                    last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else 0
+                    
                     if not math.isnan(last_atr) and last_atr > 0:
-                        sl_price = last_close - last_atr * ATR_MULT_SL
-                        ema_used = 'ATR'
-                        ema_value = last_atr
+                        sl_price = last_close - last_atr * config.ATR_MULT_SL
                     else:
                         sl_price = df['low'].iloc[-1]
-                        ema_used = 'Low'
-                        ema_value = 0
                 
-                # Calcola TP
+                # TP
+                atr_series = atr(df, period=14)
+                last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else 0
+                
                 if not math.isnan(last_atr) and last_atr > 0:
                     tp_price = last_close + last_atr * config.ATR_MULT_TP
                 else:
                     tp_price = last_close * 1.02
             
-            # ===== CALCOLO POSITION SIZE E CHECK =====
-            # Apply symbol-specific override se configurato
+            # ===== CALCOLA POSITION SIZE =====
+            # Dynamic risk basato su EMA score
             risk_base = config.RISK_USD
-            if symbol in config.SYMBOL_RISK_OVERRIDE:
-                risk_for_symbol = config.SYMBOL_RISK_OVERRIDE[symbol]
-                logging.info(f"Symbol override for {symbol}: ${risk_for_symbol:.2f}")
-            else:
-                risk_for_symbol = risk_base
-            # ===== INTELLIGENT POSITION SIZING =====
-            risk_for_symbol = config.SYMBOL_RISK_OVERRIDE.get(symbol, config.RISK_USD)
+            if ema_analysis and 'score' in ema_analysis:
+                ema_score = ema_analysis['score']
+                risk_base = calculate_dynamic_risk(ema_score)
+                logging.info(f"Dynamic risk for {symbol}: EMA score {ema_score} → ${risk_base:.2f}")
             
-            # Calcola ATR per volatilità
+            # Symbol-specific override
+            risk_for_symbol = config.SYMBOL_RISK_OVERRIDE.get(symbol, risk_base)
+            
+            # Intelligent position sizing
             lastatr = atr(df, period=14).iloc[-1]
             if math.isnan(lastatr):
-                lastatr = abs(entry_price - sl_price) * 0.01  # Fallback: 1% del range
+                lastatr = abs(entry_price - sl_price) * 0.01
             
-            # Calcola qty con position sizing intelligente
             ema_score = ema_analysis['score'] if ema_analysis else 50
             qty = calculate_optimal_position_size(
                 entry_price=entry_price,
@@ -7669,248 +6681,80 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 risk_usd=risk_for_symbol
             )
             
-            # Add info nel caption
-            caption += f"📊 Position Sizing:\n"
-            caption += f"Position Size: {qty:.4f}\n"
-            caption += f"Risk per Trade: ${risk_for_symbol:.2f}\n"
-            if lastatr > 0:
-                volatility_pct = (lastatr / entry_price) * 100
-                caption += f"ATR: {lastatr:.2f} ({volatility_pct:.2f}% volatility)\n"
-            
-            #position_exists = symbol in config.ACTIVE_POSITIONS
-            #if position_exists:
-            #    logging.warning(f'🚫 Position already exists for {symbol}, skip order')
-            #else:
-            #    logging.info(f'✅ No position for {symbol}, ready to place order')
-            
-            # ===== COSTRUISCI CAPTION =====
-            quality_emoji_map = {
-                'GOLD': '🌟',
-                'GOOD': '✅',
-                'OK': '⚠️',
-                'WEAK': '🔶',
-                'BAD': '❌'
-            }
-            
-            caption = "🔥 <b>SEGNALE BUY</b>\n\n"
-            
-            # EMA QUALITY
-            if ema_analysis:
-                q_emoji = quality_emoji_map.get(ema_analysis['quality'], '⚪')
-                caption += f"{q_emoji} EMA Quality: <b>{ema_analysis['quality']}</b>\n"
-                caption += f"Score: <b>{ema_analysis['score']}/100</b>\n\n"
-            
-            # Pattern info
-            caption += f"📊 Pattern: <b>{pattern}</b>\n"
-            
-            # Info specifiche pattern
-            if pattern == 'Bullish Flag Breakout' and pattern_data:
-                caption += f"🚩 Breakout Level X: <b>${pattern_data['X']:.{price_decimals}f}</b>\n"
-            
-            caption += f"🪙 Symbol: <b>{symbol}</b> ({timeframe})\n"
-            caption += f"🕐 {timestamp_str}\n\n"
-            
-            # Trading params
-            caption += f"💵 Entry: <b>${entry_price:.{price_decimals}f}</b>\n"
-            
-            # SL/TP display specifico per pattern
-            if pattern == 'Bullish Flag Breakout' and pattern_data:
-                caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
-                caption += f"   (sotto consolidamento)\n"
-                caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
-                caption += f"   (1.5x pole height)\n"
-            else:
-                if config.USE_EMA_STOP_LOSS:
-                    caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b>\n"
-                    caption += f"   sotto {ema_used}"
-                    if isinstance(ema_value, (int, float)) and ema_value > 0:
-                        caption += f" = ${ema_value:.{price_decimals}f}"
-                    caption += "\n"
-                else:
-                    caption += f"🛑 Stop Loss: <b>${sl_price:.{price_decimals}f}</b> ({ema_used})\n"
-                
-                caption += f"🎯 Take Profit: <b>${tp_price:.{price_decimals}f}</b>\n"
-            
-            caption += f"📦 Qty: <b>{qty:.4f}</b>\n"
-            caption += f"💰 Risk: <b>${risk_for_symbol}</b>\n"
-            
-            rr = abs(tp_price - entry_price) / abs(sl_price - entry_price) if abs(sl_price - entry_price) > 0 else 0
-            caption += f"📏 R:R: <b>{rr:.2f}:1</b>\n"
-            
-            # EMA Analysis dettagliata
-            if ema_analysis:
-                # Logica speciale per Liquidity Sweep
-                if pattern == 'Liquidity Sweep + Reversal':
-                    ema_analysis = analyze_ema_conditions(df, timeframe, pattern)
-                
-                caption += "\n━━━━━━━━━━━━━━━━━━━\n"
-                caption += "📈 <b>EMA Analysis</b>\n\n"
-                caption += ema_analysis['details']
-                caption += f"Score: <b>{ema_analysis['score']}/100</b>\n\n"
-                
-                # Valori EMA CON DECIMALI DINAMICI
-                if 'ema_values' in ema_analysis:
-                    ema_vals = ema_analysis['ema_values']
-                    ema_decimals = get_price_decimals(ema_vals['price'])
-                    
-                    caption += f"\n\n💡 <b>EMA Values:</b>\n"
-                    caption += f"Price: ${ema_vals['price']:.{ema_decimals}f}\n"
-                    caption += f"EMA 5: ${ema_vals['ema5']:.{ema_decimals}f}\n"
-                    caption += f"EMA 10: ${ema_vals['ema10']:.{ema_decimals}f}\n"
-                    caption += f"EMA 60: ${ema_vals['ema60']:.{ema_decimals}f}\n"
-                    caption += f"EMA 223: ${ema_vals['ema223']:.{ema_decimals}f}\n"
-                
-                # Strategy
-                if config.USE_EMA_STOP_LOSS:
-                    caption += f"\n🎯 <b>EMA Stop:</b> Exit se prezzo rompe {ema_used}"
-                
-                # Info filtri applicati
-                caption += f"\n\n💡 <b>Filtri Pattern:</b>\n"
-                
-                if config.TREND_FILTER_ENABLED:
-                    caption += f"Trend: {config.TREND_FILTER_MODE.upper()}"
-                    if config.TREND_FILTER_MODE == 'ema_based':
-                        caption += f" (Price > EMA 60)\n"
-                    elif config.TREND_FILTER_MODE == 'structure':
-                        caption += f" (HH+HL)\n"
-                    else:
-                        caption += f"\n"
-                else:
-                    caption += f"Trend: OFF\n"
-                
-                if config.VOLUME_FILTER_ENABLED:
-                    caption += f"Volume: {config.VOLUME_FILTER_MODE.upper()}\n"
-                else:
-                    caption += f"Volume: OFF\n"
-                
-                if config.EMA_FILTER_ENABLED:
-                    caption += f"EMA: {config.EMA_FILTER_MODE.upper()}\n"
-                else:
-                    caption += f"EMA: OFF\n"
-
-            # Warning se LOOSE mode con EMA deboli
-            if ema_analysis and config.EMA_FILTER_MODE == 'loose' and not ema_analysis['passed']:
-                caption += f"\n⚠️ <b>ATTENZIONE:</b> Setup con EMA non ottimali"
-                caption += f"\nConsidera ridurre position size."
-            
-            # Posizione esistente
-            if position_exists:
-                caption += "\n\n🚫 <b>Posizione già aperta</b>"
-                caption += f"\nOrdine NON eseguito per {symbol}"
-
+            # ===== AUTOTRADE =====
             autotrade_enabled = job_ctx.get('autotrade', False)
-            logging.info(f"🤖 {symbol}: Autotrade={'ON' if autotrade_enabled else 'OFF'}, qty={qty}, position_exists={position_exists}")
             
-            # Autotrade
-            if job_ctx.get('autotrade') and qty > 0 and not position_exists:
+            logging.info(
+                f"🤖 ORDER CHECK: {symbol} - "
+                f"autotrade={autotrade_enabled}, "
+                f"qty={qty:.4f}, "
+                f"position_exists={position_exists}"
+            )
+            
+            if autotrade_enabled and qty > 0 and not position_exists:
+                logging.info(f"🚀 PLACING ORDER: {symbol}")
                 order_res = await place_bybit_order(
-                    symbol, 
-                    side, 
-                    qty, 
-                    sl_price, 
-                    tp_price,
-                    entry_price,
-                    timeframe,
-                    chat_id,
-                    pattern
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    sl_price=sl_price,
+                    tp_price=tp_price,
+                    entry_price=entry_price,
+                    timeframe=timeframe,
+                    chat_id=chat_id,
+                    pattern_name=pattern
                 )
                 
                 if 'error' in order_res:
-                    caption += f"\n\n❌ <b>Errore ordine:</b>\n{order_res['error']}"
-                else:
-                    caption += f"\n\n✅ <b>Ordine su Bybit {config.TRADING_MODE.upper()}</b>"
+                    logging.error(f"❌ Order error: {order_res['error']}")
+            else:
+                # Log perché NON viene piazzato
+                reasons = []
+                if not autotrade_enabled:
+                    reasons.append("Autotrade OFF")
+                if qty <= 0:
+                    reasons.append(f"Qty invalid ({qty})")
+                if position_exists:
+                    reasons.append("Position exists")
+                
+                logging.warning(f"🚫 ORDER SKIPPED: {symbol} - Reasons: {', '.join(reasons)}")
+            
+            # ===== INVIA NOTIFICA PATTERN (USA MODULO NOTIFICATIONS) =====
+            await send_pattern_notification(
+                context=context,
+                chat_id=chat_id,
+                symbol=symbol,
+                timeframe=timeframe,
+                pattern_name=pattern,
+                side=side,
+                entry_price=entry_price,
+                sl_price=sl_price,
+                tp_price=tp_price,
+                current_price=last_close,
+                qty=qty,
+                risk_usd=risk_for_symbol,
+                df=df,
+                pattern_data=pattern_data,
+                ema_analysis=ema_analysis,
+                position_exists=position_exists,
+                autotrade_enabled=autotrade_enabled,
+                timestamp=last_time
+            )
         
         else:
-            # NESSUN PATTERN (full mode)
-            caption = f"📊 <b>{symbol}</b> ({timeframe})\n"
-            caption += f"🕐 {timestamp_str}\n"
-            caption += f"💵 Price: ${last_close:.{price_decimals}f}\n\n"
-            
-            # NO MORE GLOBAL FILTERS INFO
-            caption += "🔔 <b>Full Mode - Nessun pattern rilevato</b>\n\n"
-            
-            # Info filtri configurati (non status)
-            caption += "💡 <b>Filter Configuration:</b>\n"
-            
-            if config.TREND_FILTER_ENABLED:
-                caption += f"Trend: {config.TREND_FILTER_MODE.upper()}\n"
-            else:
-                caption += f"Trend: OFF\n"
-            
-            if config.VOLUME_FILTER_ENABLED:
-                caption += f"Volume: {config.VOLUME_FILTER_MODE.upper()}\n"
-            else:
-                caption += f"Volume: OFF\n"
-            
-            if config.EMA_FILTER_ENABLED:
-                caption += f"EMA: {config.EMA_FILTER_MODE.upper()}\n"
-            else:
-                caption += f"EMA: OFF\n"
-            
-            # ANALISI EMA MERCATO
-            if ema_analysis:
-                caption += "\n━━━━━━━━━━━━━━━━━━━\n"
-                caption += "📈 <b>EMA Market Analysis:</b>\n\n"
-                caption += f"<b>Score:</b> {ema_analysis['score']}/100\n"
-                caption += f"<b>Quality:</b> {ema_analysis['quality']}\n\n"
-                caption += ema_analysis['details']
-                
-                # Suggerimenti
-                caption += "\n\n💡 <b>Suggerimento:</b>\n"
-                if ema_analysis['quality'] == 'GOLD':
-                    caption += "🌟 Setup PERFETTO! Aspetta pattern qui."
-                elif ema_analysis['quality'] == 'GOOD':
-                    caption += "✅ Buone condizioni. Setup valido."
-                elif ema_analysis['quality'] == 'OK':
-                    caption += "⚠️ Accettabile ma non ottimale."
-                elif ema_analysis['quality'] == 'WEAK':
-                    caption += "🔶 Condizioni deboli. Meglio aspettare."
-                else:
-                    caption += "❌ Condizioni sfavorevoli. NO entry."
-                
-                # Valori EMA
-                if 'ema_values' in ema_analysis:
-                    ema_vals = ema_analysis['ema_values']
-                    ema_decimals = get_price_decimals(ema_vals['price'])
-                    
-                    caption += f"\n\n💡 <b>EMA Values:</b>\n"
-                    caption += f"Price: ${ema_vals['price']:.{ema_decimals}f}\n"
-                    caption += f"EMA 5: ${ema_vals['ema5']:.{ema_decimals}f}\n"
-                    caption += f"EMA 10: ${ema_vals['ema10']:.{ema_decimals}f}\n"
-                    caption += f"EMA 60: ${ema_vals['ema60']:.{ema_decimals}f}\n"
-                    caption += f"EMA 223: ${ema_vals['ema223']:.{ema_decimals}f}\n"
-        
-        # ===== STEP 6: INVIA GRAFICO =====
-        try:
-            chart_buffer = generate_chart(df, symbol, timeframe)
-            
-            await context.bot.send_photo(
+            # ===== NESSUN PATTERN (FULL MODE) =====
+            # Usa modulo notifications per inviare snapshot mercato
+            await send_market_notification(
+                context=context,
                 chat_id=chat_id,
-                photo=chart_buffer,
-                caption=caption,
-                parse_mode='HTML'
+                symbol=symbol,
+                timeframe=timeframe,
+                current_price=last_close,
+                df=df,
+                ema_analysis=ema_analysis,
+                timestamp=last_time
             )
-            
-            # Log status
-            if found:
-                status = f'✅ {pattern}'
-                if ema_analysis:
-                    status += f' (EMA: {ema_analysis["quality"]} - {ema_analysis["score"]}/100)'
-            else:
-                status = '🔔 Full mode'
-                if ema_analysis:
-                    status += f' (EMA: {ema_analysis["quality"]})'
-            
-            logging.info(f"📸 {symbol} {timeframe} → {status}")
-            
-        except Exception as e:
-            logging.error(f'Errore grafico: {e}')
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"⚠️ Errore grafico\n\n{caption}",
-                parse_mode='HTML'
-            )
-
+    
     except Exception as e:
         logging.exception(f'Errore in analyze_job per {symbol} {timeframe}')
         
