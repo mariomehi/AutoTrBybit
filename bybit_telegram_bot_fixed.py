@@ -6306,6 +6306,10 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.exception(f"Errore trailing SL per {symbol}: {e}")
 
+import logging
+from datetime import datetime, timezone
+from typing import Dict, Optional, List
+import config
 
 class PartialTPManager:
     """Manager per gestione Take Profit parziali"""
