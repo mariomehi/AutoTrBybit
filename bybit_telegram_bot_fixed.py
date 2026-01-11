@@ -4257,440 +4257,46 @@ def should_test_pattern(pattern_side: str, allowed_side: str, symbol: str, patte
 def check_patterns(df: pd.DataFrame, symbol: str = None):
     """
     Pattern detection con filtri intelligenti
-    
-    FILTRI APPLICATI PER PATTERN:
-    ────────────────────────────────────────────
-    1. Volume Filter (mode: {VOLUME_FILTER_MODE})
-       - 'strict': Blocca se volume < 1.5x
-       - 'adaptive': Rilassa per auto-discovered
-       - 'pattern-only': Ogni pattern decide
-    
-    2. Trend Filter (mode: {TREND_FILTER_MODE})
-       - 'ema_based': Price > EMA 60 (CONSIGLIATO)
-       - 'structure': HH+HL (stretto)
-       - 'hybrid': Structure OR EMA
-       - 'pattern_only': Ogni pattern decide
-    
-    3. EMA Filter (mode: {EMA_FILTER_MODE})
-       - 'strict': Solo score >= 60 (GOOD/GOLD)
-       - 'loose': Score >= 40 (OK/GOOD/GOLD)
-       - 'off': Nessun filtro EMA
-    
-    NOTA: I filtri globali sono stati RIMOSSI.
-    Ogni pattern applica i propri filtri internamente.
+    REFACTORED: Usa Pattern Registry invece di if/elif multipli
     """
     if len(df) < 6:
         return (False, None, None, None)
     
-    # ═══════════════════════════════════════════
-    # NO MORE GLOBAL FILTERS
-    # Ogni pattern gestisce internamente:
-    # - Volume check (se necessario)
-    # - Trend check (usando TREND_FILTER_MODE)
-    # - EMA check (usando EMA_FILTER_MODE)
-    # ═══════════════════════════════════════════
-    
-    logging.debug(f'🔍 {symbol}: Checking patterns (no global filters)')
+    logging.debug(f'🔍 {symbol}: Checking patterns (using Registry)')
     logging.debug(f'   Volume mode: {config.VOLUME_FILTER_MODE}')
     logging.debug(f'   Trend mode: {config.TREND_FILTER_MODE}')
     logging.debug(f'   EMA mode: {config.EMA_FILTER_MODE if config.EMA_FILTER_ENABLED else "OFF"}')
     
     # ═══════════════════════════════════════════
-    # TIER 1: HIGH PROBABILITY PATTERNS (60-72%)
+    # USA IL PATTERN REGISTRY (nuovo approccio)
     # ═══════════════════════════════════════════
-    logging.debug(f'{symbol}: Testing TIER 1 patterns...')
+    from patterns import PATTERN_REGISTRY
     
-    allowed_pattern_side = 'Buy'
+    found, side, pattern_name, pattern_data = PATTERN_REGISTRY.detect_all(df, symbol)
     
-    # 🥇 #1: Volume Spike Breakout
-    if config.AVAILABLE_PATTERNS.get('volume_spike_breakout', {}).get('enabled', False):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Volume Spike Breakout'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing Volume Spike Breakout...')
-            try:
-                found, data = is_volume_spike_breakout(df)
-                if found:
-                    logging.info(f'✅ TIER 1: Volume Spike Breakout')
-                    # Check trend se abilitato
-                    if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE != 'pattern_only':
-                        trend_valid, trend_reason, _ = is_valid_trend_for_entry(
-                            df, mode=config.TREND_FILTER_MODE, symbol=symbol
-                        )
-                        if not trend_valid:
-                            logging.info(f'⚠️ Volume Spike: trend blocked - {trend_reason}')
-                            #continue  # Skip to next pattern
-                    logging.info(f'✅ TIER 1: Volume Spike Breakout')
-                    return (True, 'Buy', 'Volume Spike Breakout', data)
-                else:
-                    logging.debug(f'{symbol}: Volume Spike - not found')
-            except Exception as e:
-                logging.error(f'Error in Volume Spike: {e}')
-
-    # 🥇 #2: Breakout + Retest
-    if config.AVAILABLE_PATTERNS.get('breakout_retest', {}).get('enabled', False):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Breakout + Retest'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing Breakout + Retest...')
-            try:
-                found, data = is_breakout_retest(df)
-                if found:
-                    logging.info(f'✅ TIER 1: Breakout + Retest')
-                    # Check trend (permetti consolidamenti)
-                    if config.TREND_FILTER_ENABLED and config.TREND_FILTER_MODE == 'structure':
-                        # Structure mode troppo stretto per questo pattern
-                        logging.debug('⚠️ Breakout+Retest: structure mode may block consolidations')
-                        logging.info(
-                        f'✅ TIER 1: Breakout + Retest '
-                        f'(range: {data["range_pct"]:.2f}%, '
-                        f'rejection: {data["retest_rejection_pct"]:.1f}%)'
-                        )
-                    return (True, 'Buy', 'Breakout + Retest', data)
-                else:
-                    logging.debug(f'{symbol}: Breakout + Retest - not found')
-            except Exception as e:
-                logging.error(f'Error in Breakout+Retest: {e}')
-    
-    # 🥇 #3: Triple Touch Breakout
-    if config.AVAILABLE_PATTERNS.get('triple_touch_breakout', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Triple Touch Breakout'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing Triple Touch Breakout...')
-            try:
-                found, data = is_triple_touch_breakout(df)
-                if found:
-                    logging.info(f'✅ TIER 1: Triple Touch Breakout')
-                    # Triple Touch ha GIÀ check EMA 60 interno (pattern_only compatible)
-                    logging.info(
-                        f'✅ TIER 1: Triple Touch Breakout '
-                        f'(R: ${data["resistance"]:.4f}, '
-                        f'vol: {data["volume_ratio"]:.1f}x, '
-                        f'quality: {data["quality"]})'
-                    )
-                    return (True, 'Buy', 'Triple Touch Breakout', data)
-                else:
-                    logging.debug(f'{symbol}: Triple Touch Breakout - not found')
-            except Exception as e:
-                logging.error(f'Error in Triple Touch: {e}')
-    
-    # 🥇 #4: Liquidity Sweep + Reversal
-    if config.AVAILABLE_PATTERNS.get('liquidity_sweep_reversal', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Liquidity Sweep + Reversal'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing Liquidity Sweep + Reversal...')
-            try:
-                found, data = is_liquidity_sweep_reversal(df)
-                if found:
-                    logging.info(f'✅ TIER 1: Liquidity Sweep + Reversal')
-                    return (True, 'Buy', 'Liquidity Sweep + Reversal', data)
-                else:
-                    logging.debug(f'{symbol}: Liquidity Sweep + Reversal - not found')
-            except Exception as e:
-                logging.error(f'Error in Liquidity Sweep: {e}')
-    
-    # ═══════════════════════════════════════════
-    # TIER 2: GOOD PATTERNS (52-62%)
-    # ═══════════════════════════════════════════
-    logging.debug(f'{symbol}: Testing TIER 2 patterns...')
-    
-    # 🥈 #5: S/R Bounce
-    if config.AVAILABLE_PATTERNS.get('sr_bounce', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'S/R Bounce'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing S/R Bounce...')
-            try:
-                found, data = is_support_resistance_bounce(df)
-                if found:
-                    logging.info(f'✅ TIER 2: S/R Bounce')
-                    return (True, 'Buy', 'Support/Resistance Bounce', data)
-                else:
-                    logging.debug(f'{symbol}: S/R Bounce - not found')
-            except Exception as e:
-                logging.error(f'Error in S/R Bounce: {e}')
-    
-    # 🥈 #6: Bullish Flag Breakout
-    if config.AVAILABLE_PATTERNS.get('bullish_flag_breakout', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Bullish Flag Breakout'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing Bullish Flag Breakout...')
-            try:
-                found, data = is_bullish_flag_breakout(df)
-                if found:
-                    logging.info(
-                        f'✅ TIER 2: Bullish Flag '
-                        f'(vol: {data["volume_ratio"]:.1f}x)'
-                    )
-                    return (True, 'Buy', 'Bullish Flag Breakout', data)
-                else:
-                    logging.debug(f'{symbol}: Bullish Flag Breakout - not found')
-            except Exception as e:
-                logging.error(f'Error in Flag: {e}')
-    
-    # 🥈 #7: Higher Low Consolidation Breakout
-    if config.AVAILABLE_PATTERNS.get('higher_low_breakout', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Higher Low Consolidation Breakout'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing Higher Low Consolidation Breakout...')
-            try:
-                found, data = is_higher_low_consolidation_breakout(df)
-                if found:
-                    logging.info(
-                        f'✅ TIER 2: Higher Low Breakout '
-                        f'(quality: {data["quality"]})'
-                    )
-                    return (True, 'Buy', 'Higher Low Breakout', data)
-                else:
-                    logging.debug(f'{symbol}: Higher Low Consolidation Breakout - not found')
-            except Exception as e:
-                logging.error(f'Error in Higher Low: {e}')
-    
-    # 🥈 #8: Bullish Comeback
-    if config.AVAILABLE_PATTERNS.get('bullish_comeback', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Bullish Comeback'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing Bullish Comeback...')
-            try:
-                if is_bullish_comeback(df):
-                    logging.info(f'✅ TIER 2: Bullish Comeback')
-                    return (True, 'Buy', 'Bullish Comeback', None)
-                else:
-                    logging.debug(f'{symbol}: Bullish Comeback - not found')
-            except Exception as e:
-                logging.error(f'Error in Comeback: {e}')
-    
-    # 🥈 #9: Compression Breakout
-    if config.AVAILABLE_PATTERNS.get('compression_breakout', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Compression Breakout'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing Compression Breakout...')
-            try:
-                if is_compression_breakout(df):
-                    logging.info(f'✅ TIER 2: Compression Breakout')
-                    return (True, 'Buy', 'Compression Breakout (Enhanced)', None)
-                else:
-                    logging.debug(f'{symbol}: Compression Breakout - not found')
-            except Exception as e:
-                logging.error(f'Error in Compression: {e}')
-
-        # 🌱 BUD Pattern
-    if config.AVAILABLE_PATTERNS.get('bud_pattern', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'BUD Pattern'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing BUD Pattern...')
-            try:
-                found, data = is_bud_pattern(df, require_maxi=False)
-                if found:
-
-                    entry_price = data.get('suggested_entry')
-                    sl_price    = data.get('suggested_sl')
-                    tp_price    = data.get('suggested_tp')
-                    
-                    if entry_price is None or sl_price is None or tp_price is None:
-                        raise KeyError(f"BUD data missing suggested_* keys={list(data.keys())}")
-    
-                    logging.info(f'✅ TIER 1: BUD Pattern ({data["rest_count"]} riposo)')
-                    
-                    # Caption personalizzato
-                    caption = f"🌱 <b>BUD PATTERN</b>\n\n"
-                    caption += f"📊 Candele Riposo: {data['rest_count']}\n"
-                    caption += f"💥 Breakout High: ${data['breakout_high']:.{price_decimals}f}\n"
-                    caption += f"📦 Range Breakout: {data['breakout_range']:.{price_decimals}f}\n"
-                    caption += f"{'✅' if data['breaks_breakout_high'] else '⚠️'} Rompe breakout high\n\n"
-                    
-                    caption += f"💵 Entry: ${data['suggested_entry']:.{price_decimals}f}\n"
-                    caption += f"🛑 SL: ${data['suggested_sl']:.{price_decimals}f}\n"
-                    caption += f"🎯 TP: ${data['suggested_tp']:.{price_decimals}f} (2R)\n\n"
-                    
-                    if data['volume_ok']:
-                        caption += f"📊 Volume Breakout: {data['volume_ratio']:.1f}x ✅\n"
-                    
-                    return (True, 'Buy', 'BUD Pattern', data)
-            except Exception as e:
-                logging.error(f'Error in BUD Pattern: {e}')
-    
-    # 🌟 MAXI BUD Pattern
-    if config.AVAILABLE_PATTERNS.get('maxi_bud_pattern', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'MAXI BUD Pattern'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing MAXI BUD Pattern...')
-            try:
-                found, data = is_maxi_bud_pattern(df)
-                if found:
-                    logging.info(f'✅ TIER 1: MAXI BUD Pattern ({data["rest_count"]} riposo)')
-                    
-                    caption = f"🌟🌱 <b>MAXI BUD PATTERN</b>\n\n"
-                    caption += f"⭐ <b>Setup PREMIUM</b> ({data['rest_count']} candele riposo)\n\n"
-                    # ... resto caption simile a BUD
-                    
-                    return (True, 'Buy', 'MAXI BUD Pattern', data)
-            except Exception as e:
-                logging.error(f'Error in MAXI BUD: {e}')
-    
-    # ⭐ Morning Star Enhanced
-    if config.AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled', False):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Morning Star Enhanced'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing Morning Star Enhanced...')
-            try:
-                found, tier, data = is_morning_star_enhanced(df)
-                if found:
-                    pattern_name = f'Morning Star ({tier})'
-                    logging.info(
-                        f'✅ TIER 2: Morning Star {tier} '
-                        f'(score: {data["quality_score"]}, '
-                        f'recovery: {data["recovery_pct"]:.1f}%, '
-                        f'vol: {data["vol_c_ratio"]:.1f}x)'
-                    )
-                    # Extra info se setup speciale
-                    if data['b_touches_ema60']:
-                        logging.info(f'   🌟 Candela B touches EMA 60!')
-                    if data['gap_detected']:
-                        logging.info(f'   💥 Gap down detected ({data["gap_size"]:.2f}%)')
-                    return (True, 'Buy', pattern_name, data)
-                else:
-                    logging.debug(f'{symbol}: Morning Star Enhanced - not found')
-            except Exception as e:
-                logging.error(f'Error in Morning Star Enhanced: {e}')
-
-    # 🟢 Bullish Engulfing Enhanced
-    if config.AVAILABLE_PATTERNS.get('bullish_engulfing', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Bullish Engulfing Enhanced'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing Bullish Engulfing Enhanced...')
-            try:
-                last = df.iloc[-1]
-                prev = df.iloc[-2]
-                found, tier, data = is_bullish_engulfing_enhanced(prev, last, df)
-                if found:
-                    pattern_name = f'Bullish Engulfing ({tier})'
-                    logging.info(
-                        f'✅ TIER 2: Bullish Engulfing {tier} '
-                        f'(score: {data["quality_score"]}, '
-                        f'dist EMA10: {data["distance_to_ema10"]:.2f}%, '
-                        f'dist EMA60: {data["distance_to_ema60"]:.2f}%)'
-                    )
-                    return (True, 'Buy', pattern_name, data)
-                else:
-                    logging.debug(f'{symbol}: Bullish Engulfing Enhanced - not found')
-            except Exception as e:
-                logging.error(f'Error in Bullish Engulfing Enhanced: {e}')
-    
-    # ═══════════════════════════════════════════
-    # TIER 3: CLASSIC PATTERNS (45-55%)
-    # ═══════════════════════════════════════════
-    logging.debug(f'{symbol}: Testing TIER 3 patterns...')
-    
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-    prev2 = df.iloc[-3]
+    if found:
+        logging.info(f'✅ {symbol} - Pattern FOUND: {pattern_name} ({side})')
         
-    # 📍 Pin Bar Bullish Enhanced
-    if config.AVAILABLE_PATTERNS.get('pin_bar_bullish', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Pin Bar Bullish Enhanced'):
-            pass  # Skip
-        else:
-            logging.debug(f'{symbol}: Testing Pin Bar Bullish Enhanced...')
-            try:
-                last = df.iloc[-1]
-                
-                found, tier, data = is_pin_bar_bullish_enhanced(last, df)
-                
-                if found:
-                    pattern_name = f'Pin Bar Bullish ({tier})'
-                    
-                    # Log extra info se liquidity sweep
-                    sweep_info = ""
-                    if data['swept_liquidity']:
-                        sweep_info = f", SWEEP {data['sweep_depth']:.2f}%"
-                    
-                    logging.info(
-                        f'✅ TIER 2: Pin Bar {tier} '
-                        f'(score: {data["quality_score"]}, '
-                        f'tail: {data["lower_wick_pct"]:.1f}%, '
-                        f'tail→EMA60: {data["tail_distance_to_ema60"]:.2f}%'
-                        f'{sweep_info})'
-                    )
-                    
-                    return (True, 'Buy', pattern_name, data)
+        # Log pattern-specific data se disponibile
+        if pattern_data:
+            config_info = pattern_data.get('pattern_config', {})
+            tier = config_info.get('tier', 'N/A')
             
-            except Exception as e:
-                logging.error(f'Error in Pin Bar Enhanced: {e}')
-    
-    # ⭐ Morning Star Enhanced
-    if config.AVAILABLE_PATTERNS.get('morning_star', {}).get('enabled'):
-        if not should_test_pattern('Buy', allowed_pattern_side, symbol, 'Morning Star Enhanced'):
-            pass  # Skip
-        else:
-            try:
-                logging.debug(f'{symbol}: Testing Morning Star Enhanced...')
-                found, tier, data = is_morning_star_enhanced(df)
-                
-                if found:
-                    pattern_name = f'Morning Star ({tier})'
-                    logging.info(
-                        f'✅ TIER 2: Morning Star {tier} '
-                        f'(score: {data["quality_score"]}, '
-                        f'recovery: {data["recovery_pct"]:.1f}%, '
-                        f'vol: {data["vol_c_ratio"]:.1f}x)'
-                    )
-                    # Extra info se setup speciale
-                    if data['b_touches_ema60']:
-                        logging.info(f'   🌟 Candela B touches EMA 60!')
-                    
-                    if data['gap_detected']:
-                        logging.info(f'   💥 Gap down detected ({data["gap_size"]:.2f}%)')
-                    return (True, 'Buy', pattern_name, data)
-            except Exception as e:
-                logging.error(f'Error in Morning Star Enhanced: {e}')
-
-    # Three White Soldiers
-    if config.AVAILABLE_PATTERNS.get('three_white_soldiers', {}).get('enabled'):
-        try:
-            if is_three_white_soldiers(prev2, prev, last):
-                logging.info(f'✅ TIER 3: Three White Soldiers')
-                return (True, 'Buy', 'Three White Soldiers', None)
-        except Exception as e:
-            logging.error(f'Error in Three White Soldiers: {e}')
-
-    # Hammer
-    if config.AVAILABLE_PATTERNS.get('hammer', {}).get('enabled', False):
-        try:
-            if is_hammer(last):
-                logging.info(f'✅ TIER 3: Hammer')
-                return (True, 'Buy', 'Hammer', None)
-        except Exception as e:
-            logging.error(f'Error in Hammer: {e}')
-    
-    # Doji
-    if config.AVAILABLE_PATTERNS.get('doji', {}).get('enabled', False):
-        try:
-            if is_doji(last):
-                logging.info(f'✅ TIER 3: Doji')
-                if prev['close'] > prev['open']:
-                    return (True, 'Sell', 'Doji (reversione)', None)
-                else:
-                    return (True, 'Buy', 'Doji (reversione)', None)
-        except Exception as e:
-            logging.error(f'Error in Doji: {e}')
-    
-    # ═══════════════════════════════════════════
-    # NESSUN PATTERN TROVATO
-    # ═══════════════════════════════════════════
-    
-    logging.debug(f'{symbol}: No pattern detected')
-    return (False, None, None, None)
+            # Log metriche comuni
+            volume_ratio = pattern_data.get('volume_ratio', 0)
+            quality_score = pattern_data.get('quality_score', 'N/A')
+            
+            if volume_ratio > 0:
+                logging.info(
+                    f'   {symbol} - Tier: {tier}, Volume: {volume_ratio:.1f}x'
+                )
+            if quality_score != 'N/A':
+                logging.info(f'   {symbol} - Quality Score: {quality_score}/100')
+        
+        return (True, side, pattern_name, pattern_data)
+    else:
+        logging.debug(f'❌ {symbol} - NO pattern detected')
+        return (False, None, None, None)
 
 
 async def get_open_positions_from_bybit(symbol: str = None):
