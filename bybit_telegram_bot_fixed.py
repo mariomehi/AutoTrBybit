@@ -5093,13 +5093,6 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
                     'emoji': level['emoji'],
                     'hit': False
                 })
-                
-                logging.debug(
-                    f"{symbol}: TP{i} qty calculation - "
-                    f"raw: {tp_qty_raw:.{qty_decimals}f}, "
-                    f"stepped: {tp_qty_stepped:.{qty_decimals}f}, "
-                    f"final: {tp_qty_final:.{qty_decimals}f}"
-                )
             
             logging.info(f'🎯 Multi-TP configurato per {symbol}:')
             for idx, tp in enumerate(tp_levels, 1):
