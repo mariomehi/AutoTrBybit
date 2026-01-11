@@ -5054,8 +5054,8 @@ async def place_bybit_order(symbol: str, side: str, qty: float, sl_price: float,
         tp_price = round_to_tick(tp_price, tick_size)
 
         # Fallback: assicurati almeno i decimali corretti
-        sl_price = round(sl_price, price_decimals)
-        tp_price = round(tp_price, price_decimals)
+        #sl_price = round(sl_price, price_decimals)
+        #tp_price = round(tp_price, price_decimals)
         
         logging.info(f'📤 Piazzando ordine {side} per {symbol}')
         logging.info(f'   Qty: {qty} | SL: {sl_price} | TP: {tp_price}')
