@@ -5333,8 +5333,7 @@ async def place_bybit_order(
     
     if config.MULTI_TP_ENABLED and config.MULTI_TP_CONFIG['enabled']:
         try:
-            tp_calculator = MultiTPCalculator()
-            tp_levels = tp_calculator.calculate_tp_levels(
+            tp_levels = calculate_tp_levels(
                 symbol=symbol,
                 side=side,
                 entry_price=entry_validated,
@@ -5483,31 +5482,42 @@ async def place_bybit_order(
         
         # ===== STEP 10: SALVA POSIZIONE NEL TRACKING =====
         with config.POSITIONS_LOCK:
-            # Double-check prima di salvare
-            if symbol in config.ACTIVE_POSITIONS:
-                logging.warning(
-                    f"{symbol}: Race condition detected, "
-                    f"position already added"
+        # ✅ Double-check valori prima di salvare
+            if not all([
+                side in ['Buy', 'Sell'],
+                qty_validated > 0,
+                entry_validated > 0,
+                sl_validated > 0,
+                tp_validated > 0
+            ]):
+                logging.error(
+                    f"{symbol}: Cannot save position - invalid values: "
+                    f"side={side}, qty={qty_validated}, entry={entry_validated}, "
+                    f"sl={sl_validated}, tp={tp_validated}"
                 )
-            else:
-                config.ACTIVE_POSITIONS[symbol] = {
-                    'side': side,
-                    'qty': qty_validated,
-                    'qty_original': qty_validated,
-                    'entry_price': entry_validated,
-                    'sl': sl_validated,
-                    'tp': tp_validated,
-                    'order_id': order.get('result', {}).get('orderId'),
-                    'timestamp': datetime.now(timezone.utc).isoformat(),
-                    'timeframe': timeframe,
-                    'pattern_name': pattern_name,
-                    'trailing_active': False,
-                    'highest_price': entry_validated,
-                    'chat_id': chat_id,
-                    'multi_tp_levels': tp_levels if tp_levels else None
+                return {
+                    'error': 'invalid_position_data',
+                    'message': 'Position data validation failed'
                 }
-                
-                logging.info(f"📝 Position saved for {symbol}")
+            
+            config.ACTIVE_POSITIONS[symbol] = {
+                'side': side,
+                'qty': qty_validated,
+                'qty_original': qty_validated,
+                'entry_price': entry_validated,  # ← Ora è garantito > 0
+                'sl': sl_validated,
+                'tp': tp_validated,
+                'order_id': order.get('result', {}).get('orderId'),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'timeframe': timeframe,
+                'pattern_name': pattern_name,
+                'trailing_active': False,
+                'highest_price': entry_validated,
+                'chat_id': chat_id,
+                'multi_tp_levels': tp_levels if tp_levels else None
+            }
+            
+            logging.info(f"📝 Position saved for {symbol}: entry={entry_validated}")
         
         # ===== STEP 11: INIZIALIZZA TP TRACKING (se Multi-TP) =====
         if tp_levels:
@@ -5961,9 +5971,8 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
     logging.debug(f"Trailing check: {len(positions_copy)} positions")
     
     for symbol, pos_info in positions_copy.items():
-
         # ===== INIZIALIZZA new_sl QUI (FIX) =====
-        new_sl = None  # ← AGGIUNGI QUESTA RIGA ALL'INIZIO DEL LOOP
+        new_sl = None  # ← AGGIUNGI QUESTA RIGA
         
         try:
             # ✅ VALIDA pos_info PRIMA di usarlo
@@ -5979,57 +5988,25 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             side = pos_info.get('side')
             entry_price = pos_info.get('entry_price')  # ← USA .get() per safety
             
-            #Verifica SUBITO e salta se invalido
+            # ✅ VERIFICA SUBITO e salta se invalido
             if entry_price is None or entry_price <= 0:
                 logging.error(
                     f"{symbol}: Invalid entry_price ({entry_price}), "
                     f"skipping trailing stop"
                 )
                 continue
-        
+            
             current_sl = pos_info.get('sl')
             if current_sl is None:
                 logging.error(f"{symbol}: Missing SL, skipping")
                 continue
-
+    
+            timeframe_entry = pos_info.get('timeframe', '15m')
+            chat_id = pos_info.get('chat_id')
+            
             # ===== VERIFICA POSIZIONE REALE SU BYBIT =====
             try:
                 session = create_bybit_session()
-
-                #Preserva TP quando aggiorni SL
-                # Alcuni broker resettano TP se non lo passi esplicitamente
-                tp_price = pos_info.get('tp', 0)
-
-                # Arrotonda al tick_size
-                price_decimals = get_price_decimals(new_sl)
-                new_sl_rounded = round(new_sl, price_decimals)
-
-                # Prepara parametri
-                params = {
-                    "category": "linear",
-                    "symbol": symbol,
-                    "stopLoss": str(new_sl_rounded),
-                    "positionIdx": 0
-                }
-
-                #Includi TP se esistente per preservarlo
-                if tp_price > 0:
-                    tp_rounded = round(tp_price, price_decimals)
-                    params["takeProfit"] = str(tp_rounded)
-                    logging.debug(f"{symbol}: Updating SL={new_sl_rounded}, preserving TP={tp_rounded}")
-                else:
-                    logging.debug(f"{symbol}: Updating SL={new_sl_rounded}, no TP set")
-                
-                result = session.set_trading_stop(**params)
-
-                if result.get('retCode') == 0:
-                    # Aggiorna tracking locale
-                    with config.POSITIONS_LOCK:
-                        if symbol in config.ACTIVE_POSITIONS:
-                            config.ACTIVE_POSITIONS[symbol]['sl'] = new_sl
-                            
-                            logging.info(f"{symbol} ({side}): Trailing SL updated to {new_sl:.4f} (Level: {active_level['label']})")
-    
                 positions_response = session.get_positions(
                     category='linear',
                     symbol=symbol
@@ -6038,7 +6015,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                 if positions_response.get('retCode') == 0:
                     pos_list = positions_response.get('result', {}).get('list', [])
                     
-                    # Cerca posizione attiva per questo symbol
+                    # Cerca posizione attiva
                     real_position = None
                     for p in pos_list:
                         if float(p.get('size', 0)) > 0:
@@ -6057,14 +6034,11 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                     
             except Exception as e:
                 logging.error(f"{symbol}: Error verifying position: {e}")
-                continue
-                
-            current_sl = pos_info['sl']
-            timeframe_entry = pos_info.get('timeframe', '15m')
-            chat_id = pos_info.get('chat_id')
+                continue  # ← IMPORTANTE: continua invece di crashare
             
+            # ===== ORA entry_price è GARANTITO valido =====
             # Determina timeframe EMA per trailing
-            ema_tf = TRAILING_EMA_TIMEFRAME.get(timeframe_entry, '5m')
+            ema_tf = config.TRAILING_EMA_TIMEFRAME.get(timeframe_entry, '5m')
             
             # Scarica dati per calcolare EMA 10
             df = bybit_get_klines_cached(symbol, ema_tf, limit=20)
@@ -6074,7 +6048,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             
             current_price = df['close'].iloc[-1]
             
-            # ===== CALCOLO PROFIT % (DIVERSO PER BUY/SELL) =====
+            # ===== CALCOLO PROFIT % (ora entry_price è validato) =====
             if side == 'Buy':
                 profit_usd = (current_price - entry_price) * pos_info['qty']
                 profit_pct = ((current_price - entry_price) / entry_price) * 100
@@ -10292,6 +10266,24 @@ def main():
         # Nota: Serve chat_id, quindi auto-discovery sarà attivato
         # dal primo utente che usa /autodiscover on
         logging.info('🔍 Auto-Discovery configurato (attiva con /autodiscover on)')
+
+    # ✅ AGGIUNGI: Cleanup posizioni corrotte all'avvio
+    logging.info('🧹 Checking for corrupted positions...')
+    with config.POSITIONS_LOCK:
+        to_remove = []
+        for symbol, pos_info in config.ACTIVE_POSITIONS.items():
+            is_valid, error_msg = validate_position_info(symbol, pos_info)
+            if not is_valid:
+                logging.warning(f"Removing corrupted position {symbol}: {error_msg}")
+                to_remove.append(symbol)
+        
+        for symbol in to_remove:
+            del config.ACTIVE_POSITIONS[symbol]
+        
+        if to_remove:
+            logging.info(f"🗑️ Removed {len(to_remove)} corrupted positions: {to_remove}")
+        else:
+            logging.info('✅ No corrupted positions found')
 
     # Carica statistiche pattern
     logging.info('📊 Caricamento statistiche pattern...')
