@@ -6064,14 +6064,14 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             
             initial_risk_usd = initial_risk_per_unit * pos_info['qty']
             
-            if not PROFIT_LOCK_ENABLED:
+            if not config.PROFIT_LOCK_ENABLED:
                 # Skip profit lock se disabilitato
                 logging.debug(f"{symbol}: Profit lock DISABLED, skip to normal trailing")
             else:
                 # Carica config
-                PROFIT_LOCK_MULTIPLIER = PROFIT_LOCK_CONFIG['multiplier']
-                PROFIT_LOCK_RETENTION = PROFIT_LOCK_CONFIG['retention']
-                MIN_PROFIT_USD = PROFIT_LOCK_CONFIG['min_profit_usd']
+                config.PROFIT_LOCK_MULTIPLIER = config.PROFIT_LOCK_CONFIG['multiplier']
+                config.PROFIT_LOCK_RETENTION = config.PROFIT_LOCK_CONFIG['retention']
+                config.MIN_PROFIT_USD = config.PROFIT_LOCK_CONFIG['min_profit_usd']
 
                 # Calcola profit/risk ratio
                 if initial_risk_usd > 0:
@@ -6081,17 +6081,17 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                 
                 # ✅ CHECK 1: Profit >= 5x risk iniziale?
                 # ✅ CHECK 2: Profit assoluto >= min_profit_usd?
-                if profit_risk_ratio >= PROFIT_LOCK_MULTIPLIER and profit_usd >= MIN_PROFIT_USD:
+                if profit_risk_ratio >= config.PROFIT_LOCK_MULTIPLIER and profit_usd >= config.MIN_PROFIT_USD:
                     logging.info(
                         f"🔒 {symbol}: PROFIT LOCK TRIGGER! "
                         f"Profit={profit_usd:.2f} USD ({profit_risk_ratio:.1f}x risk), "
-                        f"Threshold={PROFIT_LOCK_MULTIPLIER}x"
+                        f"Threshold={config.PROFIT_LOCK_MULTIPLIER}x"
                     )
                     
                     # ✅ CALCOLA NUOVO SL CON RETENTION
                     if side == 'Buy':
                         # LONG: Blocca 80% del profit raggiunto
-                        locked_profit = profit_usd * PROFIT_LOCK_RETENTION
+                        locked_profit = profit_usd * config.PROFIT_LOCK_RETENTION
                         new_sl = entry_price + (locked_profit / pos_info['qty'])
                         
                         # Assicurati che SL sia miglioramento (mai indietro)
@@ -6128,7 +6128,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                     
                     else:  # Sell (SHORT)
                         # SHORT: Blocca 80% del profit raggiunto
-                        locked_profit = profit_usd * PROFIT_LOCK_RETENTION
+                        locked_profit = profit_usd * config.PROFIT_LOCK_RETENTION
                         new_sl = entry_price - (locked_profit / pos_info['qty'])
                         
                         # Assicurati che SL sia miglioramento (mai peggio per SHORT)
@@ -6164,12 +6164,12 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                     # Profit non abbastanza alto per profit lock
                     logging.debug(
                         f"{symbol}: Profit {profit_usd:.2f} USD ({profit_risk_ratio:.1f}x) "
-                        f"< threshold ({PROFIT_LOCK_MULTIPLIER}x) or < min ${MIN_PROFIT_USD}"
+                        f"< threshold ({config.PROFIT_LOCK_MULTIPLIER}x) or < min ${config.MIN_PROFIT_USD}"
                     )
             
             # ✅ CONTINUA AL TRAILING NORMALE (se profit lock non eseguito)
             active_level = None
-            for level in TRAILING_CONFIG_ADVANCED['levels']:
+            for level in config.TRAILING_CONFIG_ADVANCED['levels']:
                 if profit_pct >= level['profit_pct']:
                     active_level = level
                 else:
@@ -6188,7 +6188,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                 new_sl = ema_10 * (1 - ema_buffer)
                 
                 # Check se SL è migliorato (mai indietro)
-                if TRAILING_CONFIG_ADVANCED['never_back'] and new_sl <= current_sl:
+                if config.TRAILING_CONFIG_ADVANCED['never_back'] and new_sl <= current_sl:
                     logging.debug(f"{symbol} (BUY): New SL {new_sl:.4f} <= current {current_sl:.4f}, skip")
                     continue
                     
@@ -6197,12 +6197,12 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                 new_sl = ema_10 * (1 + ema_buffer)
                 
                 # Check se SL è migliorato (mai indietro = mai più alto per SHORT)
-                if TRAILING_CONFIG_ADVANCED['never_back'] and new_sl >= current_sl:
+                if config.TRAILING_CONFIG_ADVANCED['never_back'] and new_sl >= current_sl:
                     logging.debug(f"{symbol} (SELL): New SL {new_sl:.4f} >= current {current_sl:.4f}, skip")
                     continue
             
             # Check movimento minimo
-            min_move_pct = TRAILING_CONFIG_ADVANCED.get('min_move_pct', 0.1)
+            min_move_pct = config.TRAILING_CONFIG_ADVANCED.get('min_move_pct', 0.1)
             move_pct = abs((new_sl - current_sl) / current_sl) * 100
             if move_pct < min_move_pct:
                 logging.debug(f"{symbol} ({side}): SL move {move_pct:.2f}% < min {min_move_pct}%, skip")
