@@ -5307,8 +5307,7 @@ async def place_bybit_order(
     
     # ===== STEP 5: VALIDA PREZZI =====
     try:
-        price_validator = PriceValidator()
-        prices_validated = price_validator.validate_prices(
+        prices_validated = validate_prices(
             symbol=symbol,
             side=side,
             entry_price=entry_price,
