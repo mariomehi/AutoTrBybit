@@ -330,6 +330,10 @@ def clear_instrument_cache(symbol: str = None):
             config.INSTRUMENT_INFO_CACHE.clear()
             logging.info("全 cache cleared")
 
+class OrderValidationError(Exception):
+    """Errore custom per validazione ordine"""
+    pass
+
 def validate_prices(symbol: str, side: str, entry_price: float, sl_price: float, tp_price: float, tick_size: float) -> Dict[str, Any]:
         """
         Valida e arrotonda prezzi secondo tick_size
@@ -5286,8 +5290,7 @@ async def place_bybit_order(
     
     # ===== STEP 4: VALIDA QUANTITY =====
     try:
-        qty_validator = QuantityValidator()
-        qty_validated = qty_validator.validate_quantity(
+        qty_validated = validate_quantity(
             symbol=symbol,
             qty=qty,
             min_order_qty=min_order_qty,
