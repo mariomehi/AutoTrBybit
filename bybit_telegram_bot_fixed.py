@@ -9029,7 +9029,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ===== MARKET TIME FILTER (autotrade gate) =====
         time_ok, time_reason = is_good_trading_time_utc()
         if not time_ok:
-            if MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
+            if config.MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
                 if autotrade:
                     logging.info(f"{symbol} {timeframe}: Autotrade disabilitato ({time_reason})")
                 autotrade = False  # solo ordini off, analisi continua
@@ -9041,8 +9041,8 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         autotrade_text = "Autotrade ON" if autotrade else "Solo monitoraggio"
         
         # Determina modalità notifiche
-        with FULL_NOTIFICATIONS_LOCK:
-            full_mode = chat_id in FULL_NOTIFICATIONS and key in FULL_NOTIFICATIONS[chat_id]
+        with config.FULL_NOTIFICATIONS_LOCK:
+            full_mode = chat_id in config.FULL_NOTIFICATIONS and key in config.FULL_NOTIFICATIONS[chat_id]
         
         notif_emoji = "🔔" if full_mode else "🔕"
         notif_text = "Tutte le notifiche" if full_mode else "Solo pattern"
