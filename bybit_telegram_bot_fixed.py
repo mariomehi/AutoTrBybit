@@ -363,9 +363,9 @@ def validate_prices(symbol: str, side: str, entry_price: float, sl_price: float,
         if entry_price <= 0:
             raise OrderValidationError(f"Entry price invalid: {entry_price}")
         if sl_price <= 0:
-            raise OrderValidationError(f"Stop Loss invalid: {sl_price}")
+            raise OrderValidationError(f"Stop Loss invalid: {sl_price} (must be > 0)")
         if tp_price <= 0:
-            raise OrderValidationError(f"Take Profit invalid: {tp_price}")
+            raise OrderValidationError(f"Take Profit invalid: {tp_price} (must be > 0)")
         
         # Arrotonda prezzi
         entry_rounded = round_to_tick(entry_price, tick_size)
@@ -374,6 +374,14 @@ def validate_prices(symbol: str, side: str, entry_price: float, sl_price: float,
         
         # Valida logica SL/TP per LONG
         if side == 'Buy':
+            if sl_price >= entry_price:
+                raise OrderValidationError(
+                    f"LONG: SL ({sl_price}) must be < Entry ({entry_price})"
+                )
+            if tp_price <= entry_price:
+                raise OrderValidationError(
+                    f"LONG: TP ({tp_price}) must be > Entry ({entry_price})"
+                )
             # SL deve essere SOTTO entry
             if sl_rounded >= entry_rounded:
                 raise OrderValidationError(
@@ -4821,6 +4829,16 @@ def calculate_ema_stop_loss(df: pd.DataFrame, timeframe: str, entry_price: float
         ema_used: quale EMA è stata usata
         ema_value: valore dell'EMA
     """
+    if entry_price <= 0:
+        logging.error(f"Invalid entry_price: {entry_price}, using ATR fallback")
+        # Fallback ATR
+        atr_val = atr(df, period=14).iloc[-1]
+        if side == 'Buy':
+            sl_price = entry_price - atr_val * config.ATR_MULT_SL
+        else:
+            sl_price = entry_price + atr_val * config.ATR_MULT_SL
+        return sl_price, 'ATR_FALLBACK', atr_val
+        
     if not config.USE_EMA_STOP_LOSS:
         # Fallback a ATR se disabilitato
         atr_val = atr(df, period=14).iloc[-1]
@@ -4852,6 +4870,15 @@ def calculate_ema_stop_loss(df: pd.DataFrame, timeframe: str, entry_price: float
         # Default a EMA 10
         ema_value = ema_10.iloc[-1]
         ema_name = 'EMA 10'
+
+    if pd.isna(ema_value) or ema_value <= 0:
+        logging.error(f"Invalid EMA value: {ema_value}, using ATR fallback")
+        atr_val = atr(df, period=14).iloc[-1]
+        if side == 'Buy':
+            sl_price = entry_price - atr_val * config.ATR_MULT_SL
+        else:
+            sl_price = entry_price + atr_val * config.ATR_MULT_SL
+        return sl_price, 'ATR_FALLBACK', atr_val
     
     # Calcola stop loss con buffer
     if side == 'Buy':
@@ -4859,29 +4886,29 @@ def calculate_ema_stop_loss(df: pd.DataFrame, timeframe: str, entry_price: float
         sl_price = ema_value * (1 - config.EMA_SL_BUFFER)
         
         # Verifica che non sia troppo lontano (max 3% dall'entry)
-        max_sl_distance = entry_price * 0.03
+        max_sl_distance = entry_price * 0.03  # Max 3%
         if (entry_price - sl_price) > max_sl_distance:
-            sl_price = entry_price - max_sl_distance
-            ema_name += ' (limitato)'
+            logging.warning(
+                f"SL too far from entry ({(entry_price-sl_price)/entry_price*100:.1f}%), "
+                f"limiting to 3%"
+            )
+            sl_price = entry_price * 0.97
+            ema_name += ' (limited)'
         
         # Verifica che non sia troppo vicino (min 0.5% dall'entry)
-        min_sl_distance = entry_price * 0.005
+        min_sl_distance = entry_price * 0.005  # Min 0.5%
         if (entry_price - sl_price) < min_sl_distance:
-            sl_price = entry_price - min_sl_distance
-            ema_name += ' (ampliato)'
-    else:
-        # Per posizioni SELL: SL sopra l'EMA
-        sl_price = ema_value * (1 + EMA_SL_BUFFER)
-        
-        max_sl_distance = entry_price * 0.03
-        if (sl_price - entry_price) > max_sl_distance:
-            sl_price = entry_price + max_sl_distance
-            ema_name += ' (limitato)'
-        
-        min_sl_distance = entry_price * 0.005
-        if (sl_price - entry_price) < min_sl_distance:
-            sl_price = entry_price + min_sl_distance
-            ema_name += ' (ampliato)'
+            logging.warning(
+                f"SL too close to entry ({(entry_price-sl_price)/entry_price*100:.1f}%), "
+                f"setting to 0.5%"
+            )
+            sl_price = entry_price * 0.995
+            ema_name += ' (widened)'
+
+    if sl_price <= 0:
+        logging.error(f"Calculated SL <= 0: {sl_price}, using 2% below entry")
+        sl_price = entry_price * 0.98
+        ema_name = 'FALLBACK_2PCT'
     
     return sl_price, ema_name, ema_value
     """
@@ -7232,9 +7259,51 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
             
             # Gestione pattern-specific entry/sl/tp
             if pattern_data and 'suggested_entry' in pattern_data:
-                entry_price = pattern_data['suggested_entry']
-                sl_price = pattern_data['suggested_sl']
-                tp_price = pattern_data['suggested_tp']
+                entry_price = pattern_data.get('suggested_entry', last_close)
+                sl_price = pattern_data.get('suggested_sl')
+                tp_price = pattern_data.get('suggested_tp')
+                
+                # ✅ VERIFICA che SL e TP siano validi
+                if not sl_price or sl_price <= 0:
+                    logging.warning(f"{symbol}: Pattern data missing valid SL, calculating with EMA")
+                    sl_price = None  # Forza calcolo sotto
+                
+                if not tp_price or tp_price <= 0:
+                    logging.warning(f"{symbol}: Pattern data missing valid TP, calculating with ATR")
+                    tp_price = None  # Forza calcolo sotto
+
+                if sl_price is None:
+                # Calcola SL con EMA
+                if config.USE_EMA_STOP_LOSS:
+                    sl_price, ema_used, ema_value = calculate_ema_stop_loss(
+                        df, timeframe, entry_price, side
+                    )
+                else:
+                    atr_series = atr(df, period=14)
+                    last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else 0
+                    
+                    if not math.isnan(last_atr) and last_atr > 0:
+                        sl_price = entry_price - last_atr * config.ATR_MULT_SL
+                    else:
+                        sl_price = df['low'].iloc[-1] * 0.998  # Fallback: sotto last low
+            
+                if tp_price is None:
+                    # Calcola TP con ATR
+                    atr_series = atr(df, period=14)
+                    last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else 0
+                    
+                    if not math.isnan(last_atr) and last_atr > 0:
+                        tp_price = entry_price + last_atr * config.ATR_MULT_TP
+                    else:
+                        tp_price = entry_price * 1.02  # Fallback: +2%
+                
+                # ✅ VALIDAZIONE FINALE
+                if sl_price <= 0 or tp_price <= 0 or sl_price >= entry_price:
+                    logging.error(
+                        f"{symbol}: Invalid SL/TP calculated - "
+                        f"entry={entry_price:.4f}, sl={sl_price:.4f}, tp={tp_price:.4f}"
+                    )
+                
             else:
                 # Calcola con EMA o ATR
                 if config.USE_EMA_STOP_LOSS:
