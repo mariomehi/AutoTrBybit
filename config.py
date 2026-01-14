@@ -30,9 +30,8 @@ VOLUME_FILTER_ENABLED = True  # Default: abilitato
 VOLUME_FILTER_MODE = 'pattern-only'  # 'strict', 'adaptive', 'pattern-only'
 # Threshold per diversi modi
 VOLUME_THRESHOLDS = {
-    'strict': 2.5,      # Volume > 2x media (originale)
-    'adaptive': 1.8,    # Volume > 1.3x media (rilassato)
-    'pattern-only': 0.5   # No check globale, solo nei pattern
+    'strict': 2.0,      # Volume > 2x media (originale)
+    'adaptive': 1.3,    # Volume > 1.3x media (rilassato)
 }
 
 TREND_FILTER_ENABLED = True
@@ -261,7 +260,7 @@ BYBIT_PUBLIC_REST = 'https://api.bybit.com'  # Dati di mercato sempre da mainnet
 # ===== MARKET TIME FILTER =====
 MARKET_TIME_FILTER_ENABLED = True
 # Ore UTC bloccate (default: 01-04 UTC)
-MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = {1, 2, 3, 4}
+MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = {1, 2}
 # Modalità: se True blocca solo autotrade, se False blocca anche analisi pattern
 MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY = True
 
@@ -288,8 +287,8 @@ LIMIT_ORDER_CONFIG = {
 # ===== AGGRESSIVE PROFIT LOCK CONFIG =====
 PROFIT_LOCK_ENABLED = True  # Abilita/disabilita profit lock aggressivo
 PROFIT_LOCK_CONFIG = {
-    'multiplier': 5.0,        # Attiva quando profit >= 5x risk iniziale
-    'retention': 0.80,        # Trattieni 80% del profit raggiunto
+    'multiplier': 3.5,        # Attiva quando profit >= 3.5x risk iniziale
+    'retention': 0.90,        # Trattieni 80% del profit raggiunto
     'min_profit_usd': 20.0,   # Min profit in USD per attivare (evita micro-profit)
 }
 
@@ -303,20 +302,20 @@ MULTI_TP_CONFIG = {
     'levels': [
         {
             'label': 'TP1 - Quick Profit',
-            'rr_ratio': 1.5,      # 1.5R dal entry
-            'close_pct': 0.40,    # Chiudi 40% posizione
+            'rr_ratio': 1.0,      # 1.0R dal entry
+            'close_pct': 0.50,    # Chiudi 50% posizione
             'emoji': '🎯'
         },
         {
-            'label': 'TP2 - Trend Capture',
-            'rr_ratio': 2.5,      # 2.5R dal entry
+            'label': 'TP2 - Bank It',
+            'rr_ratio': 1.5,      # 1.5R dal entry
             'close_pct': 0.30,    # Chiudi 30% posizione
             'emoji': '🎯🎯'
         },
         {
-            'label': 'TP3 - Big Move',
-            'rr_ratio': 4.0,      # 4R dal entry
-            'close_pct': 0.30,    # Chiudi 30% posizione (residuo)
+            'label': 'TP3 - Runner',
+            'rr_ratio': 2.5,      # 2.5R dal entry
+            'close_pct': 0.30,    # Chiudi 20% posizione (residuo)
             'emoji': '🎯🎯🎯'
         }
     ],
