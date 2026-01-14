@@ -7274,18 +7274,18 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
 
                 if sl_price is None:
                 # Calcola SL con EMA
-                if config.USE_EMA_STOP_LOSS:
-                    sl_price, ema_used, ema_value = calculate_ema_stop_loss(
-                        df, timeframe, entry_price, side
-                    )
-                else:
-                    atr_series = atr(df, period=14)
-                    last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else 0
-                    
-                    if not math.isnan(last_atr) and last_atr > 0:
-                        sl_price = entry_price - last_atr * config.ATR_MULT_SL
+                    if config.USE_EMA_STOP_LOSS:
+                        sl_price, ema_used, ema_value = calculate_ema_stop_loss(
+                            df, timeframe, entry_price, side
+                        )
                     else:
-                        sl_price = df['low'].iloc[-1] * 0.998  # Fallback: sotto last low
+                        atr_series = atr(df, period=14)
+                        last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else 0
+                        
+                        if not math.isnan(last_atr) and last_atr > 0:
+                            sl_price = entry_price - last_atr * config.ATR_MULT_SL
+                        else:
+                            sl_price = df['low'].iloc[-1] * 0.998  # Fallback: sotto last low
             
                 if tp_price is None:
                     # Calcola TP con ATR
