@@ -10655,6 +10655,7 @@ def main():
     application.add_handler(CommandHandler('pattern_off', cmd_pattern_off))
     application.add_handler(CommandHandler('pattern_info', cmd_pattern_info))
     application.add_handler(CommandHandler('ema_filter', cmd_ema_filter))
+    application.add_handler(CommandHandler('ema_sl', cmd_ema_sl))
     application.add_handler(CommandHandler('trend_filter', cmd_trend_filter))
     application.add_handler(CommandHandler("timefilter", cmd_time_filter))
     application.add_handler(CommandHandler('debug_filters', cmd_debug_filters))
