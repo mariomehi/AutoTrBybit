@@ -9177,19 +9177,19 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /test SYMBOL TIMEFRAME
-    Testa TUTTI i pattern sull'ultima candela e mostra debug info
+    Testa TUTTI i pattern sull'ultima candela e mostra debug info completo
     
-    VERSION: 3.0 - Updated con pattern recenti:
-    - Volume Spike Breakout
-    - Breakout + Retest
-    - Triple Touch Breakout (NUOVO)
-    - Liquidity Sweep
-    - S/R Bounce
-    - Bullish Comeback
-    - Compression Breakout
-    - Bullish Flag Breakout
-    - Morning Star + EMA Breakout
-    - Pattern classici (Engulfing, Hammer, ecc.)
+    VERSION: 4.0 - Aggiornato con Pattern Registry + Tutti i filtri recenti
+    
+    Features:
+    - Pattern Registry integration
+    - Multi-TP support info
+    - Profit Lock detection
+    - Advanced Trailing info
+    - Market Time Filter check
+    - HTF resistance check
+    - Pattern-specific volume requirements
+    - EMA analysis dettagliata
     """
     args = context.args
     
@@ -9197,12 +9197,15 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             '❌ Uso: /test SYMBOL TIMEFRAME\n'
             'Esempio: /test BTCUSDT 15m\n\n'
-            'Questo comando mostra:\n'
-            '• Info candela corrente\n'
-            '• Risultati test TUTTI i pattern\n'
-            '• Filtri globali (volume, trend, ATR)\n'
-            '• EMA analysis\n'
-            '• Grafico con pattern rilevato'
+            '<b>Questo comando mostra:</b>\n'
+            '• Info candela corrente + ultime 3\n'
+            '• Test TUTTI i pattern (via Registry)\n'
+            '• Filtri globali (Market Time, Volume, Trend)\n'
+            '• EMA Analysis dettagliata\n'
+            '• HTF Resistance check\n'
+            '• Setup trading suggerito\n'
+            '• Grafico con pattern evidenziato',
+            parse_mode='HTML'
         )
         return
     
@@ -9229,6 +9232,7 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         last = df.iloc[-1]
         prev = df.iloc[-2]
         prev2 = df.iloc[-3]
+        prev3 = df.iloc[-4]
         
         # Calcola metriche candela corrente
         last_body = abs(last['close'] - last['open'])
@@ -9244,195 +9248,373 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Decimali dinamici
         price_decimals = get_price_decimals(last['close'])
         
-        # ===== STEP 3: FILTRI GLOBALI =====
+        # ===== STEP 3: MARKET TIME FILTER CHECK =====
+        time_ok, time_reason = is_good_trading_time_utc()
+        now_utc = datetime.now(timezone.utc)
+        current_hour = now_utc.hour
+        
+        # ===== STEP 4: FILTRI GLOBALI =====
+        
+        # Volume Filter
         vol_ok = False
         vol_ratio = 0.0
+        vol_mode = config.VOLUME_FILTER_MODE
         
         try:
-            vol_ok = volume_confirmation(df, min_ratio=1.5)
             if 'volume' in df.columns and len(df['volume']) >= 20:
                 vol = df['volume']
                 avg_vol = vol.iloc[-20:-1].mean()
                 current_vol = vol.iloc[-1]
+                
                 if avg_vol > 0:
                     vol_ratio = current_vol / avg_vol
+                    
+                    # Check basato su mode
+                    if vol_mode == 'strict':
+                        vol_ok = vol_ratio >= 2.0
+                    elif vol_mode == 'adaptive':
+                        vol_ok = vol_ratio >= 1.3
+                    else:  # pattern-only
+                        vol_ok = True  # Pattern decidono
         except Exception as e:
             logging.error(f'Error volume check: {e}')
         
+        # Trend Filter
         trend_ok = False
+        trend_reason = ""
+        trend_details = {}
+        
         try:
-            trend_ok = is_uptrend_structure(df)
+            if config.TREND_FILTER_ENABLED:
+                trend_ok, trend_reason, trend_details = is_valid_trend_for_entry(
+                    df, 
+                    mode=config.TREND_FILTER_MODE,
+                    symbol=symbol
+                )
         except Exception as e:
             logging.error(f'Error trend check: {e}')
+            trend_reason = f"Error: {str(e)[:30]}"
         
+        # ATR Expansion
         atr_ok = False
         try:
             atr_ok = atr_expanding(df)
         except Exception as e:
             logging.error(f'Error ATR check: {e}')
         
-        # ===== STEP 4: EMA ANALYSIS =====
+        # ===== STEP 5: EMA ANALYSIS =====
         ema_analysis = None
         try:
             ema_analysis = analyze_ema_conditions(df, timeframe, None)
         except Exception as e:
             logging.error(f'Error EMA analysis: {e}')
         
-        # ===== STEP 5: TEST PATTERN INDIVIDUALI =====
-        # Pattern con return (bool, data) o (bool, None)
-        tests_with_data = {}
-        
-        # TIER 1 Patterns (con data)
+        # ===== STEP 6: HTF RESISTANCE CHECK =====
+        htf_check = None
         try:
-            found, data = is_volume_spike_breakout(df)
-            tests_with_data['📊💥 Volume Spike Breakout'] = (found, data)
+            htf_check = check_higher_timeframe_resistance(
+                symbol=symbol,
+                current_tf=timeframe,
+                current_price=last['close']
+            )
         except Exception as e:
-            logging.error(f'Error Volume Spike: {e}')
-            tests_with_data['📊💥 Volume Spike Breakout'] = (False, None)
+            logging.error(f'Error HTF check: {e}')
         
-        try:
-            found, data = is_liquidity_sweep_reversal(df)
-            tests_with_data['💎 Liquidity Sweep + Reversal'] = (found, data)
-        except Exception as e:
-            logging.error(f'Error Liquidity Sweep: {e}')
-            tests_with_data['💎 Liquidity Sweep + Reversal'] = (False, None)
+        # ===== STEP 7: PATTERN DETECTION VIA REGISTRY =====
+        from patterns import PATTERN_REGISTRY
         
-        try:
-            found, data = is_support_resistance_bounce(df)
-            tests_with_data['🎯 Support/Resistance Bounce'] = (found, data)
-        except Exception as e:
-            logging.error(f'Error S/R Bounce: {e}')
-            tests_with_data['🎯 Support/Resistance Bounce'] = (False, None)
-        
-        try:
-            found, data = is_bullish_flag_breakout(df)
-            tests_with_data['🚩 Bullish Flag Breakout'] = (found, data)
-        except Exception as e:
-            logging.error(f'Error Flag: {e}')
-            tests_with_data['🚩 Bullish Flag Breakout'] = (False, None)
-        
-        # ===== NUOVO: Triple Touch Breakout =====
-        try:
-            found, data = is_triple_touch_breakout(df)
-            tests_with_data['🎯3️⃣ Triple Touch Breakout'] = (found, data)
-        except NameError:
-            # Funzione non definita
-            tests_with_data['🎯3️⃣ Triple Touch Breakout'] = ('❌ NOT IMPLEMENTED', None)
-        except Exception as e:
-            logging.error(f'Error Triple Touch: {e}')
-            tests_with_data['🎯3️⃣ Triple Touch Breakout'] = (False, None)
-        
-        # Pattern bool only
-        tests_bool = {}
-        
-        try:
-            tests_bool['🔄 Bullish Comeback'] = is_bullish_comeback(df)
-        except Exception as e:
-            logging.error(f'Error Comeback: {e}')
-            tests_bool['🔄 Bullish Comeback'] = False
-        
-        try:
-            tests_bool['💥 Compression Breakout'] = is_compression_breakout(df)
-        except Exception as e:
-            logging.error(f'Error Compression: {e}')
-            tests_bool['💥 Compression Breakout'] = False
-        
-        try:
-            tests_bool['⭐💥 Morning Star + EMA Breakout'] = is_morning_star_ema_breakout(df)
-        except Exception as e:
-            logging.error(f'Error Morning Star EMA: {e}')
-            tests_bool['⭐💥 Morning Star + EMA Breakout'] = False
-        
-        try:
-            tests_bool['🟢 Bullish Engulfing'] = is_bullish_engulfing(prev, last)
-        except Exception as e:
-            tests_bool['🟢 Bullish Engulfing'] = False
-        
-        try:
-            tests_bool['🔴 Bearish Engulfing'] = is_bearish_engulfing(prev, last)
-        except Exception as e:
-            tests_bool['🔴 Bearish Engulfing'] = False
-        
-        try:
-            tests_bool['🔨 Hammer'] = is_hammer(last)
-        except Exception as e:
-            tests_bool['🔨 Hammer'] = False
-        
-        try:
-            tests_bool['📍 Pin Bar'] = is_pin_bar(last)
-        except Exception as e:
-            tests_bool['📍 Pin Bar'] = False
-        
-        try:
-            tests_bool['➖ Doji'] = is_doji(last)
-        except Exception as e:
-            tests_bool['➖ Doji'] = False
-        
-        try:
-            tests_bool['⭐ Morning Star'] = is_morning_star_enhanced(prev2, prev, last)
-        except Exception as e:
-            tests_bool['⭐ Morning Star'] = False
-        
-        try:
-            tests_bool['⬆️ Three White Soldiers'] = is_three_white_soldiers(prev2, prev, last)
-        except Exception as e:
-            tests_bool['⬆️ Three White Soldiers'] = False
-        
-        # ===== STEP 6: PATTERN RILEVATO DA check_patterns() =====
         found_main = False
         side_main = None
         pattern_main = None
         pattern_data_main = None
         
         try:
-            found_main, side_main, pattern_main, pattern_data_main = check_patterns(df)
+            found_main, side_main, pattern_main, pattern_data_main = PATTERN_REGISTRY.detect_all(df, symbol)
         except Exception as e:
-            logging.error(f'Error check_patterns: {e}')
+            logging.error(f'Error Pattern Registry: {e}')
         
-        # ===== STEP 7: COSTRUISCI MESSAGGIO =====
+        # ===== STEP 8: TEST PATTERN INDIVIDUALI (per debug) =====
+        individual_tests = {}
+        
+        # Test alcuni pattern chiave direttamente
+        test_patterns = [
+            ('📊💥 Volume Spike', lambda: is_volume_spike_breakout(df)),
+            ('🔄📈 Breakout Retest', lambda: is_breakout_retest(df)),
+            ('🎯3️⃣ Triple Touch', lambda: is_triple_touch_breakout(df)),
+            ('💎 Liquidity Sweep', lambda: is_liquidity_sweep_reversal(df)),
+            ('🎯 S/R Bounce', lambda: is_support_resistance_bounce(df)),
+            ('🚩 Bullish Flag', lambda: is_bullish_flag_breakout(df)),
+            ('🌱 BUD Pattern', lambda: is_bud_pattern(df, require_maxi=False)),
+            ('🌟🌱 MAXI BUD', lambda: is_bud_pattern(df, require_maxi=True)),
+        ]
+        
+        for pattern_name, pattern_func in test_patterns:
+            try:
+                result = pattern_func()
+                
+                if isinstance(result, tuple):
+                    if len(result) == 2:
+                        found, data = result
+                        individual_tests[pattern_name] = {
+                            'found': found,
+                            'data': data
+                        }
+                    elif len(result) == 3:
+                        found, tier, data = result
+                        individual_tests[pattern_name] = {
+                            'found': found,
+                            'tier': tier,
+                            'data': data
+                        }
+                else:
+                    individual_tests[pattern_name] = {
+                        'found': result,
+                        'data': None
+                    }
+            except Exception as e:
+                individual_tests[pattern_name] = {
+                    'found': False,
+                    'error': str(e)[:50]
+                }
+        
+        # ===== STEP 9: CALCOLA SETUP TRADING =====
+        entry_price = last['close']
+        sl_price = None
+        tp_price = None
+        qty = 0
+        
+        if found_main and side_main == 'Buy':
+            # Usa pattern data se disponibile
+            if pattern_data_main:
+                entry_price = pattern_data_main.get('suggested_entry', last['close'])
+                sl_price = pattern_data_main.get('suggested_sl')
+                tp_price = pattern_data_main.get('suggested_tp')
+            
+            # Calcola SL se mancante
+            if not sl_price or sl_price <= 0:
+                if config.USE_EMA_STOP_LOSS:
+                    sl_price, ema_used, ema_value = calculate_ema_stop_loss(
+                        df, timeframe, entry_price, side_main
+                    )
+                else:
+                    atr_series = atr(df, period=14)
+                    last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else 0
+                    
+                    if not math.isnan(last_atr) and last_atr > 0:
+                        sl_price = entry_price - last_atr * config.ATR_MULT_SL
+                    else:
+                        sl_price = df['low'].iloc[-1] * 0.998
+            
+            # Calcola TP se mancante
+            if not tp_price or tp_price <= 0:
+                atr_series = atr(df, period=14)
+                last_atr = atr_series.iloc[-1] if not atr_series.isna().all() else 0
+                
+                if not math.isnan(last_atr) and last_atr > 0:
+                    tp_price = entry_price + last_atr * config.ATR_MULT_TP
+                else:
+                    tp_price = entry_price * 1.02
+            
+            # Calcola qty
+            risk_base = config.RISK_USD
+            if ema_analysis and 'score' in ema_analysis:
+                risk_base = calculate_dynamic_risk(ema_analysis['score'])
+            
+            risk_for_symbol = config.SYMBOL_RISK_OVERRIDE.get(symbol, risk_base)
+            
+            last_atr = atr(df, period=14).iloc[-1]
+            if math.isnan(last_atr):
+                last_atr = abs(entry_price - sl_price) * 0.01
+            
+            ema_score = ema_analysis['score'] if ema_analysis else 50
+            qty = calculate_optimal_position_size(
+                entry_price=entry_price,
+                sl_price=sl_price,
+                symbol=symbol,
+                volatility_atr=last_atr,
+                ema_score=ema_score,
+                risk_usd=risk_for_symbol
+            )
+        
+        # ===== STEP 10: COSTRUISCI MESSAGGIO =====
         msg = f"🔍 <b>Test Pattern: {symbol} {timeframe}</b>\n\n"
         
-        # Pattern principale rilevato
+        # ===== SEZIONE 1: PATTERN PRINCIPALE =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>🎯 PATTERN DETECTION</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        
         if found_main:
-            msg += f"✅ <b>PATTERN RILEVATO: {pattern_main}</b>\n"
-            msg += f"📈 Direzione: {side_main}\n\n"
+            msg += f"✅ <b>{pattern_main}</b>\n"
+            msg += f"📈 Side: {side_main}\n"
+            
+            if pattern_data_main:
+                config_info = pattern_data_main.get('pattern_config', {})
+                tier = config_info.get('tier', pattern_data_main.get('tier', 'N/A'))
+                quality_score = pattern_data_main.get('quality_score', 'N/A')
+                volume_ratio = pattern_data_main.get('volume_ratio', 0)
+                
+                msg += f"🏆 Tier: {tier}\n"
+                if quality_score != 'N/A':
+                    msg += f"⭐ Quality: {quality_score}/100\n"
+                if volume_ratio > 0:
+                    msg += f"📊 Volume: {volume_ratio:.1f}x\n"
         else:
-            msg += "❌ Nessun pattern rilevato da check_patterns()\n\n"
+            msg += "❌ <b>Nessun pattern rilevato</b>\n"
         
-        # Info candela corrente
-        msg += f"📊 <b>Ultima candela:</b>\n"
-        msg += f"O: ${last['open']:.{price_decimals}f} | H: ${last['high']:.{price_decimals}f}\n"
-        msg += f"L: ${last['low']:.{price_decimals}f} | C: ${last['close']:.{price_decimals}f}\n"
-        msg += f"{'🟢 Bullish' if last['close'] > last['open'] else '🔴 Bearish'}\n"
-        msg += f"Corpo: {last_body_pct:.1f}% del range\n"
-        msg += f"Ombra inf: {lower_wick_pct:.1f}%\n"
-        msg += f"Ombra sup: {upper_wick_pct:.1f}%\n\n"
+        msg += "\n"
         
-        # Filtri globali
-        msg += "🔍 <b>Filtri Globali:</b>\n"
-        msg += f"{'✅' if vol_ok else '❌'} Volume: {vol_ratio:.1f}x (>1.5x)\n"
-        msg += f"{'✅' if trend_ok else '❌'} Uptrend Structure\n"
-        msg += f"{'✅' if atr_ok else '⚠️'} ATR Expanding\n\n"
+        # ===== SEZIONE 2: CANDELE RECENTI =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>📊 CANDELE RECENTI</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
         
-        # EMA Analysis
+        def format_candle(candle, label):
+            is_green = candle['close'] > candle['open']
+            emoji = "🟢" if is_green else "🔴"
+            return (
+                f"{emoji} <b>{label}:</b>\n"
+                f"  O: ${candle['open']:.{price_decimals}f} | "
+                f"C: ${candle['close']:.{price_decimals}f}\n"
+                f"  H: ${candle['high']:.{price_decimals}f} | "
+                f"L: ${candle['low']:.{price_decimals}f}\n"
+            )
+        
+        msg += format_candle(last, "Corrente (-1)")
+        msg += format_candle(prev, "Prev (-2)")
+        msg += format_candle(prev2, "Prev2 (-3)")
+        
+        msg += f"\n<b>Corrente Details:</b>\n"
+        msg += f"Corpo: {last_body_pct:.1f}% range\n"
+        msg += f"Wick inf: {lower_wick_pct:.1f}%\n"
+        msg += f"Wick sup: {upper_wick_pct:.1f}%\n"
+        msg += "\n"
+        
+        # ===== SEZIONE 3: FILTRI GLOBALI =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>🔍 FILTRI GLOBALI</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        
+        # Market Time Filter
+        msg += f"⏰ <b>Market Time:</b>\n"
+        msg += f"  UTC Hour: {current_hour:02d}\n"
+        msg += f"  Status: {'✅ OK' if time_ok else f'❌ BLOCKED - {time_reason}'}\n"
+        msg += f"  Enabled: {'✅' if config.MARKET_TIME_FILTER_ENABLED else '❌'}\n"
+        msg += f"  Mode: {('AUTOTRADE_ONLY' if config.MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY else 'ALL_ANALYSIS')}\n\n"
+        
+        # Volume Filter
+        msg += f"📊 <b>Volume Filter:</b>\n"
+        msg += f"  Mode: {vol_mode.upper()}\n"
+        msg += f"  Ratio: {vol_ratio:.2f}x\n"
+        msg += f"  Status: {'✅ OK' if vol_ok else '❌ FAIL'}\n"
+        
+        # Threshold checks
+        msg += f"  Thresholds:\n"
+        msg += f"    • 1.3x (Adaptive): {'✅' if vol_ratio >= 1.3 else '❌'}\n"
+        msg += f"    • 1.5x (Pattern-only): {'✅' if vol_ratio >= 1.5 else '❌'}\n"
+        msg += f"    • 2.0x (Strict): {'✅' if vol_ratio >= 2.0 else '❌'}\n\n"
+        
+        # Trend Filter
+        msg += f"📈 <b>Trend Filter:</b>\n"
+        msg += f"  Enabled: {'✅' if config.TREND_FILTER_ENABLED else '❌'}\n"
+        msg += f"  Mode: {config.TREND_FILTER_MODE.upper()}\n"
+        msg += f"  Status: {'✅ OK' if trend_ok else f'❌ FAIL - {trend_reason}'}\n"
+        
+        if trend_details and config.TREND_FILTER_MODE == 'ema_based':
+            ema60_trend = trend_details.get('ema60', 0)
+            price_trend = trend_details.get('price', 0)
+            distance_pct = trend_details.get('distance_pct', 0)
+            msg += f"  EMA 60: ${ema60_trend:.{price_decimals}f}\n"
+            msg += f"  Price: ${price_trend:.{price_decimals}f}\n"
+            msg += f"  Distance: {distance_pct:.2f}%\n"
+        
+        msg += "\n"
+        
+        # ATR Expansion
+        msg += f"💹 <b>ATR Expansion:</b> {'✅ Expanding' if atr_ok else '⚠️ Not expanding'}\n\n"
+        
+        # ===== SEZIONE 4: EMA ANALYSIS =====
         if ema_analysis:
-            msg += f"📈 <b>EMA Quality:</b> {ema_analysis['quality']} ({ema_analysis['score']}/100)\n\n"
+            msg += "━━━━━━━━━━━━━━━━━━━\n"
+            msg += "<b>📈 EMA ANALYSIS</b>\n"
+            msg += "━━━━━━━━━━━━━━━━━━━\n"
+            
+            msg += f"Mode: {config.EMA_FILTER_MODE.upper()}\n"
+            msg += f"Score: <b>{ema_analysis['score']}/100</b>\n"
+            msg += f"Quality: <b>{ema_analysis['quality']}</b>\n"
+            msg += f"Passed: {'✅ YES' if ema_analysis['passed'] else '❌ NO'}\n\n"
+            
+            msg += f"<b>Details:</b>\n"
+            details_lines = ema_analysis['details'].split('\n')
+            for line in details_lines[:5]:  # Max 5 righe
+                if line.strip():
+                    msg += f"  {line}\n"
+            
+            if len(details_lines) > 5:
+                msg += f"  ... (+{len(details_lines)-5} more)\n"
+            
+            msg += "\n"
+            
+            # EMA Values
+            if 'ema_values' in ema_analysis:
+                ema_vals = ema_analysis['ema_values']
+                msg += f"<b>EMA Values:</b>\n"
+                msg += f"  EMA 5: ${ema_vals.get('ema5', 0):.{price_decimals}f}\n"
+                msg += f"  EMA 10: ${ema_vals.get('ema10', 0):.{price_decimals}f}\n"
+                msg += f"  EMA 60: ${ema_vals.get('ema60', 0):.{price_decimals}f}\n"
+                msg += f"  EMA 223: ${ema_vals.get('ema223', 0):.{price_decimals}f}\n"
+                msg += f"  Price: ${ema_vals.get('price', 0):.{price_decimals}f}\n\n"
         
-        # Test pattern (con data)
-        msg += "🧪 <b>Test Pattern (TIER 1):</b>\n"
-        for pattern_name, (result, data) in tests_with_data.items():
-            if result == '❌ NOT IMPLEMENTED':
+        # ===== SEZIONE 5: HTF RESISTANCE =====
+        if htf_check:
+            msg += "━━━━━━━━━━━━━━━━━━━\n"
+            msg += "<b>🔍 HTF RESISTANCE CHECK</b>\n"
+            msg += "━━━━━━━━━━━━━━━━━━━\n"
+            
+            if htf_check.get('blocked'):
+                msg += f"❌ <b>BLOCKED by HTF {htf_check.get('htf', 'N/A')}</b>\n"
+                msg += f"Momentum: {htf_check.get('momentum', 'N/A').upper()}\n\n"
+                
+                details = htf_check.get('details', '')
+                if details:
+                    detail_lines = details.split('\n')
+                    for line in detail_lines[:3]:
+                        if line.strip():
+                            msg += f"  {line}\n"
+            else:
+                msg += f"✅ No HTF resistance\n"
+                if 'momentum' in htf_check:
+                    msg += f"Momentum: {htf_check['momentum'].upper()}\n"
+            
+            msg += "\n"
+        
+        # ===== SEZIONE 6: PATTERN INDIVIDUALI (DEBUG) =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>🧪 PATTERN TESTS (Individual)</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        
+        for pattern_name, test_result in individual_tests.items():
+            found = test_result.get('found', False)
+            
+            if 'error' in test_result:
                 emoji = "⚠️"
-                status = "NOT IMPLEMENTED"
-            elif result:
+                status = f"Error: {test_result['error']}"
+            elif found:
                 emoji = "✅"
-                status = "FOUND"
-                if data:
-                    # Mostra info chiave
-                    if 'volume_ratio' in data:
-                        status += f" (vol: {data['volume_ratio']:.1f}x)"
-                    elif 'breakout_vol_ratio' in data:
-                        status += f" (vol: {data['breakout_vol_ratio']:.1f}x)"
+                
+                # Check tier se disponibile
+                tier = test_result.get('tier', '')
+                if tier:
+                    status = f"FOUND ({tier})"
+                else:
+                    status = "FOUND"
+                
+                # Aggiungi volume ratio se disponibile
+                data = test_result.get('data')
+                if data and isinstance(data, dict):
+                    vol_r = data.get('volume_ratio', 0)
+                    if vol_r > 0:
+                        status += f" - Vol: {vol_r:.1f}x"
             else:
                 emoji = "❌"
                 status = "Not found"
@@ -9441,58 +9623,101 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         msg += "\n"
         
-        # Test pattern (bool)
-        msg += "🧪 <b>Test Pattern (Altri):</b>\n"
-        for pattern_name, result in tests_bool.items():
-            emoji = "✅" if result else "❌"
-            msg += f"{emoji} {pattern_name}\n"
-        
-        # Verifica Triple Touch specificamente
-        msg += "\n"
-        msg += "━━━━━━━━━━━━━━━━━━━\n"
-        msg += "<b>🎯 Triple Touch Verification:</b>\n"
-        
-        if '🎯3️⃣ Triple Touch Breakout' in tests_with_data:
-            result, data = tests_with_data['🎯3️⃣ Triple Touch Breakout']
+        # ===== SEZIONE 7: TRADING SETUP =====
+        if found_main and sl_price and tp_price and qty > 0:
+            msg += "━━━━━━━━━━━━━━━━━━━\n"
+            msg += "<b>💼 TRADING SETUP SUGGERITO</b>\n"
+            msg += "━━━━━━━━━━━━━━━━━━━\n"
             
-            if result == '❌ NOT IMPLEMENTED':
-                msg += "⚠️ <b>Funzione NOT FOUND!</b>\n"
-                msg += "La funzione is_triple_touch_breakout() non è definita.\n"
-                msg += "Verifica che sia stata aggiunta al codice."
-            elif result:
-                msg += "✅ <b>Pattern TROVATO!</b>\n"
-                if data:
-                    msg += f"Resistance: ${data.get('resistance', 0):.{price_decimals}f}\n"
-                    msg += f"Touches: {data.get('touch_count', 0)}\n"
-                    msg += f"Rejection 1: {data.get('touch_1_rejection_pct', 0):.1f}%\n"
-                    msg += f"Rejection 2: {data.get('touch_2_rejection_pct', 0):.1f}%\n"
-                    msg += f"Consolidation: {data.get('consolidation_duration', 0)} candele\n"
-                    msg += f"Volume: {data.get('volume_ratio', 0):.1f}x\n"
-                    msg += f"Quality: {data.get('quality', 'N/A')}\n"
-            else:
-                msg += "❌ Pattern non trovato\n"
-                msg += "Verifica:\n"
-                msg += "• Resistance toccata 3 volte?\n"
-                msg += "• Prime 2 con rejection?\n"
-                msg += "• Consolidamento 3-10 candele?\n"
-                msg += "• Prezzo sempre sopra EMA 60?\n"
-                msg += "• Breakout terzo tocco?\n"
+            risk = abs(entry_price - sl_price)
+            reward = abs(tp_price - entry_price)
+            rr_ratio = reward / risk if risk > 0 else 0
+            
+            msg += f"Entry: ${entry_price:.{price_decimals}f}\n"
+            msg += f"SL: ${sl_price:.{price_decimals}f}\n"
+            msg += f"TP: ${tp_price:.{price_decimals}f}\n"
+            msg += f"Qty: {qty:.4f}\n"
+            msg += f"Risk: ${risk * qty:.2f}\n"
+            msg += f"R:R: {rr_ratio:.2f}:1\n\n"
+            
+            # Multi-TP info
+            if config.MULTI_TP_ENABLED:
+                msg += "<b>🎯 Multi-TP Levels:</b>\n"
+                for i, level in enumerate(config.MULTI_TP_CONFIG['levels'], 1):
+                    tp_level_price = entry_price + (risk * level['rr_ratio'])
+                    msg += f"{level['emoji']} TP{i}: ${tp_level_price:.{price_decimals}f} "
+                    msg += f"({level['close_pct']*100:.0f}% @ {level['rr_ratio']}R)\n"
+                msg += "\n"
+            
+            # Trailing info
+            if config.TRAILING_STOP_ENABLED:
+                msg += "<b>🔄 Trailing SL:</b>\n"
+                msg += f"Mode: {config.TRAILING_CONFIG_ADVANCED['levels'][0]['label']}\n"
+                msg += f"Activation: {config.TRAILING_CONFIG_ADVANCED['levels'][0]['profit_pct']}% profit\n"
+                msg += f"Buffer: {config.TRAILING_CONFIG_ADVANCED['levels'][0]['ema_buffer']*100:.2f}% below EMA\n\n"
+            
+            # Profit Lock info
+            if config.PROFIT_LOCK_ENABLED:
+                profit_lock_trigger = risk * qty * config.PROFIT_LOCK_CONFIG['multiplier']
+                msg += f"<b>🔒 Profit Lock:</b>\n"
+                msg += f"Trigger: ${profit_lock_trigger:.2f} ({config.PROFIT_LOCK_CONFIG['multiplier']}x risk)\n"
+                msg += f"Retention: {config.PROFIT_LOCK_CONFIG['retention']*100:.0f}%\n\n"
+        
+        # ===== SEZIONE 8: SUMMARY =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>📋 SUMMARY</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        
+        blocking_filters = []
+        
+        if config.MARKET_TIME_FILTER_ENABLED and not time_ok:
+            if not config.MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY:
+                blocking_filters.append(f"Market Time ({time_reason})")
+        
+        if config.VOLUME_FILTER_ENABLED and not vol_ok:
+            blocking_filters.append(f"Volume ({vol_ratio:.1f}x)")
+        
+        if config.TREND_FILTER_ENABLED and not trend_ok:
+            blocking_filters.append(f"Trend ({trend_reason[:30]})")
+        
+        if config.EMA_FILTER_ENABLED and ema_analysis and not ema_analysis['passed']:
+            blocking_filters.append(f"EMA (score {ema_analysis['score']}/100)")
+        
+        if htf_check and htf_check.get('blocked'):
+            blocking_filters.append(f"HTF Resistance ({htf_check.get('htf', 'N/A')})")
+        
+        if blocking_filters:
+            msg += "❌ <b>FILTERS BLOCKING:</b>\n"
+            for f in blocking_filters:
+                msg += f"  • {f}\n"
         else:
-            msg += "⚠️ Triple Touch non testato\n"
+            msg += "✅ <b>All filters OK</b>\n"
+        
+        if not found_main and not blocking_filters:
+            msg += "\n💡 Filters OK but no pattern.\n"
+            msg += "Issue is in pattern detection logic.\n"
         
         # Limita lunghezza messaggio
         if len(msg) > 4000:
-            msg = msg[:3900] + "\n\n... (troncato per lunghezza)"
+            # Split in 2 messaggi
+            msg1 = msg[:3900]
+            msg2 = msg[3900:]
+            
+            await update.message.reply_text(msg1, parse_mode='HTML')
+            await update.message.reply_text(msg2, parse_mode='HTML')
+        else:
+            await update.message.reply_text(msg, parse_mode='HTML')
         
-        await update.message.reply_text(msg, parse_mode='HTML')
-        
-        # ===== STEP 8: INVIA GRAFICO =====
+        # ===== STEP 11: INVIA GRAFICO =====
         try:
             chart_buffer = generate_chart(df, symbol, timeframe)
             
             caption = f"{symbol} {timeframe}"
             if found_main:
                 caption += f"\n✅ {pattern_main}"
+                if pattern_data_main:
+                    tier = pattern_data_main.get('tier', 'N/A')
+                    caption += f" (Tier {tier})"
             
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
