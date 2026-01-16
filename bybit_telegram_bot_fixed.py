@@ -914,32 +914,62 @@ def validate_position_info(symbol: str, pos_info: dict) -> tuple[bool, str]:
     """
     Valida che pos_info contenga tutti i campi necessari
     
+    PERMISSIVE MODE:
+    - SL/TP possono essere 0 (non configurati)
+    - Entry price e qty devono essere > 0
+    
     Returns:
         (is_valid, error_message)
     """
-    required_fields = {
-        'side': str,
-        'qty': (int, float),
-        'entry_price': (int, float),
-        'sl': (int, float),
-        'tp': (int, float),
-    }
+    # Campi obbligatori (devono esistere)
+    required_fields = ['side', 'qty', 'entry_price', 'sl', 'tp']
     
-    for field, expected_type in required_fields.items():
-        value = pos_info.get(field)
-        
-        # Check esistenza
-        if value is None:
+    for field in required_fields:
+        if field not in pos_info:
             return (False, f"Missing field: {field}")
-        
-        # Check tipo
-        if not isinstance(value, expected_type):
-            return (False, f"Invalid type for {field}: {type(value)}")
-        
-        # Check valori numerici > 0
-        if field in ['qty', 'entry_price', 'sl', 'tp']:
-            if value <= 0:
-                return (False, f"Invalid value for {field}: {value} (must be > 0)")
+    
+    # Valida side
+    if pos_info['side'] not in ['Buy', 'Sell']:
+        return (False, f"Invalid side: {pos_info['side']} (must be 'Buy' or 'Sell')")
+    
+    # Valida qty > 0
+    try:
+        qty = float(pos_info['qty'])
+        if qty <= 0:
+            return (False, f"Invalid qty: {qty} (must be > 0)")
+    except (ValueError, TypeError):
+        return (False, f"Invalid qty type: {type(pos_info['qty'])}")
+    
+    # Valida entry_price > 0
+    try:
+        entry = float(pos_info['entry_price'])
+        if entry <= 0:
+            return (False, f"Invalid entry_price: {entry} (must be > 0)")
+    except (ValueError, TypeError):
+        return (False, f"Invalid entry_price type: {type(pos_info['entry_price'])}")
+    
+    # Valida SL >= 0 (può essere 0 = non configurato)
+    try:
+        sl = float(pos_info['sl'])
+        if sl < 0:
+            return (False, f"Invalid sl: {sl} (must be >= 0)")
+    except (ValueError, TypeError):
+        return (False, f"Invalid sl type: {type(pos_info['sl'])}")
+    
+    # Valida TP >= 0 (può essere 0 = non configurato)
+    try:
+        tp = float(pos_info['tp'])
+        if tp < 0:
+            return (False, f"Invalid tp: {tp} (must be >= 0)")
+    except (ValueError, TypeError):
+        return (False, f"Invalid tp type: {type(pos_info['tp'])}")
+    
+    # ✅ OPZIONALE: Warning se SL/TP sono 0
+    if sl == 0 or tp == 0:
+        logging.warning(
+            f"{symbol}: Position has SL={sl}, TP={tp} "
+            f"(0 = not configured, risk management disabled)"
+        )
     
     return (True, "Valid")
 
