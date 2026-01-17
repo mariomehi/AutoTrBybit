@@ -5744,7 +5744,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
     2. Ferma analisi per symbols non più in top
     3. Avvia nuove analisi per symbols in top
     
-    Eseguito ogni 4 ore
+    Eseguito ogni X ore (configurabile)
     """
     if not config.AUTO_DISCOVERY_CONFIG['enabled']:
         return
@@ -5752,7 +5752,10 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data
     chat_id = job_data['chat_id']
     
-    logging.info('🔄 Auto-Discovery: Aggiornamento top symbols...')
+    # ✅ NUOVO: Usa timeframe dal job data se disponibile
+    timeframe = job_data.get('timeframe', config.AUTO_DISCOVERY_CONFIG['timeframe'])
+    
+    logging.info(f'🔄 Auto-Discovery: Aggiornamento top symbols (TF: {timeframe})...')
     
     try:
         # Ottieni top symbols
@@ -5766,7 +5769,6 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        timeframe = config.AUTO_DISCOVERY_CONFIG['timeframe']
         autotrade = config.AUTO_DISCOVERY_CONFIG['autotrade']
         
         # Converti in set per comparazione
@@ -5829,7 +5831,7 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
                 'symbol': symbol,
                 'timeframe': timeframe,
                 'autotrade': autotrade,
-                'auto_discovered': True  # Flag per identificare auto-discovered
+                'auto_discovered': True
             }
             
             job = context.job_queue.run_repeating(
@@ -5868,14 +5870,16 @@ async def auto_discover_and_analyze(context: ContextTypes.DEFAULT_TYPE):
             if removed_count > 0:
                 msg += f"❌ Rimossi: {removed_count}\n"
             
-            msg += f"\n⏱️ Timeframe: {timeframe}\n"
+            msg += f"\n⏱️ Timeframe: <b>{timeframe}</b>\n"
             msg += f"🤖 Autotrade: {'ON' if autotrade else 'OFF'}\n"
-            msg += f"🔄 Prossimo update tra 2 ore"
+            msg += f"🔄 Prossimo update tra {config.AUTO_DISCOVERY_CONFIG['update_interval']//3600} ore"
         else:
             msg += "✅ Nessun cambiamento\n\n"
             msg += f"Top {len(top_symbols)} symbols confermati:\n"
             for i, sym in enumerate(top_symbols, 1):
                 msg += f"{i}. {sym}\n"
+            
+            msg += f"\n⏱️ Timeframe: <b>{timeframe}</b>"
         
         await context.bot.send_message(
             chat_id=chat_id,
@@ -8120,14 +8124,78 @@ async def cmd_ema_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Comando /autodiscover [on|off|now|status]
-    Gestisce il sistema di auto-discovery
+    Comando /autodiscover [TIMEFRAME] [ACTION]
+    
+    Usage:
+    - /autodiscover - Mostra status
+    - /autodiscover 30m on - Attiva con timeframe 30m
+    - /autodiscover 15m off - Disattiva
+    - /autodiscover 5m now - Aggiorna ora con timeframe 5m
+    - /autodiscover 1h status - Status con timeframe 1h
+    
+    Gestisce il sistema di auto-discovery con timeframe custom
     """
     chat_id = update.effective_chat.id
     args = context.args
     
-    if not args:
-        # Mostra status
+    # ===== PARSE ARGUMENTS =====
+    timeframe = None
+    action = 'status'  # Default action
+    
+    if len(args) == 0:
+        # Nessun argomento: mostra status con TF dal config
+        timeframe = config.AUTO_DISCOVERY_CONFIG['timeframe']
+        action = 'status'
+    elif len(args) == 1:
+        # Un argomento: può essere TF o ACTION
+        arg = args[0].lower()
+        
+        if arg in config.ENABLED_TFS:
+            # È un timeframe: mostra status per quel TF
+            timeframe = arg
+            action = 'status'
+        elif arg in ['on', 'off', 'now', 'status']:
+            # È un'azione: usa TF dal config
+            timeframe = config.AUTO_DISCOVERY_CONFIG['timeframe']
+            action = arg
+        else:
+            await update.message.reply_text(
+                '❌ Argomento non valido.\n\n'
+                '<b>Uso:</b>\n'
+                '<code>/autodiscover [TIMEFRAME] [ACTION]</code>\n\n'
+                '<b>Esempi:</b>\n'
+                '<code>/autodiscover 30m on</code> - Attiva con 30m\n'
+                '<code>/autodiscover 15m</code> - Status 15m\n'
+                '<code>/autodiscover on</code> - Attiva con TF default\n\n'
+                f'<b>Timeframes disponibili:</b>\n{", ".join(config.ENABLED_TFS)}\n\n'
+                f'<b>Actions:</b> on, off, now, status',
+                parse_mode='HTML'
+            )
+            return
+    elif len(args) >= 2:
+        # Due argomenti: TF + ACTION
+        timeframe = args[0].lower()
+        action = args[1].lower()
+        
+        # Valida timeframe
+        if timeframe not in config.ENABLED_TFS:
+            await update.message.reply_text(
+                f'❌ Timeframe non valido: {timeframe}\n\n'
+                f'Timeframes disponibili:\n{", ".join(config.ENABLED_TFS)}',
+                parse_mode='HTML'
+            )
+            return
+        
+        # Valida action
+        if action not in ['on', 'off', 'now', 'status']:
+            await update.message.reply_text(
+                f'❌ Action non valida: {action}\n\n'
+                f'Actions disponibili: on, off, now, status'
+            )
+            return
+    
+    # ===== ACTION: STATUS =====
+    if action == 'status':
         status_emoji = "✅" if config.AUTO_DISCOVERY_CONFIG['enabled'] else "❌"
         
         msg = f"🔍 <b>Auto-Discovery System</b>\n\n"
@@ -8136,7 +8204,7 @@ async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if config.AUTO_DISCOVERY_CONFIG['enabled']:
             msg += f"<b>Configurazione:</b>\n"
             msg += f"• Top: {config.AUTO_DISCOVERY_CONFIG['top_count']} symbols\n"
-            msg += f"• Timeframe: {config.AUTO_DISCOVERY_CONFIG['timeframe']}\n"
+            msg += f"• Timeframe: <b>{timeframe}</b>\n"
             msg += f"• Autotrade: {'ON' if config.AUTO_DISCOVERY_CONFIG['autotrade'] else 'OFF'}\n"
             msg += f"• Update ogni: {config.AUTO_DISCOVERY_CONFIG['update_interval']//3600}h\n"
             msg += f"• Min volume: ${config.AUTO_DISCOVERY_CONFIG['min_volume_usdt']/1_000_000:.0f}M\n"
@@ -8152,45 +8220,49 @@ async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     msg += f"• {sym}\n"
             else:
                 msg += "Nessun symbol ancora analizzato"
+        else:
+            msg += "Auto-Discovery disattivato.\n"
         
         msg += "\n\n<b>Comandi:</b>\n"
-        msg += "/autodiscover on - Attiva\n"
-        msg += "/autodiscover off - Disattiva\n"
-        msg += "/autodiscover now - Aggiorna ora\n"
-        msg += "/autodiscover status - Mostra status"
+        msg += "<code>/autodiscover 30m on</code> - Attiva con 30m\n"
+        msg += "<code>/autodiscover 15m off</code> - Disattiva\n"
+        msg += "<code>/autodiscover 5m now</code> - Aggiorna ora con 5m\n"
+        msg += "<code>/autodiscover 1h status</code> - Status 1h"
         
         await update.message.reply_text(msg, parse_mode='HTML')
         return
     
-    action = args[0].lower()
-    
+    # ===== ACTION: ON =====
     if action == 'on':
+        # Aggiorna config con nuovo timeframe
+        config.AUTO_DISCOVERY_CONFIG['timeframe'] = timeframe
         config.AUTO_DISCOVERY_CONFIG['enabled'] = True
         
-        # Schedula il job se non esiste
+        # Rimuovi job esistenti
         current_jobs = context.job_queue.get_jobs_by_name('auto_discovery')
+        for job in current_jobs:
+            job.schedule_removal()
         
-        if not current_jobs:
-            context.job_queue.run_repeating(
-                auto_discover_and_analyze,
-                interval=config.AUTO_DISCOVERY_CONFIG['update_interval'],
-                first=60,  # Primo run dopo 1 minuto
-                data={'chat_id': chat_id},
-                name='auto_discovery'
-            )
-            
-            await update.message.reply_text(
-                '✅ <b>Auto-Discovery ATTIVATO</b>\n\n'
-                'Primo update tra 1 minuto...\n'
-                f"Poi ogni {config.AUTO_DISCOVERY_CONFIG['update_interval']//3600} ore",
-                parse_mode='HTML'
-            )
-        else:
-            await update.message.reply_text(
-                '✅ <b>Auto-Discovery già attivo</b>',
-                parse_mode='HTML'
-            )
+        # Crea nuovo job con timeframe aggiornato
+        context.job_queue.run_repeating(
+            auto_discover_and_analyze,
+            interval=config.AUTO_DISCOVERY_CONFIG['update_interval'],
+            first=60,  # Primo run dopo 1 minuto
+            data={'chat_id': chat_id, 'timeframe': timeframe},
+            name='auto_discovery'
+        )
+        
+        await update.message.reply_text(
+            f'✅ <b>Auto-Discovery ATTIVATO</b>\n\n'
+            f'⏱️ Timeframe: <b>{timeframe}</b>\n'
+            f'📊 Top {config.AUTO_DISCOVERY_CONFIG["top_count"]} symbols\n'
+            f'🤖 Autotrade: {"ON" if config.AUTO_DISCOVERY_CONFIG["autotrade"] else "OFF"}\n\n'
+            f'Primo update tra 1 minuto...\n'
+            f'Poi ogni {config.AUTO_DISCOVERY_CONFIG["update_interval"]//3600} ore',
+            parse_mode='HTML'
+        )
     
+    # ===== ACTION: OFF =====
     elif action == 'off':
         config.AUTO_DISCOVERY_CONFIG['enabled'] = False
         
@@ -8206,33 +8278,31 @@ async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
     
+    # ===== ACTION: NOW =====
     elif action == 'now':
         if not config.AUTO_DISCOVERY_CONFIG['enabled']:
             await update.message.reply_text(
                 '⚠️ Auto-Discovery è disattivato.\n'
-                'Usa /autodiscover on per attivarlo.'
+                f'Usa <code>/autodiscover {timeframe} on</code> per attivarlo.',
+                parse_mode='HTML'
             )
             return
         
-        await update.message.reply_text('🔄 Aggiornamento in corso...')
+        # Aggiorna timeframe nel config
+        config.AUTO_DISCOVERY_CONFIG['timeframe'] = timeframe
+        
+        await update.message.reply_text(
+            f'🔄 Aggiornamento in corso con timeframe <b>{timeframe}</b>...',
+            parse_mode='HTML'
+        )
         
         # Esegui manualmente
         await auto_discover_and_analyze(
             type('Context', (), {
-                'job': type('Job', (), {'data': {'chat_id': chat_id}})(),
+                'job': type('Job', (), {'data': {'chat_id': chat_id, 'timeframe': timeframe}})(),
                 'bot': context.bot,
                 'job_queue': context.job_queue
             })()
-        )
-    
-    elif action == 'status':
-        # Mostra status dettagliato
-        await cmd_autodiscover(update, context)
-    
-    else:
-        await update.message.reply_text(
-            '❌ Comando non valido.\n\n'
-            'Usa: /autodiscover [on|off|now|status]'
         )
         
 
@@ -10889,15 +10959,6 @@ def main():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         force=True  # ← AGGIUNGI force=True per override
     )
-
-    # ✅ AGGIUNGI anche handler per stdout (Railway)
-    import sys
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(
-        logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    )
-    logging.getLogger().addHandler(console_handler)
 
         # Avvia Auto-Discovery se abilitato
     if config.AUTO_DISCOVERY_ENABLED and config.AUTO_DISCOVERY_CONFIG['enabled']:
