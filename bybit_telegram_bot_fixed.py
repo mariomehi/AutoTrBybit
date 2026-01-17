@@ -2403,6 +2403,7 @@ def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
     pattern_type = "MAXI BUD" if rest_count >= 3 else "BUD"
     
     # Calcola setup trading
+    entry_price = df['close'].iloc[-1]  # ← AGGIUNGI QUESTA RIGA
     #entry_price = curr['close']
     #sl_price = breakout_low * 0.998  # Sotto low breakout
     rest_low = rest_candles['low'].min()
