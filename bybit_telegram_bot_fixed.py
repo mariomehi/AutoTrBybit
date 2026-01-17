@@ -10886,7 +10886,7 @@ def main():
     # Setup logging
     logging.basicConfig(
         level=logging.INFO,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         force=True  # ← AGGIUNGI force=True per override
     )
 
