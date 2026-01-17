@@ -2416,7 +2416,6 @@ def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
     # Oppure: Usa range breakout
     # tp_price = breakout_high + (breakout_range * 2)
     # Definisci entry_price prima di creare la caption o il dizionario data
-    entry_price = last_close # o il valore del breakout
     
     pattern_data = {
         'pattern_type': pattern_type,
@@ -2921,8 +2920,8 @@ def is_morning_star_ema_breakout(df: pd.DataFrame):
     c = df.iloc[-1]  # Terza: rialzista (breakout)
     
     # === STEP 1: Verifica Morning Star classico ===
-    if not is_morning_star_enhanced(a, b, c):
-        return False
+    #if not is_morning_star_enhanced(a, b, c):
+    #    return False
     
     # === STEP 2: Calcola EMA 5 e 10 ===
     ema_5 = df['close'].ewm(span=5, adjust=False).mean()
