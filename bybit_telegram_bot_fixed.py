@@ -10887,7 +10887,17 @@ def main():
     logging.basicConfig(
         level=logging.INFO,  # 👈 Cambia da INFO a DEBUG per vedere i filtri
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        force=True  # ← AGGIUNGI force=True per override
     )
+
+    # ✅ AGGIUNGI anche handler per stdout (Railway)
+    import sys
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    )
+    logging.getLogger().addHandler(console_handler)
 
         # Avvia Auto-Discovery se abilitato
     if config.AUTO_DISCOVERY_ENABLED and config.AUTO_DISCOVERY_CONFIG['enabled']:
