@@ -7518,6 +7518,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/pattern_on NOME - Abilita pattern\n"
         "/pattern_off NOME - Disabilita pattern\n"
         "/pattern_info NOME - Info dettagliate\n"
+        "/registry_stats - 📊 Statistiche Registry ⭐\n"  # ← NUOVO
         "/pattern_stats - Statistiche pattern\n"
         "/reset_pattern_stats - Reset statistiche\n"
         "/export_pattern_stats - Esporta CSV\n\n"
@@ -7545,7 +7546,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/test_flag SYMBOL TF - Test Bullish Flag\n"
         "/debug_volume SYMBOL TF - Debug volume\n"
         "/debug_filters SYMBOL TF - Debug filtri\n"
-        "/force_test SYMBOL TF - Test NO filtri\n\n"
+        "/force_test SYMBOL TF - 🚀 Test NO filtri ⭐\n"  # ← NUOVO
         
         "━━━━━━━━━━━━━━━━━━━\n"
         "💡 <b>ESEMPI RAPIDI</b>\n"
@@ -10118,121 +10119,309 @@ async def cmd_force_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Comando /force_test SYMBOL TIMEFRAME
     Forza il test dei pattern SENZA FILTRI GLOBALI
     Per vedere se il problema è nei filtri o nei pattern stessi
+    
+    VERSION: 2.0 - Aggiornato con Pattern Registry
     """
     args = context.args
     
     if len(args) < 2:
         await update.message.reply_text(
             '❌ Uso: /force_test SYMBOL TIMEFRAME\n'
-            'Esempio: /force_test BTCUSDT 5m'
+            'Esempio: /force_test BTCUSDT 5m\n\n'
+            '<b>Questo comando:</b>\n'
+            '• Bypassa TUTTI i filtri globali\n'
+            '• Testa pattern con threshold rilassati\n'
+            '• Mostra quali pattern passerebbero senza filtri\n\n'
+            '<b>Utile per:</b>\n'
+            '• Debug quando non trovi pattern\n'
+            '• Capire se il problema è nei filtri\n'
+            '• Vedere pattern potenziali (anche se bloccati)',
+            parse_mode='HTML'
         )
         return
     
     symbol = args[0].upper()
     timeframe = args[1].lower()
     
+    if timeframe not in config.ENABLED_TFS:
+        await update.message.reply_text(
+            f'❌ Timeframe non supportato.\n'
+            f'Disponibili: {", ".join(config.ENABLED_TFS)}'
+        )
+        return
+    
     await update.message.reply_text(f'🔍 Force testing NO FILTERS {symbol} {timeframe}...')
     
     try:
+        # ===== STEP 1: OTTIENI DATI =====
         df = bybit_get_klines_cached(symbol, timeframe, limit=200)
         if df.empty:
-            await update.message.reply_text(f'❌ Nessun dato')
+            await update.message.reply_text(f'❌ Nessun dato per {symbol}')
             return
         
-        msg = f"🔍 <b>FORCE TEST NO FILTERS: {symbol} {timeframe}</b>\n\n"
+        # ===== STEP 2: INFO CANDELA CORRENTE =====
+        last = df.iloc[-1]
+        price_decimals = get_price_decimals(last['close'])
         
-        # Test DIRETTO dei pattern (bypass filtri)
-        tests = {}
+        msg = f"🔍 <b>FORCE TEST (NO FILTERS): {symbol} {timeframe}</b>\n\n"
         
-        # Volume Spike (con threshold custom basso)
+        # Info candela
+        is_green = last['close'] > last['open']
+        emoji = "🟢" if is_green else "🔴"
+        
+        msg += f"{emoji} <b>Candela Corrente:</b>\n"
+        msg += f"Open: ${last['open']:.{price_decimals}f}\n"
+        msg += f"Close: ${last['close']:.{price_decimals}f}\n"
+        msg += f"High: ${last['high']:.{price_decimals}f}\n"
+        msg += f"Low: ${last['low']:.{price_decimals}f}\n\n"
+        
+        # ===== STEP 3: VOLUME INFO (NO FILTER) =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>📊 VOLUME INFO (NO FILTER)</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        
+        vol_ratio = 0.0
         try:
-            vol = df['volume']
-            avg_vol = vol.iloc[-20:-1].mean()
-            curr_vol = vol.iloc[-1]
-            vol_ratio = curr_vol / avg_vol if avg_vol > 0 else 0
+            if 'volume' in df.columns and len(df['volume']) >= 20:
+                vol = df['volume']
+                avg_vol = vol.iloc[-20:-1].mean()
+                curr_vol = vol.iloc[-1]
+                
+                if avg_vol > 0:
+                    vol_ratio = curr_vol / avg_vol
+                    
+                    msg += f"Current: {curr_vol:.2f}\n"
+                    msg += f"Avg (20): {avg_vol:.2f}\n"
+                    msg += f"<b>Ratio: {vol_ratio:.2f}x</b>\n\n"
+                    
+                    # Threshold info (senza bloccare)
+                    msg += "Thresholds (INFO ONLY):\n"
+                    msg += f"  1.3x: {'✅' if vol_ratio >= 1.3 else '❌'}\n"
+                    msg += f"  1.5x: {'✅' if vol_ratio >= 1.5 else '❌'}\n"
+                    msg += f"  1.8x: {'✅' if vol_ratio >= 1.8 else '❌'}\n"
+                    msg += f"  2.0x: {'✅' if vol_ratio >= 2.0 else '❌'}\n"
+                    msg += f"  2.5x: {'✅' if vol_ratio >= 2.5 else '❌'}\n"
+                    msg += f"  3.0x: {'✅' if vol_ratio >= 3.0 else '❌'}\n"
+        except Exception as e:
+            msg += f"Error: {str(e)[:50]}\n"
+        
+        msg += "\n"
+        
+        # ===== STEP 4: PATTERN REGISTRY TEST =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>🎯 PATTERN REGISTRY TEST</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        
+        from patterns import PATTERN_REGISTRY
+        
+        # Test via registry (con filtri DISABILITATI temporaneamente)
+        found_via_registry, side, pattern_name, pattern_data = PATTERN_REGISTRY.detect_all(df, symbol)
+        
+        if found_via_registry:
+            msg += f"✅ <b>FOUND via Registry: {pattern_name}</b>\n"
+            msg += f"Side: {side}\n"
             
-            # Test con threshold rilassato (1.5x invece di 3x)
-            if vol_ratio >= 1.5:
-                found, data = is_volume_spike_breakout(df)
-                tests['Volume Spike 3x'] = found
-            else:
-                tests['Volume Spike 3x'] = f"Volume too low ({vol_ratio:.1f}x minore 3x)"
-        except Exception as e:
-            tests['Volume Spike'] = f"Error: {str(e)[:30]}"
+            if pattern_data:
+                config_info = pattern_data.get('pattern_config', {})
+                tier = config_info.get('tier', 'N/A')
+                vol_req = config_info.get('min_volume_ratio', 'N/A')
+                
+                msg += f"Tier: {tier}\n"
+                msg += f"Min Volume: {vol_req}x\n"
+                
+                # Volume check (info only)
+                if vol_ratio > 0 and vol_req != 'N/A':
+                    if vol_ratio >= vol_req:
+                        msg += f"Volume: ✅ {vol_ratio:.1f}x >= {vol_req}x\n"
+                    else:
+                        msg += f"Volume: ⚠️ {vol_ratio:.1f}x < {vol_req}x\n"
+        else:
+            msg += "❌ NO pattern found via Registry\n"
         
-        # S/R Bounce
-        try:
-            found, data = is_support_resistance_bounce(df)
-            tests['S/R Bounce'] = found
-        except Exception as e:
-            tests['S/R Bounce'] = f"Error: {str(e)[:30]}"
+        msg += "\n"
         
-        # Bullish Flag
-        try:
-            found, data = is_bullish_flag_breakout(df)
-            tests['Bullish Flag'] = found
-        except Exception as e:
-            tests['Bullish Flag'] = f"Error: {str(e)[:30]}"
+        # ===== STEP 5: INDIVIDUAL PATTERN TESTS =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>🧪 INDIVIDUAL PATTERN TESTS</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
         
-        # Triple Touch
-        try:
-            found, data = is_triple_touch_breakout(df)
-            tests['Triple Touch'] = found
-        except Exception as e:
-            tests['Triple Touch'] = f"Error: {str(e)[:30]}"
+        individual_tests = {}
         
-        # Engulfing Enhanced
-        try:
+        # Test TUTTI i pattern direttamente (NO FILTERS)
+        test_functions = [
+            ('📊💥 Volume Spike', is_volume_spike_breakout, df),
+            ('🔄📈 Breakout Retest', is_breakout_retest, df),
+            ('🎯3️⃣ Triple Touch', is_triple_touch_breakout, df),
+            ('💎 Liquidity Sweep', is_liquidity_sweep_reversal, df),
+            ('🎯 S/R Bounce', is_support_resistance_bounce, df),
+            ('🚩 Bullish Flag', is_bullish_flag_breakout, df),
+            ('🌱 BUD Pattern', is_bud_pattern, df, False),
+            ('🌟🌱 MAXI BUD', is_bud_pattern, df, True),
+            ('🔄 Bullish Comeback', is_bullish_comeback, df),
+            ('💥 Compression', is_compression_breakout, df),
+            ('⭐💥 Morning Star EMA', is_morning_star_ema_breakout, df),
+            ('📈🔺 Higher Low', is_higher_low_consolidation_breakout, df),
+        ]
+        
+        # Test Enhanced patterns (servono prev/curr)
+        enhanced_tests = []
+        if len(df) >= 2:
             prev = df.iloc[-2]
             curr = df.iloc[-1]
-            found, tier, data = is_bullish_engulfing_enhanced(prev, curr, df)
-            tests[f'Engulfing Enhanced'] = f"{tier} tier" if found else False
-        except Exception as e:
-            tests['Engulfing Enhanced'] = f"Error: {str(e)[:30]}"
+            enhanced_tests = [
+                ('🟢 Engulfing Enhanced', is_bullish_engulfing_enhanced, prev, curr, df),
+                ('📍 Pin Bar Enhanced', is_pin_bar_bullish_enhanced, curr, df),
+                ('⭐ Morning Star Enhanced', is_morning_star_enhanced, df),
+            ]
         
-        # Pin Bar Enhanced
-        try:
-            curr = df.iloc[-1]
-            found, tier, data = is_pin_bar_bullish_enhanced(curr, df)
-            tests['Pin Bar Enhanced'] = f"{tier} tier" if found else False
-        except Exception as e:
-            tests['Pin Bar Enhanced'] = f"Error: {str(e)[:30]}"
+        # Esegui test normali
+        for test_info in test_functions:
+            pattern_name = test_info[0]
+            func = test_info[1]
+            args = test_info[2:]
+            
+            try:
+                result = func(*args)
+                
+                # Parse result
+                if isinstance(result, tuple):
+                    if len(result) == 2:
+                        found, data = result
+                        tier = None
+                    elif len(result) == 3:
+                        found, tier, data = result
+                    else:
+                        found = False
+                        data = None
+                        tier = None
+                else:
+                    found = result
+                    data = None
+                    tier = None
+                
+                individual_tests[pattern_name] = {
+                    'found': found,
+                    'tier': tier,
+                    'data': data
+                }
+            except Exception as e:
+                individual_tests[pattern_name] = {
+                    'found': False,
+                    'error': str(e)[:50]
+                }
         
-        # Morning Star Enhanced
-        try:
-            found, tier, data = is_morning_star_enhanced(df)
-            tests['Morning Star Enhanced'] = f"{tier} tier" if found else False
-        except Exception as e:
-            tests['Morning Star Enhanced'] = f"Error: {str(e)[:30]}"
+        # Esegui test enhanced
+        for test_info in enhanced_tests:
+            pattern_name = test_info[0]
+            func = test_info[1]
+            args = test_info[2:]
+            
+            try:
+                result = func(*args)
+                
+                if len(result) == 3:
+                    found, tier, data = result
+                else:
+                    found = False
+                    tier = None
+                    data = None
+                
+                individual_tests[pattern_name] = {
+                    'found': found,
+                    'tier': tier,
+                    'data': data
+                }
+            except Exception as e:
+                individual_tests[pattern_name] = {
+                    'found': False,
+                    'error': str(e)[:50]
+                }
         
-        # Results
-        for pattern, result in tests.items():
-            if result is True:
+        # ===== DISPLAY RESULTS =====
+        found_count = 0
+        
+        for pattern_name, result in individual_tests.items():
+            found = result.get('found', False)
+            
+            if 'error' in result:
+                emoji = "⚠️"
+                status = f"Error: {result['error']}"
+            elif found:
                 emoji = "✅"
-                status = "FOUND"
-            elif result is False:
+                found_count += 1
+                
+                tier = result.get('tier', '')
+                data = result.get('data')
+                
+                if tier:
+                    status = f"FOUND ({tier})"
+                else:
+                    status = "FOUND"
+                
+                # Volume info se disponibile
+                if data and isinstance(data, dict):
+                    vol_r = data.get('volume_ratio', 0)
+                    if vol_r > 0:
+                        status += f" - Vol: {vol_r:.1f}x"
+            else:
                 emoji = "❌"
                 status = "Not found"
-            elif isinstance(result, str) and "tier" in result:
-                emoji = "✅"
-                status = result
-            else:
-                emoji = "⚠️"
-                status = str(result)
             
-            msg += f"{emoji} {pattern}: {status}\n"
+            msg += f"{emoji} {pattern_name}: {status}\n"
         
-        msg += "\n<b>💡 Note:</b>\n"
-        msg += "Questo test bypassa TUTTI i filtri globali.\n"
-        msg += "Se trovi pattern qui ma non nelle analisi normali,\n"
-        msg += "il problema è nei filtri (volume/trend/EMA).\n\n"
-        msg += "Usa /debug_filters per vedere quale filtro blocca."
+        msg += "\n"
         
-        await update.message.reply_text(msg, parse_mode='HTML')
+        # ===== SUMMARY =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>📋 SUMMARY</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
         
+        msg += f"Patterns Found: <b>{found_count}/{len(individual_tests)}</b>\n"
+        msg += f"Volume Ratio: {vol_ratio:.2f}x\n\n"
+        
+        if found_count == 0:
+            msg += "❌ <b>NO PATTERNS FOUND</b>\n"
+            msg += "Il problema è nella logica dei pattern,\n"
+            msg += "non nei filtri globali.\n\n"
+            msg += "<b>Possibili cause:</b>\n"
+            msg += "• Volume troppo basso per tutti i pattern\n"
+            msg += "• Struttura candele non adatta\n"
+            msg += "• Pattern richiedono setup specifici\n"
+        elif found_via_registry:
+            msg += "✅ <b>PATTERN TROVATO VIA REGISTRY</b>\n"
+            msg += f"{pattern_name}\n\n"
+            msg += "Se questo non appare in analisi normale,\n"
+            msg += "il problema è nei FILTRI GLOBALI.\n\n"
+            msg += "Usa /debug_filters per vedere quale filtro blocca."
+        else:
+            msg += f"✅ <b>{found_count} PATTERN(S) TROVATI</b>\n"
+            msg += "Ma Registry non ha rilevato nulla.\n\n"
+            msg += "Questo indica che i pattern trovati\n"
+            msg += "potrebbero non essere nel Registry\n"
+            msg += "o hanno logica differente."
+        
+        msg += "\n"
+        msg += "<b>💡 Next Steps:</b>\n"
+        msg += "• /test - Test completo con filtri\n"
+        msg += "• /debug_filters - Analisi filtri\n"
+        msg += "• /registry_stats - Info registry"
+        
+        # Split se troppo lungo
+        if len(msg) > 4000:
+            msg1 = msg[:3900]
+            msg2 = msg[3900:]
+            
+            await update.message.reply_text(msg1, parse_mode='HTML')
+            await update.message.reply_text(msg2, parse_mode='HTML')
+        else:
+            await update.message.reply_text(msg, parse_mode='HTML')
+    
     except Exception as e:
         logging.exception('Errore in cmd_force_test')
-        await update.message.reply_text(f'❌ Errore: {str(e)}')
+        await update.message.reply_text(
+            f'❌ Errore durante force test:\n{str(e)}\n\n'
+            f'Verifica che {symbol} sia valido.'
+        )
 
 async def monitor_closed_positions(context: ContextTypes.DEFAULT_TYPE):
     """
@@ -10575,6 +10764,119 @@ async def cmd_cache_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(msg, parse_mode='HTML')
 
+async def cmd_registry_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /registry_stats
+    Mostra statistiche complete del Pattern Registry
+    """
+    from patterns import PATTERN_REGISTRY
+    
+    try:
+        # Ottieni statistiche
+        stats = PATTERN_REGISTRY.get_stats()
+        all_patterns = PATTERN_REGISTRY.list_all_patterns()
+        
+        msg = "📊 <b>Pattern Registry Statistics</b>\n\n"
+        
+        # ===== OVERVIEW =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>📈 OVERVIEW</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"Total Patterns: <b>{stats['total']}</b>\n"
+        msg += f"✅ Enabled: <b>{stats['enabled']}</b>\n"
+        msg += f"❌ Disabled: <b>{stats['disabled']}</b>\n\n"
+        
+        # ===== BY TIER =====
+        msg += "<b>🏆 By Tier:</b>\n"
+        tier_labels = {
+            1: "🥇 Tier 1 (High Probability)",
+            2: "🥈 Tier 2 (Good)",
+            3: "🥉 Tier 3 (Enhanced Classic)"
+        }
+        
+        for tier, count in sorted(stats['by_tier'].items()):
+            label = tier_labels.get(tier, f"Tier {tier}")
+            msg += f"  {label}: {count}\n"
+        
+        msg += "\n"
+        
+        # ===== BY SIDE =====
+        msg += "<b>📈 By Direction:</b>\n"
+        for side, count in stats['by_side'].items():
+            emoji = "🟢" if side == "Buy" else "🔴" if side == "Sell" else "⚪"
+            msg += f"  {emoji} {side}: {count}\n"
+        
+        msg += "\n"
+        
+        # ===== TIER 1 PATTERNS =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>🥇 TIER 1 PATTERNS</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        
+        tier1_patterns = {k: v for k, v in all_patterns.items() if v['tier'] == 1}
+        
+        for key, info in sorted(tier1_patterns.items(), key=lambda x: x[1]['name']):
+            status = "✅" if info['enabled'] else "❌"
+            msg += f"{status} {info['emoji']} <b>{info['name']}</b>\n"
+            msg += f"  Key: <code>{key}</code>\n"
+            msg += f"  Vol: {info['min_volume_ratio']}x | {info['order_type'].upper()}\n"
+            msg += f"  {info['description']}\n\n"
+        
+        # ===== TIER 2 PATTERNS =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>🥈 TIER 2 PATTERNS</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        
+        tier2_patterns = {k: v for k, v in all_patterns.items() if v['tier'] == 2}
+        
+        for key, info in sorted(tier2_patterns.items(), key=lambda x: x[1]['name']):
+            status = "✅" if info['enabled'] else "❌"
+            msg += f"{status} {info['emoji']} <b>{info['name']}</b>\n"
+            msg += f"  Key: <code>{key}</code>\n"
+            msg += f"  Vol: {info['min_volume_ratio']}x | {info['order_type'].upper()}\n\n"
+        
+        # ===== TIER 3 PATTERNS =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        msg += "<b>🥉 TIER 3 PATTERNS</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━━\n"
+        
+        tier3_patterns = {k: v for k, v in all_patterns.items() if v['tier'] == 3}
+        
+        for key, info in sorted(tier3_patterns.items(), key=lambda x: x[1]['name']):
+            status = "✅" if info['enabled'] else "❌"
+            msg += f"{status} {info['emoji']} <b>{info['name']}</b>\n"
+            msg += f"  Key: <code>{key}</code>\n"
+            msg += f"  Vol: {info['min_volume_ratio']}x | {info['order_type'].upper()}\n\n"
+        
+        # ===== FOOTER =====
+        msg += "━━━━━━━━━━━━━━━━━━━\n\n"
+        msg += "<b>💡 Commands:</b>\n"
+        msg += "<code>/pattern_on KEY</code> - Abilita pattern\n"
+        msg += "<code>/pattern_off KEY</code> - Disabilita pattern\n"
+        msg += "<code>/pattern_info KEY</code> - Info dettagliate\n\n"
+        msg += "ℹ️ I pattern sono testati in ordine di Tier\n"
+        msg += "(Tier 1 ha priorità massima)"
+        
+        # Split se troppo lungo
+        if len(msg) > 4000:
+            # Parte 1: Overview + Tier 1
+            msg1 = msg[:msg.index("🥈 TIER 2")]
+            
+            # Parte 2: Tier 2 + Tier 3 + Footer
+            msg2 = "<b>📊 Pattern Registry (continua)</b>\n\n"
+            msg2 += msg[msg.index("🥈 TIER 2"):]
+            
+            await update.message.reply_text(msg1, parse_mode='HTML')
+            await update.message.reply_text(msg2, parse_mode='HTML')
+        else:
+            await update.message.reply_text(msg, parse_mode='HTML')
+    
+    except Exception as e:
+        logging.exception('Errore in cmd_registry_stats')
+        await update.message.reply_text(
+            f'❌ Errore nel recuperare statistiche registry:\n{str(e)}'
+        )
+
 # ----------------------------- MAIN -----------------------------
 
 def main():
@@ -10660,6 +10962,7 @@ def main():
     application.add_handler(CommandHandler("timefilter", cmd_time_filter))
     application.add_handler(CommandHandler('debug_filters', cmd_debug_filters))
     application.add_handler(CommandHandler('force_test', cmd_force_test))
+    application.add_handler(CommandHandler('registry_stats', cmd_registry_stats))
     application.add_handler(CommandHandler('pattern_stats', track_patterns.cmd_pattern_stats))
     application.add_handler(CommandHandler('reset_pattern_stats', track_patterns.cmd_reset_pattern_stats))
     application.add_handler(CommandHandler('export_pattern_stats', track_patterns.cmd_export_pattern_stats))
