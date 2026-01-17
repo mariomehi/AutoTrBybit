@@ -1,6 +1,8 @@
 """
 Pattern Registry System - Unified Pattern Detection
 Sostituisce l'approccio if/elif con un sistema basato su registry
+
+VERSION: 2.0 - Aggiornato con tutti i pattern esistenti + Enhanced variants
 """
 
 from dataclasses import dataclass
@@ -43,7 +45,10 @@ class PatternRegistry:
     def _register_all_patterns(self):
         """Registra tutti i pattern disponibili"""
         
+        # ═══════════════════════════════════════════
         # TIER 1 - High Probability (60-72%)
+        # ═══════════════════════════════════════════
+        
         self.register(PatternConfig(
             name="Volume Spike Breakout",
             key="volume_spike_breakout",
@@ -96,7 +101,36 @@ class PatternRegistry:
             order_type='market'
         ))
         
+        self.register(PatternConfig(
+            name="BUD Pattern",
+            key="bud_pattern",
+            detector=lambda df: self._detect_bud(df, require_maxi=False),
+            enabled=True,
+            side="Buy",
+            tier=1,
+            emoji="🌱",
+            description="Breakout + 2 candele riposo nel range",
+            min_volume_ratio=1.5,
+            order_type='market'
+        ))
+        
+        self.register(PatternConfig(
+            name="MAXI BUD Pattern",
+            key="maxi_bud_pattern",
+            detector=lambda df: self._detect_bud(df, require_maxi=True),
+            enabled=True,
+            side="Buy",
+            tier=1,
+            emoji="🌟🌱",
+            description="Breakout + 3+ candele riposo (setup più forte)",
+            min_volume_ratio=1.5,
+            order_type='market'
+        ))
+        
+        # ═══════════════════════════════════════════
         # TIER 2 - Good (52-62%)
+        # ═══════════════════════════════════════════
+        
         self.register(PatternConfig(
             name="Support/Resistance Bounce",
             key="sr_bounce",
@@ -124,32 +158,61 @@ class PatternRegistry:
         ))
         
         self.register(PatternConfig(
-            name="BUD Pattern",
-            key="bud_pattern",
-            detector=lambda df: self._detect_bud(df, require_maxi=False),
+            name="Bullish Comeback",
+            key="bullish_comeback",
+            detector=self._detect_comeback,
             enabled=True,
             side="Buy",
-            tier=1,
-            emoji="🌱",
-            description="Breakout + 2 candele riposo nel range",
+            tier=2,
+            emoji="🔄",
+            description="Inversione dopo tentativo ribassista",
             min_volume_ratio=1.5,
             order_type='market'
         ))
         
         self.register(PatternConfig(
-            name="MAXI BUD Pattern",
-            key="maxi_bud_pattern",
-            detector=lambda df: self._detect_bud(df, require_maxi=True),
+            name="Compression Breakout",
+            key="compression_breakout",
+            detector=self._detect_compression,
             enabled=True,
             side="Buy",
-            tier=1,
-            emoji="🌟🌱",
-            description="Breakout + 3+ candele riposo (setup più forte)",
-            min_volume_ratio=1.5,
+            tier=2,
+            emoji="💥",
+            description="EMA compression + breakout (RSI, vol, HTF)",
+            min_volume_ratio=1.8,
             order_type='market'
         ))
         
-        # TIER 3 - Enhanced Patterns
+        self.register(PatternConfig(
+            name="Morning Star + EMA Breakout",
+            key="morning_star_ema_breakout",
+            detector=self._detect_morning_star_ema,
+            enabled=True,
+            side="Buy",
+            tier=2,
+            emoji="⭐💥",
+            description="Morning Star + rottura EMA",
+            min_volume_ratio=2.0,
+            order_type='market'
+        ))
+        
+        self.register(PatternConfig(
+            name="Higher Low Breakout",
+            key="higher_low_breakout",
+            detector=self._detect_higher_low,
+            enabled=True,
+            side="Buy",
+            tier=2,
+            emoji="📈🔺",
+            description="Impulso + higher lows + breakout",
+            min_volume_ratio=1.5,
+            order_type='limit'
+        ))
+        
+        # ═══════════════════════════════════════════
+        # TIER 3 - Enhanced Patterns (Classic + EMA)
+        # ═══════════════════════════════════════════
+        
         self.register(PatternConfig(
             name="Bullish Engulfing Enhanced",
             key="bullish_engulfing",
@@ -227,6 +290,38 @@ class PatternRegistry:
         """Wrapper per is_bud_pattern"""
         from bybit_telegram_bot_fixed import is_bud_pattern
         return is_bud_pattern(df, require_maxi=require_maxi)
+    
+    def _detect_comeback(self, df: pd.DataFrame) -> Tuple[bool, Optional[Dict]]:
+        """
+        Wrapper per is_bullish_comeback
+        Nota: ritorna solo bool, quindi creiamo dict vuoto
+        """
+        from bybit_telegram_bot_fixed import is_bullish_comeback
+        found = is_bullish_comeback(df)
+        return (found, {} if found else None)
+    
+    def _detect_compression(self, df: pd.DataFrame) -> Tuple[bool, Optional[Dict]]:
+        """
+        Wrapper per is_compression_breakout
+        Nota: ritorna solo bool, quindi creiamo dict vuoto
+        """
+        from bybit_telegram_bot_fixed import is_compression_breakout
+        found = is_compression_breakout(df)
+        return (found, {} if found else None)
+    
+    def _detect_morning_star_ema(self, df: pd.DataFrame) -> Tuple[bool, Optional[Dict]]:
+        """
+        Wrapper per is_morning_star_ema_breakout
+        Nota: ritorna solo bool, quindi creiamo dict vuoto
+        """
+        from bybit_telegram_bot_fixed import is_morning_star_ema_breakout
+        found = is_morning_star_ema_breakout(df)
+        return (found, {} if found else None)
+    
+    def _detect_higher_low(self, df: pd.DataFrame) -> Tuple[bool, Optional[Dict]]:
+        """Wrapper per is_higher_low_consolidation_breakout"""
+        from bybit_telegram_bot_fixed import is_higher_low_consolidation_breakout
+        return is_higher_low_consolidation_breakout(df)
     
     def _detect_engulfing(self, df: pd.DataFrame) -> Tuple[bool, Optional[str], Optional[Dict]]:
         """Wrapper per is_bullish_engulfing_enhanced"""
@@ -337,6 +432,52 @@ class PatternRegistry:
     def get_pattern_info(self, key: str) -> Optional[PatternConfig]:
         """Ottiene info su un pattern"""
         return self.patterns.get(key)
+    
+    def list_all_patterns(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Lista tutti i pattern con info complete
+        Utile per /patterns command
+        """
+        result = {}
+        
+        for key, config in self.patterns.items():
+            result[key] = {
+                'name': config.name,
+                'enabled': config.enabled,
+                'side': config.side,
+                'tier': config.tier,
+                'emoji': config.emoji,
+                'description': config.description,
+                'min_volume_ratio': config.min_volume_ratio,
+                'order_type': config.order_type
+            }
+        
+        return result
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Statistiche registry"""
+        total = len(self.patterns)
+        enabled = len([p for p in self.patterns.values() if p.enabled])
+        
+        by_tier = {
+            1: len([p for p in self.patterns.values() if p.tier == 1]),
+            2: len([p for p in self.patterns.values() if p.tier == 2]),
+            3: len([p for p in self.patterns.values() if p.tier == 3])
+        }
+        
+        by_side = {
+            'Buy': len([p for p in self.patterns.values() if p.side == 'Buy']),
+            'Sell': len([p for p in self.patterns.values() if p.side == 'Sell']),
+            'Both': len([p for p in self.patterns.values() if p.side == 'Both'])
+        }
+        
+        return {
+            'total': total,
+            'enabled': enabled,
+            'disabled': total - enabled,
+            'by_tier': by_tier,
+            'by_side': by_side
+        }
 
 
 # ============================================
@@ -380,10 +521,21 @@ if __name__ == "__main__":
     tier1 = PATTERN_REGISTRY.get_enabled_patterns(tier=1)
     print(f"Tier 1 patterns: {[p.name for p in tier1.values()]}")
     
+    # Statistiche
+    stats = PATTERN_REGISTRY.get_stats()
+    print(f"\nStatistiche:")
+    print(f"  Total: {stats['total']}")
+    print(f"  Enabled: {stats['enabled']}")
+    print(f"  By Tier: {stats['by_tier']}")
+    print(f"  By Side: {stats['by_side']}")
+    
     # Disabilita pattern
-    PATTERN_REGISTRY.disable_pattern('hammer')
+    PATTERN_REGISTRY.disable_pattern('morning_star')
     
     # Ottieni info
     info = PATTERN_REGISTRY.get_pattern_info('volume_spike_breakout')
     if info:
-        print(f"Volume Spike config: emoji={info.emoji}, tier={info.tier}")
+        print(f"\nVolume Spike config:")
+        print(f"  Emoji: {info.emoji}")
+        print(f"  Tier: {info.tier}")
+        print(f"  Min Volume: {info.min_volume_ratio}x")
