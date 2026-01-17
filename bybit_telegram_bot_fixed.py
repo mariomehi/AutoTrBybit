@@ -4547,6 +4547,8 @@ def should_test_pattern(pattern_side: str, allowed_side: str, symbol: str, patte
     
     return True
 
+from patterns import PATTERN_REGISTRY
+
 def check_patterns(df: pd.DataFrame, symbol: str = None):
     """
     Pattern detection con filtri intelligenti
@@ -4555,7 +4557,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     if len(df) < 6:
         return (False, None, None, None)
     
-    logging.debug(f'🔍 {symbol}: Checking patterns (using Registry)')
+    logging.info(f'🔍 {symbol}: Checking patterns (using Registry)')
     logging.debug(f'   Volume mode: {config.VOLUME_FILTER_MODE}')
     logging.debug(f'   Trend mode: {config.TREND_FILTER_MODE}')
     logging.debug(f'   EMA mode: {config.EMA_FILTER_MODE if config.EMA_FILTER_ENABLED else "OFF"}')
@@ -4588,7 +4590,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
         
         return (True, side, pattern_name, pattern_data)
     else:
-        logging.debug(f'❌ {symbol} - NO pattern detected')
+        logging.info(f'❌ {symbol} - NO pattern detected')
         return (False, None, None, None)
 
 
