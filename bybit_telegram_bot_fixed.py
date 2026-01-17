@@ -5538,6 +5538,7 @@ async def place_bybit_order(
             }
         
         logging.info(f"✅ Order executed successfully: {order}")
+        logging.info(f"🔄 Trailing SL ATTIVO: seguirà EMA 10 del TF superiore ({config.TRAILING_EMA_TIMEFRAME.get(timeframe, '5m')})")
         
         # ===== STEP 10: SALVA POSIZIONE NEL TRACKING =====
         with config.POSITIONS_LOCK:
@@ -5570,13 +5571,14 @@ async def place_bybit_order(
                 'timestamp': datetime.now(timezone.utc).isoformat(),
                 'timeframe': timeframe,
                 'pattern_name': pattern_name,
-                'trailing_active': False,
-                'highest_price': entry_validated,
+                'trailing_active': True,  # ✅ CAMBIA DA False A True
+                'highest_price': entry_validated,  # ✅ INIZIALIZZA highest_price
                 'chat_id': chat_id,
                 'multi_tp_levels': tp_levels if tp_levels else None
             }
             
             logging.info(f"📝 Position saved for {symbol}: entry={entry_validated}")
+            logging.info(f"🔄 Trailing SL ATTIVO da subito (segue EMA 10)")  # ✅ AGGIUNGI LOG
         
         # ===== STEP 11: INIZIALIZZA TP TRACKING (se Multi-TP) =====
         if tp_levels:
@@ -6118,6 +6120,24 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
             else:  # Sell
                 profit_usd = (entry_price - current_price) * pos_info['qty']
                 profit_pct = ((entry_price - current_price) / entry_price) * 100
+
+            # ✅ NUOVO: Trailing attivo SEMPRE (rimuovi check profit_pct >= soglia)
+            # Trova livello appropriato in base al profit
+            active_level = None
+            for level in config.TRAILING_CONFIG_ADVANCED['levels']:
+                if profit_pct >= level['profit_pct']:
+                    active_level = level
+                else:
+                    break
+            
+            # ✅ SE NON C'È PROFIT SUFFICIENTE, USA LIVELLO BASE
+            if not active_level:
+                # Usa il primo livello (più permissivo) anche a profit zero
+                active_level = config.TRAILING_CONFIG_ADVANCED['levels'][0]
+                logging.debug(
+                    f"{symbol} ({side}): Profit {profit_pct:.2f}% < min threshold, "
+                    f"using base level (Early Protection)"
+                )
 
             # ===== CALCOLO RISK INIZIALE =====
             if side == 'Buy':
