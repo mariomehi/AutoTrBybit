@@ -315,7 +315,7 @@ class PatternRegistry:
         Nota: ritorna solo bool, quindi creiamo dict vuoto
         """
         from bybit_telegram_bot_fixed import is_morning_star_ema_breakout
-        found = is_morning_star_ema_breakout(df)
+        found = is_morning_star_ema_breakout(df)  # ← RIMUOVI prev, curr
         return (found, {} if found else None)
     
     def _detect_higher_low(self, df: pd.DataFrame) -> Tuple[bool, Optional[Dict]]:
