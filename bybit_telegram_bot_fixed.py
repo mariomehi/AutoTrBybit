@@ -5017,6 +5017,10 @@ def check_higher_timeframe_resistance(symbol, current_tf, current_price):
     curr_ema10 = ema10_htf.iloc[-1]
     curr_ema60 = ema60_htf.iloc[-1]
 
+    # ===== 🔧 FIX: INIZIALIZZA momentum_reason E momentum_bearish QUI =====
+    momentum_bearish = False
+    momentum_reason = []  # ← AGGIUNGI QUESTA RIGA
+
     # ===== CHECK ULTIMA CANDELA HTF =====
     last_htf_candle = df_htf.iloc[-1]
     
@@ -5065,10 +5069,6 @@ def check_higher_timeframe_resistance(symbol, current_tf, current_price):
     recent_closes = df_htf['close'].iloc[-3:]
     downtrend_recent = all(recent_closes.iloc[i] > recent_closes.iloc[i+1] 
                            for i in range(len(recent_closes)-1))
-    
-    # ===== DECISIONE MOMENTUM =====
-    momentum_bearish = False
-    momentum_reason = []
     
     # CRITERIO 1: EMA 10 in discesa (slope negativo significativo)
     if ema10_slope < -0.1:  # Scende più di 0.1%
