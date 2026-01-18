@@ -331,6 +331,43 @@ MULTI_TP_CONFIG = {
 TP_TRACKING = {}  # symbol -> {'tp1': False, 'tp2': False, 'tp3': False, 'tp1_qty': 0, ...}
 TP_TRACKING_LOCK = threading.Lock()
 
+# ===== BREAK-EVEN SYSTEM =====
+BREAKEVEN_ENABLED = True
+
+BREAKEVEN_CONFIG = {
+    # METODO 1: Time-Based (dopo N minuti, sposta SL a break-even)
+    'time_based': {
+        'enabled': True,
+        'minutes': 10,  # Dopo 10 minuti → SL a break-even
+        'buffer_pct': 0.001,  # 0.1% sopra entry (per coprire fee)
+    },
+    
+    # METODO 2: Candle-Based (dopo N candele verdi, proteggi)
+    'candle_based': {
+        'enabled': True,
+        'min_green_candles': 2,  # 2 candele verdi consecutive
+        'buffer_pct': 0.002,  # 0.2% sopra entry
+    },
+    
+    # METODO 3: Profit-Based (appena in profit minimo)
+    'profit_based': {
+        'enabled': True,
+        'min_profit_pct': 0.3,  # Appena +0.3% profit
+        'lock_pct': 0.1,  # Sposta SL a +0.1% (garantisci almeno questo)
+    },
+    
+    # METODO 4: Quick Exit (esci se segnali negativi dopo N min)
+    'quick_exit': {
+        'enabled': True,
+        'check_after_minutes': 5,  # Controlla dopo 5 min
+        'exit_if_negative': True,  # Esci se in negativo
+        'max_loss_pct': -0.5,  # Max perdita tollerata: -0.5%
+    },
+    
+    # Check interval
+    'check_interval': 30,  # Controlla ogni 30 secondi
+}
+
 # Pattern Management System
 AVAILABLE_PATTERNS = {
     # ═══════════════════════════════════════════
