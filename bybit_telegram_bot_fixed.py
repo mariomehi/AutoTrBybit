@@ -37,6 +37,8 @@ from notifications import (
     NOTIFICATION_MANAGER
 )
 
+from breakeven_manager import BREAKEVEN_MANAGER
+
 # Import pybit
 try:
     from pybit.unified_trading import HTTP as BybitHTTP
@@ -6002,13 +6004,9 @@ async def execute_profit_lock(
 async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
     """
     Advanced Trailing Stop Loss - Multi-Level Progressive
-    SUPPORTA SIA BUY CHE SELL
 
-    NUOVO COMPORTAMENTO:
-    ====================
     Quando il profit supera una soglia alta (es. 5x risk), 
     BLOCCA IMMEDIATAMENTE il profitto spostando SL a break-even o superiore,
-    IGNORANDO temporaneamente l'EMA trailing normale.
     
     LOGICA:
     1. Per ogni posizione aperta, calcola profit %
@@ -6033,7 +6031,7 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
     if not positions_copy:
         return
     
-    logging.debug(f"Trailing check: {len(positions_copy)} positions")
+    logging.debug(f"Trailing + Break-Even check: {len(positions_copy)} positions")
     
     for symbol, pos_info in positions_copy.items():
         # ===== INIZIALIZZA new_sl QUI (FIX) =====
@@ -6112,6 +6110,122 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                 continue
             
             current_price = df['close'].iloc[-1]
+
+            # ===== 🆕 CHECK 1: BREAK-EVEN (priorità massima) =====
+            should_breakeven, breakeven_sl, breakeven_reason = BREAKEVEN_MANAGER.should_activate_breakeven(
+                symbol=symbol,
+                pos_info=pos_info,
+                current_price=current_price,
+                df_current=df
+            )
+            
+            if should_breakeven and breakeven_sl:
+                logging.info(
+                    f"🛡️ {symbol} ({side}): BREAK-EVEN ACTIVATED! "
+                    f"Reason: {breakeven_reason}"
+                )
+                
+                # Aggiorna SL a break-even
+                try:
+                    result = session.set_trading_stop(
+                        category="linear",
+                        symbol=symbol,
+                        stopLoss=str(round(breakeven_sl, get_price_decimals(breakeven_sl))),
+                        positionIdx=0
+                    )
+                    
+                    if result.get('retCode') == 0:
+                        with config.POSITIONS_LOCK:
+                            if symbol in config.ACTIVE_POSITIONS:
+                                config.ACTIVE_POSITIONS[symbol]['sl'] = breakeven_sl
+                                # Marca che break-even è stato attivato
+                                config.ACTIVE_POSITIONS[symbol]['breakeven_activated'] = True
+                        
+                        # Notifica
+                        if chat_id:
+                            profit_pct = ((current_price - entry_price) / entry_price) * 100 if side == 'Buy' else ((entry_price - current_price) / entry_price) * 100
+                            
+                            msg = f"🛡️ <b>BREAK-EVEN ATTIVATO!</b> ({side})\n\n"
+                            msg += f"<b>Symbol:</b> {symbol}\n"
+                            msg += f"<b>Reason:</b> {breakeven_reason}\n\n"
+                            msg += f"Entry: ${entry_price:.{get_price_decimals(entry_price)}f}\n"
+                            msg += f"Current: ${current_price:.{get_price_decimals(current_price)}f}\n"
+                            msg += f"Profit: {profit_pct:.2f}%\n\n"
+                            msg += f"<b>Stop Loss:</b>\n"
+                            msg += f"• Prima: ${current_sl:.{get_price_decimals(current_sl)}f}\n"
+                            msg += f"• <b>Ora: ${breakeven_sl:.{get_price_decimals(breakeven_sl)}f}</b>\n\n"
+                            msg += f"✅ <b>Rischio eliminato!</b>\n"
+                            msg += f"Worst case: Break-even (no loss)"
+                            
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=msg,
+                                parse_mode='HTML'
+                            )
+                        
+                        continue  # Skip trailing questo giro
+                    
+                except Exception as e:
+                    logging.error(f"{symbol}: Error setting break-even SL: {e}")
+            
+            # ===== 🆕 CHECK 2: QUICK EXIT =====
+            should_exit, exit_reason = BREAKEVEN_MANAGER.should_quick_exit(
+                symbol=symbol,
+                pos_info=pos_info,
+                current_price=current_price
+            )
+            
+            if should_exit:
+                logging.warning(
+                    f"⚡ {symbol} ({side}): QUICK EXIT TRIGGERED! "
+                    f"Reason: {exit_reason}"
+                )
+                
+                # Chiudi posizione a mercato
+                try:
+                    close_side = 'Sell' if side == 'Buy' else 'Buy'
+                    qty = pos_info['qty']
+                    
+                    close_order = session.place_order(
+                        category='linear',
+                        symbol=symbol,
+                        side=close_side,
+                        orderType='Market',
+                        qty=str(qty),
+                        reduceOnly=True,
+                        positionIdx=0
+                    )
+                    
+                    if close_order.get('retCode') == 0:
+                        logging.info(f"✅ {symbol}: Quick exit executed")
+                        
+                        # Rimuovi da tracking
+                        with config.POSITIONS_LOCK:
+                            if symbol in config.ACTIVE_POSITIONS:
+                                del config.ACTIVE_POSITIONS[symbol]
+                        
+                        # Notifica
+                        if chat_id:
+                            profit_pct = ((current_price - entry_price) / entry_price) * 100 if side == 'Buy' else ((entry_price - current_price) / entry_price) * 100
+                            
+                            msg = f"⚡ <b>QUICK EXIT ESEGUITO!</b> ({side})\n\n"
+                            msg += f"<b>Symbol:</b> {symbol}\n"
+                            msg += f"<b>Reason:</b> {exit_reason}\n\n"
+                            msg += f"Entry: ${entry_price:.{get_price_decimals(entry_price)}f}\n"
+                            msg += f"Exit: ${current_price:.{get_price_decimals(current_price)}f}\n"
+                            msg += f"Loss: {profit_pct:.2f}%\n\n"
+                            msg += f"💡 Setup non confermato, perdita limitata."
+                            
+                            await context.bot.send_message(
+                                chat_id=chat_id,
+                                text=msg,
+                                parse_mode='HTML'
+                            )
+                        
+                        continue
+                
+                except Exception as e:
+                    logging.error(f"{symbol}: Error executing quick exit: {e}")
             
             # ===== CALCOLO PROFIT % (ora entry_price è validato) =====
             if side == 'Buy':
@@ -10969,6 +11083,80 @@ async def cmd_registry_stats(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f'❌ Errore nel recuperare statistiche registry:\n{str(e)}'
         )
 
+async def cmd_breakeven(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /breakeven [on|off|status]
+    Gestisce il sistema break-even
+    """
+    args = context.args
+    
+    if not args or args[0].lower() == 'status':
+        # Mostra status
+        status_emoji = "✅" if config.BREAKEVEN_ENABLED else "❌"
+        
+        msg = f"🛡️ <b>Break-Even System Status</b>\n\n"
+        msg += f"Enabled: {status_emoji}\n\n"
+        
+        if config.BREAKEVEN_ENABLED:
+            cfg = config.BREAKEVEN_CONFIG
+            
+            msg += "<b>⏱️ Time-Based:</b>\n"
+            if cfg['time_based']['enabled']:
+                msg += f"  • After {cfg['time_based']['minutes']} min → SL to break-even\n"
+                msg += f"  • Buffer: +{cfg['time_based']['buffer_pct']*100:.1f}%\n"
+            else:
+                msg += "  Disabled\n"
+            
+            msg += "\n<b>📊 Candle-Based:</b>\n"
+            if cfg['candle_based']['enabled']:
+                msg += f"  • After {cfg['candle_based']['min_green_candles']} green candles\n"
+                msg += f"  • Buffer: +{cfg['candle_based']['buffer_pct']*100:.1f}%\n"
+            else:
+                msg += "  Disabled\n"
+            
+            msg += "\n<b>💰 Profit-Based:</b>\n"
+            if cfg['profit_based']['enabled']:
+                msg += f"  • Trigger: +{cfg['profit_based']['min_profit_pct']}% profit\n"
+                msg += f"  • Lock: +{cfg['profit_based']['lock_pct']}%\n"
+            else:
+                msg += "  Disabled\n"
+            
+            msg += "\n<b>⚡ Quick Exit:</b>\n"
+            if cfg['quick_exit']['enabled']:
+                msg += f"  • Check after: {cfg['quick_exit']['check_after_minutes']} min\n"
+                msg += f"  • Max loss: {cfg['quick_exit']['max_loss_pct']}%\n"
+            else:
+                msg += "  Disabled\n"
+            
+            msg += f"\n<b>Check interval:</b> {cfg['check_interval']}s"
+        else:
+            msg += "Sistema disattivato."
+        
+        msg += "\n\n<b>Comandi:</b>\n"
+        msg += "/breakeven on - Abilita\n"
+        msg += "/breakeven off - Disabilita"
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+    
+    elif args[0].lower() == 'on':
+        config.BREAKEVEN_ENABLED = True
+        await update.message.reply_text(
+            "✅ <b>Break-Even System ATTIVATO</b>\n\n"
+            "Protezione multi-layer attiva:\n"
+            "• Time-based break-even\n"
+            "• Candle-based protection\n"
+            "• Profit-lock system\n"
+            "• Quick exit on failed setups",
+            parse_mode='HTML'
+        )
+    
+    elif args[0].lower() == 'off':
+        config.BREAKEVEN_ENABLED = False
+        await update.message.reply_text(
+            "❌ <b>Break-Even System DISATTIVATO</b>",
+            parse_mode='HTML'
+        )
+
 # ----------------------------- MAIN -----------------------------
 
 def main():
@@ -11062,6 +11250,7 @@ def main():
     application.add_handler(CommandHandler('testcache', cmd_testcache))
     application.add_handler(CommandHandler('multitp', cmd_multitp))
     application.add_handler(CommandHandler('cache_stats', cmd_cache_stats))
+    application.add_handler(CommandHandler('breakeven', cmd_breakeven))
 
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
