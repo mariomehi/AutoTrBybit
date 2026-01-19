@@ -2226,7 +2226,12 @@ def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
     Returns:
         (found: bool, pattern_data: dict or None)
     """
+
+    # ✅ Aggiungi logging all'inizio
+    logging.info(f"Testing BUD pattern (require_maxi={require_maxi})")
+    
     if len(df) < 10:
+        logging.debug("BUD: Not enough data")
         return (False, None)
     
     # ===== STEP 1: CALCOLA EMA 10 =====
@@ -2299,6 +2304,7 @@ def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
         break
     
     if not breakout_found:
+        logging.debug("BUD: No breakout candle found")
         return (False, None)
     
     # Livelli chiave del breakout
@@ -2333,6 +2339,10 @@ def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
             break
     
     if not all_inside:
+        logging.debug(
+            f"BUD: Rest candles not all inside range "
+            f"(breakout_high={breakout_high:.4f}, breakout_low={breakout_low:.4f})"
+        )
         return (False, None)
     
     # CHECK: Range medio delle candele riposo deve essere piccolo
@@ -2358,6 +2368,21 @@ def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
     # Candela corrente dovrebbe rompere high del breakout
     # (o almeno essere molto vicina)
     breaks_high = curr['close'] > breakout_high * 0.998
+
+    # Oppure almeno essere sopra il midpoint
+    breakout_midpoint = (breakout_high + breakout_low) / 2
+    breaks_structure = (
+        curr['high'] > breakout_high and 
+        curr['close'] > breakout_midpoint
+    )
+
+    # ✅ Accetta entrambe le condizioni
+    if not (breaks_high or breaks_structure):
+        logging.info(
+            f"BUD Pattern: Current candle doesn't break structure "
+            f"(close={curr['close']:.4f}, breakout_high={breakout_high:.4f})"
+        )
+        return (False, None)
     
     # Se non rompe high, almeno deve essere sopra EMA 10
     curr_ema10 = ema_10.iloc[-1]
@@ -2456,7 +2481,7 @@ def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
         
         'tier': 1  # High probability pattern
     }
-    
+    logging.info(f"✅ BUD Pattern FOUND! (type={pattern_type})")
     return (True, pattern_data)
 
 
@@ -4559,7 +4584,7 @@ def check_patterns(df: pd.DataFrame, symbol: str = None):
     if len(df) < 6:
         return (False, None, None, None)
     
-    logging.info(f'🔍 {symbol}: Checking patterns (using Registry)')
+    logging.debug(f'🔍 {symbol}: Checking patterns (using Registry)')
     logging.debug(f'   Volume mode: {config.VOLUME_FILTER_MODE}')
     logging.debug(f'   Trend mode: {config.TREND_FILTER_MODE}')
     logging.debug(f'   EMA mode: {config.EMA_FILTER_MODE if config.EMA_FILTER_ENABLED else "OFF"}')
@@ -6124,6 +6149,26 @@ async def update_trailing_stop_loss(context: ContextTypes.DEFAULT_TYPE):
                     f"🛡️ {symbol} ({side}): BREAK-EVEN ACTIVATED! "
                     f"Reason: {breakeven_reason}"
                 )
+
+                # ✅ FIX: Validazione SL per LONG
+                if side == 'Buy':
+                    # Per LONG: SL deve essere SOTTO il prezzo corrente
+                    if breakeven_sl >= current_price:
+                        logging.error(
+                            f"{symbol}: Invalid breakeven SL for LONG - "
+                            f"SL {breakeven_sl:.4f} >= current price {current_price:.4f}"
+                        )
+                        
+                        # Calcola SL corretto (leggermente sotto entry)
+                        breakeven_sl = entry_price * 0.999  # 0.1% sotto entry
+                        logging.info(f"{symbol}: Adjusted breakeven SL to {breakeven_sl:.4f}")
+                    
+                    # Verifica che sia miglioramento
+                    if breakeven_sl <= current_sl:
+                        logging.warning(
+                            f"{symbol}: Breakeven SL {breakeven_sl:.4f} <= current {current_sl:.4f}, skip"
+                        )
+                        continue
                 
                 # Aggiorna SL a break-even
                 try:
