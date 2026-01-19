@@ -8998,7 +8998,7 @@ async def cmd_analizza(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Calcola intervallo in secondi
-        interval_seconds = INTERVAL_SECONDS.get(timeframe, 300)
+        interval_seconds = config.INTERVAL_SECONDS.get(timeframe, 300)
         
         # Calcola tempo fino alla prossima chiusura candela
         now = datetime.now(timezone.utc)
