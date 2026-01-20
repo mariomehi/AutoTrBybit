@@ -97,7 +97,7 @@ TRAILING_CONFIG_ADVANCED = {
         },
     ],
     'never_back': True,         # SL non torna mai indietro
-    'check_interval': 60,       # Check ogni 60 secondi (più frequente)
+    'check_interval': 30,       # Check ogni 60 secondi (più frequente)
     'min_move_pct': 0.1,        # SL deve muoversi almeno 0.1% per aggiornare
 }
 
