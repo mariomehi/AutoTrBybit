@@ -331,6 +331,18 @@ MULTI_TP_CONFIG = {
 TP_TRACKING = {}  # symbol -> {'tp1': False, 'tp2': False, 'tp3': False, 'tp1_qty': 0, ...}
 TP_TRACKING_LOCK = threading.Lock()
 
+# ===== RSI + STOCHASTIC RSI CONFIG =====
+MOMENTUM_INDICATORS_ENABLED = True  # Master switch
+
+MOMENTUM_THRESHOLDS = {
+    'rsi_oversold': 30,
+    'rsi_overbought': 70,
+    'rsi_ideal_min': 40,
+    'rsi_ideal_max': 60,
+    'stoch_oversold': 20,
+    'stoch_overbought': 80
+}
+
 # ===== BREAK-EVEN SYSTEM =====
 BREAKEVEN_ENABLED = True
 
