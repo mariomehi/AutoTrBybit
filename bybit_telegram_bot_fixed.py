@@ -996,16 +996,162 @@ def calculate_dynamic_risk(ema_score: int) -> float:
         return 5.0   # ❌ Setup molto debole
 
 
-def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str = None):
+def analyze_momentum_indicators(df: pd.DataFrame) -> Dict[str, Any]:
     """
-    Analizza le condizioni EMA per il timeframe specificato
+    Analizza RSI + Stochastic RSI per conferma momentum
+    
+    BUY signals:
+    - RSI tra 40-60 (non overbought, momentum sano)
+    - Stochastic RSI > 20 e rising (uscita da oversold)
+    - Stochastic %K crossing above %D (golden cross)
     
     Returns:
-        dict con:
-        - score: punteggio 0-100
-        - quality: 'GOLD', 'GOOD', 'OK', 'WEAK', 'BAD'
-        - conditions: dict di condizioni soddisfatte
-        - details: messaggio testuale
+        Dict con score 0-100 e details
+    """
+    if len(df) < 20:
+        return {
+            'score': 0,
+            'rsi': 0,
+            'stoch_k': 0,
+            'stoch_d': 0,
+            'signals': [],
+            'quality': 'INSUFFICIENT_DATA'
+        }
+    
+    close = df['close']
+    
+    # ===== RSI CALCULATION (14 periods) =====
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    
+    current_rsi = rsi.iloc[-1]
+    prev_rsi = rsi.iloc[-2] if len(rsi) >= 2 else current_rsi
+    
+    # ===== STOCHASTIC RSI CALCULATION (14,3,3) =====
+    rsi_min = rsi.rolling(window=14).min()
+    rsi_max = rsi.rolling(window=14).max()
+    
+    stoch_rsi = (rsi - rsi_min) / (rsi_max - rsi_min) * 100
+    
+    # %K and %D lines
+    stoch_k = stoch_rsi.rolling(window=3).mean()
+    stoch_d = stoch_k.rolling(window=3).mean()
+    
+    current_k = stoch_k.iloc[-1]
+    current_d = stoch_d.iloc[-1]
+    prev_k = stoch_k.iloc[-2] if len(stoch_k) >= 2 else current_k
+    prev_d = stoch_d.iloc[-2] if len(stoch_d) >= 2 else current_d
+    
+    # Handle NaN values
+    if pd.isna(current_rsi) or pd.isna(current_k) or pd.isna(current_d):
+        return {
+            'score': 0,
+            'rsi': 0,
+            'stoch_k': 0,
+            'stoch_d': 0,
+            'signals': ['Insufficient data'],
+            'quality': 'INSUFFICIENT_DATA'
+        }
+    
+    # ===== SCORING LOGIC =====
+    score = 0
+    signals = []
+    
+    # === RSI CHECKS ===
+    if 40 <= current_rsi <= 60:
+        score += 25
+        signals.append(f"RSI neutral zone ({current_rsi:.1f})")
+    elif 30 <= current_rsi < 40:
+        score += 35  # Meglio, uscita da oversold
+        signals.append(f"RSI recovering from oversold ({current_rsi:.1f})")
+    elif current_rsi < 30:
+        score += 15  # Oversold, potenziale reversal
+        signals.append(f"RSI oversold ({current_rsi:.1f})")
+    elif 60 < current_rsi <= 70:
+        score += 10  # Ancora OK, ma vicino a overbought
+        signals.append(f"RSI approaching overbought ({current_rsi:.1f})")
+    else:  # current_rsi > 70
+        score -= 20  # Overbought, alto rischio pullback
+        signals.append(f"⚠️ RSI overbought ({current_rsi:.1f})")
+    
+    # RSI Rising?
+    if current_rsi > prev_rsi + 1:  # Salita significativa
+        score += 15
+        signals.append("RSI rising strongly")
+    elif current_rsi > prev_rsi:
+        score += 10
+        signals.append("RSI rising")
+    
+    # === STOCHASTIC RSI CHECKS ===
+    if 20 < current_k < 80:
+        score += 20
+        signals.append(f"Stoch RSI tradable zone ({current_k:.1f})")
+    elif current_k <= 20:
+        score += 10
+        signals.append(f"Stoch RSI oversold ({current_k:.1f})")
+    else:
+        score -= 10
+        signals.append(f"⚠️ Stoch RSI overbought ({current_k:.1f})")
+    
+    # Golden Cross (K crosses above D)
+    if prev_k <= prev_d and current_k > current_d and current_k > 20:
+        score += 30
+        signals.append("🚀 Stoch RSI Golden Cross!")
+    elif current_k > current_d:
+        score += 10
+        signals.append("Stoch K > D (bullish)")
+    
+    # Both Rising
+    if current_k > prev_k and current_d > prev_d:
+        score += 10
+        signals.append("Stoch RSI trending up")
+    
+    # Oversold Bounce (uscita da zona oversold)
+    if prev_k < 20 and current_k >= 20 and current_k > prev_k:
+        score += 20
+        signals.append("Stoch RSI bouncing from oversold")
+    
+    # Cap score
+    score = max(0, min(score, 100))
+    
+    # Determine quality
+    if score >= 70:
+        quality = 'STRONG'
+    elif score >= 50:
+        quality = 'GOOD'
+    elif score >= 30:
+        quality = 'WEAK'
+    else:
+        quality = 'BAD'
+    
+    return {
+        'score': score,
+        'rsi': current_rsi,
+        'stoch_k': current_k,
+        'stoch_d': current_d,
+        'signals': signals,
+        'quality': quality
+    }
+
+
+def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str = None):
+    """
+    Analizza EMA + MOMENTUM (RSI + Stochastic RSI)
+    
+    NUOVO SCORING:
+    - EMA Base: 60 punti (come prima)
+    - RSI + Stochastic: 40 punti (NUOVO)
+    TOTAL: 100 punti
+    
+    Returns:
+        dict con score 0-100
     """
     if not config.EMA_FILTER_ENABLED or config.EMA_FILTER_MODE == 'off':
         return {
@@ -1016,6 +1162,7 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str =
             'passed': True
         }
     
+    # ===== PARTE 1: EMA ANALYSIS (60 punti max) =====
     # Calcola EMA
     ema_5 = df['close'].ewm(span=5, adjust=False).mean()
     ema_10 = df['close'].ewm(span=10, adjust=False).mean()
@@ -1036,225 +1183,201 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str =
             break
     
     if not configEma:
-        # Default: usa day trading config
         configEma = config.EMA_CONFIG['daytrading']
     
     rules = configEma['rules']
     conditions = {}
-    score = 0
-    details = []
+    ema_score = 0
+    ema_details = []
     
+    # === EMA CHECKS (come prima, ma max 60 punti) ===
     if timeframe in ['5m', '15m']:
-        # MUST 1: Prezzo sopra EMA 10
-        if rules.get('price_above_ema10'):
-            if last_close > last_ema10:
-                conditions['price_above_ema10'] = True
-                score += 30  # 👈 RIDOTTO da 40 (per fare spazio a EMA 60)
-                details.append("Prezzo maggiore EMA 10")
-            else:
-                conditions['price_above_ema10'] = False
-                score -= 30
-                details.append("Prezzo minore EMA 10")
-        
-        # ===== MUST 2: Prezzo sopra EMA 60 (NUOVO - FONDAMENTALE) =====
+        # MUST: Prezzo sopra EMA 60
         if last_close > last_ema60:
             conditions['price_above_ema60'] = True
-            score += 30  # 👈 NUOVO: punti per trend rialzista
-            details.append("Prezzo maggiore EMA 60 (trend rialzista)")
+            ema_score += 25
+            ema_details.append("Prezzo > EMA 60 (trend rialzista)")
         else:
             conditions['price_above_ema60'] = False
-            score -= 20  # 👈 Penalità se contro trend
-            details.append("Prezzo minore EMA 60 (contro trend)")
+            ema_score -= 15
+            ema_details.append("Prezzo < EMA 60 (contro trend)")
         
-        # BONUS: EMA 5 sopra EMA 10 (momentum)
-        if rules.get('ema5_above_ema10'):
-            if last_ema5 > last_ema10:
-                conditions['ema5_above_ema10'] = True
-                score += 20  # 👈 RIDOTTO da 30
-                details.append("EMA 5 maggiore EMA 10 (momentum)")
-            else:
-                conditions['ema5_above_ema10'] = False
-                score += 10
-                details.append("EMA 5 minore EMA 10")
+        # BONUS: EMA 5 sopra EMA 10
+        if last_ema5 > last_ema10:
+            conditions['ema5_above_ema10'] = True
+            ema_score += 20
+            ema_details.append("EMA 5 > EMA 10 (momentum)")
+        else:
+            conditions['ema5_above_ema10'] = False
+            ema_score += 5
+            ema_details.append("EMA 5 < EMA 10")
         
-        # GOLD: Pattern vicino a EMA 10 (pullback)
+        # GOLD: Vicino a EMA 10
         distance_to_ema10 = abs(last_close - last_ema10) / last_ema10
         if distance_to_ema10 < 0.005:
             conditions['near_ema10'] = True
-            score += 20  # 👈 RIDOTTO da 30
-            details.append("Vicino EMA 10 - pullback zone")
+            ema_score += 15
+            ema_details.append("Vicino EMA 10 (pullback zone)")
         else:
             conditions['near_ema10'] = False
     
-    # DAY TRADING (30m, 1h)
     elif timeframe in ['30m', '1h']:
-        if rules.get('price_above_ema60'):
-            if last_close > last_ema60:
-                conditions['price_above_ema60'] = True
-                score += 40
-                details.append("Prezzo maggiore EMA 60")
-            else:
-                conditions['price_above_ema60'] = False
-                score -= 30
-                details.append("Prezzo minore EMA 60")
+        if last_close > last_ema60:
+            conditions['price_above_ema60'] = True
+            ema_score += 30
+            ema_details.append("Prezzo > EMA 60")
+        else:
+            conditions['price_above_ema60'] = False
+            ema_score -= 20
+            ema_details.append("Prezzo < EMA 60")
         
-        if rules.get('ema10_above_ema60'):
-            if last_ema10 > last_ema60:
-                conditions['ema10_above_ema60'] = True
-                score += 30
-                details.append("EMA 10 maggiore EMA 60 (trend ok)")
-            else:
-                conditions['ema10_above_ema60'] = False
-                score += 10
-                details.append("EMA 10 minore EMA 60")
+        if last_ema10 > last_ema60:
+            conditions['ema10_above_ema60'] = True
+            ema_score += 20
+            ema_details.append("EMA 10 > EMA 60")
+        else:
+            conditions['ema10_above_ema60'] = False
+            ema_score += 5
+            ema_details.append("EMA 10 < EMA 60")
         
         distance_to_ema60 = abs(last_close - last_ema60) / last_ema60
         if distance_to_ema60 < 0.01:
             conditions['near_ema60'] = True
-            score += 30
-            details.append("Vicino EMA 60 - bounce zone")
+            ema_score += 10
+            ema_details.append("Vicino EMA 60")
         else:
             conditions['near_ema60'] = False
     
-    # SWING (4h)
     elif timeframe in ['4h']:
-        if rules.get('price_above_ema223'):
-            if last_close > last_ema223:
-                conditions['price_above_ema223'] = True
-                score += 40
-                details.append("Prezzo maggiore EMA 223 (bull market)")
-            else:
-                conditions['price_above_ema223'] = False
-                score -= 30
-                details.append("Prezzo minore EMA 223 (bear market)")
+        if last_close > last_ema223:
+            conditions['price_above_ema223'] = True
+            ema_score += 30
+            ema_details.append("Prezzo > EMA 223")
+        else:
+            conditions['price_above_ema223'] = False
+            ema_score -= 20
+            ema_details.append("Prezzo < EMA 223")
         
-        if rules.get('ema60_above_ema223'):
-            if last_ema60 > last_ema223:
-                conditions['ema60_above_ema223'] = True
-                score += 30
-                details.append("EMA 60 maggiore EMA 223 (strong trend)")
-            else:
-                conditions['ema60_above_ema223'] = False
-                score += 10
-                details.append("EMA 60 minore EMA 223")
+        if last_ema60 > last_ema223:
+            conditions['ema60_above_ema223'] = True
+            ema_score += 20
+            ema_details.append("EMA 60 > EMA 223")
+        else:
+            conditions['ema60_above_ema223'] = False
+            ema_score += 5
+            ema_details.append("EMA 60 < EMA 223")
         
         distance_to_ema223 = abs(last_close - last_ema223) / last_ema223
         if distance_to_ema223 < 0.02:
             conditions['near_ema223'] = True
-            score += 30
-            details.append("Vicino EMA 223 - major support")
+            ema_score += 10
+            ema_details.append("Vicino EMA 223")
         else:
             conditions['near_ema223'] = False
-
-    # BREAKOUT (1m, 3m)
+    
     elif timeframe in ['1m', '3m']:
-        # Check se prezzo ha appena rotto EMA 223 al rialzo
-        
-        # 1. Prezzo deve essere APPENA sopra EMA 223 (entro 0.5%)
+        # Breakout logic (come prima)
         just_above_223 = (last_close > last_ema223 and 
                          (last_close - last_ema223) / last_ema223 < 0.005)
         
-        # 2. Verifica che nelle ultime 3 candele il prezzo ERA sotto EMA 223
         was_below = False
         if len(df) >= 4:
             prev_closes = [df['close'].iloc[-2], df['close'].iloc[-3], df['close'].iloc[-4]]
             prev_ema223 = [ema_223.iloc[-2], ema_223.iloc[-3], ema_223.iloc[-4]]
-            
-            # Almeno 2 delle 3 candele precedenti erano sotto EMA 223
             below_count = sum(1 for c, e in zip(prev_closes, prev_ema223) if c < e)
             was_below = below_count >= 2
         
-        # 3. EMA 5 e 10 devono essere sopra EMA 223 (conferma momentum)
         ema_aligned = last_ema5 > last_ema223 and last_ema10 > last_ema223
         
-        # RILEVAMENTO BREAKOUT
         if just_above_223 and was_below and ema_aligned:
-            # 🚀 BREAKOUT CONFERMATO!
-            conditions['breakout_ema223'] = True
-            score = 100  # Score massimo automatico
-            details.append("BREAKOUT EMA 223 CONFERMATO")  # ✅ NO emoji
-            details.append("Prezzo ha rotto EMA 223 al rialzo")
-            details.append("EMA 5 e 10 sopra EMA 223")
-            details.append("Setup ad alta probabilità")
+            ema_score = 60  # Max score per breakout
+            ema_details = ["BREAKOUT EMA 223 CONFERMATO"]
         else:
-            # Setup normale per 1m/3m
-            # MUST: Prezzo sopra EMA 223
             if last_close > last_ema223:
                 conditions['price_above_ema223'] = True
-                score += 40
-                details.append("Prezzo > EMA 223")
+                ema_score += 30
+                ema_details.append("Prezzo > EMA 223")
             else:
                 conditions['price_above_ema223'] = False
-                score -= 30
-                details.append("Prezzo < EMA 223")
+                ema_score -= 20
+                ema_details.append("Prezzo < EMA 223")
             
-            # BONUS: EMA 5 e 10 sopra EMA 223
             if last_ema5 > last_ema223 and last_ema10 > last_ema223:
                 conditions['ema_above_223'] = True
-                score += 30
-                details.append("EMA 5,10 > EMA 223 (momentum)")
+                ema_score += 20
+                ema_details.append("EMA 5,10 > EMA 223")
             else:
                 conditions['ema_above_223'] = False
-                score += 10
-                details.append("EMA non tutte sopra 223")
+                ema_score += 5
+                ema_details.append("EMA non allineate")
             
-            # GOLD: Pattern molto vicino a EMA 223 (bounce)
             distance_to_ema223 = abs(last_close - last_ema223) / last_ema223
-            if distance_to_ema223 < 0.003:  # Entro 0.3%
+            if distance_to_ema223 < 0.003:
                 conditions['near_ema223'] = True
-                score += 30
-                details.append("Vicino EMA 223 (bounce zone!)")
+                ema_score += 10
+                ema_details.append("Vicino EMA 223")
             else:
                 conditions['near_ema223'] = False
-
-
-    # === CASO SPECIALE: Liquidity Sweep Pattern ===
-    # Per questo pattern, le regole EMA sono diverse
-    if pattern_name == 'Liquidity Sweep + Reversal':
-        # MUST: Solo EMA 60 (trend principale)
-        if last_close > last_ema60:
-            score = 80  # Score fisso GOOD
-            details = []  # Reset details per logica custom
-            details.append("Pattern istituzionale: Liquidity Sweep")
-            details.append("Prezzo maggiore EMA 60 (trend rialzista)")
-            details.append("Sweep sotto EMA 5,10 tollerato")
-            
-            # BONUS: Vicino a EMA 60
-            distance_to_ema60 = abs(last_close - last_ema60) / last_ema60
-            if distance_to_ema60 < 0.01:
-                score = 100  # GOLD se vicino a EMA 60
-                details.append("Vicino EMA 60 - strong bounce zone")
-            
-            return {
-                'score': score,
-                'quality': 'GOLD' if score == 100 else 'GOOD',
-                'conditions': {'price_above_ema60': True},
-                'details': '\n'.join(details),
-                'passed': True,
-                'ema_values': {
-                    'ema5': last_ema5,
-                    'ema10': last_ema10,
-                    'ema60': last_ema60,
-                    'ema223': last_ema223,
-                    'price': last_close
-                }
-            }
-        else:
-            # Sweep in downtrend = BAD
-            return {
-                'score': 0,
-                'quality': 'BAD',
-                'conditions': {'price_above_ema60': False},
-                'details': 'Liquidity Sweep in downtrend - SKIP',
-                'passed': False,
-                'ema_values': {
-                    'ema5': last_ema5,
-                    'ema10': last_ema10,
-                    'ema60': last_ema60,
-                    'ema223': last_ema223,
-                    'price': last_close
-                }
-            }
+    
+    # Cap EMA score a 60
+    ema_score = max(0, min(ema_score, 60))
+    
+    # ===== PARTE 2: MOMENTUM INDICATORS (40 punti max) =====
+    momentum_result = analyze_momentum_indicators(df)
+    momentum_score = int(momentum_result['score'] * 0.4)  # 40% del peso
+    
+    # ===== SCORE TOTALE =====
+    total_score = ema_score + momentum_score
+    
+    # ===== QUALITY DETERMINATION =====
+    if total_score >= 80:
+        quality = 'GOLD'
+    elif total_score >= 60:
+        quality = 'GOOD'
+    elif total_score >= 40:
+        quality = 'OK'
+    elif total_score >= 20:
+        quality = 'WEAK'
+    else:
+        quality = 'BAD'
+    
+    # ===== PASSED CHECK =====
+    if config.EMA_FILTER_MODE == 'strict':
+        passed = total_score >= 60
+    else:  # loose
+        passed = total_score >= 40
+    
+    # ===== DETAILS CONSOLIDATI =====
+    all_details = []
+    all_details.append(f"<b>EMA Score: {ema_score}/60</b>")
+    all_details.extend(ema_details)
+    all_details.append(f"\n<b>Momentum Score: {momentum_score}/40</b>")
+    all_details.append(f"RSI: {momentum_result['rsi']:.1f}")
+    all_details.append(f"Stoch K/D: {momentum_result['stoch_k']:.1f}/{momentum_result['stoch_d']:.1f}")
+    if momentum_result.get('signals'):
+        for sig in momentum_result['signals'][:3]:  # Max 3 signals
+            all_details.append(f"• {sig}")
+    
+    return {
+        'score': total_score,
+        'quality': quality,
+        'conditions': conditions,
+        'details': '\n'.join(all_details),
+        'passed': passed,
+        'ema_score': ema_score,
+        'momentum_score': momentum_score,
+        'momentum_quality': momentum_result['quality'],
+        'ema_values': {
+            'ema5': last_ema5,
+            'ema10': last_ema10,
+            'ema60': last_ema60,
+            'ema223': last_ema223,
+            'price': last_close,
+            'rsi': momentum_result['rsi'],
+            'stoch_k': momentum_result['stoch_k'],
+            'stoch_d': momentum_result['stoch_d']
+        }
+    }
     
     # Normalizza score tra 0-100
     score = max(0, min(100, score))
@@ -1291,7 +1414,6 @@ def analyze_ema_conditions(df: pd.DataFrame, timeframe: str, pattern_name: str =
             'price': last_close
         }
     }
-
 
 def is_volume_spike_breakout(df: pd.DataFrame) -> tuple:
     """
