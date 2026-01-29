@@ -9497,13 +9497,123 @@ async def cmd_trailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(msg, parse_mode="HTML")
 
-
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Comando /list - mostra analisi attive con dettagli completi
+    
+    Usage:
+    - /list - Mostra tutte le analisi attive
+    - /list clear - Rimuove TUTTE le analisi attive
+    - /list clear SYMBOL - Rimuove tutte le analisi per un symbol specifico
     """
     chat_id = update.effective_chat.id
+    args = context.args
     
+    # ===== ACTION: CLEAR =====
+    if args and args[0].lower() == 'clear':
+        with config.ACTIVE_ANALYSES_LOCK:
+            chat_map = config.ACTIVE_ANALYSES.get(chat_id, {})
+        
+        if not chat_map:
+            await update.message.reply_text(
+                '📭 <b>Nessuna analisi attiva</b>\n\n'
+                'Non ci sono analisi da rimuovere.',
+                parse_mode='HTML'
+            )
+            return
+        
+        # CLEAR SPECIFIC SYMBOL
+        if len(args) > 1:
+            target_symbol = args[1].upper()
+            
+            removed = []
+            with config.ACTIVE_ANALYSES_LOCK:
+                for key in list(chat_map.keys()):
+                    if key.startswith(f'{target_symbol}-'):
+                        job = chat_map[key]
+                        job.schedule_removal()
+                        del chat_map[key]
+                        removed.append(key)
+            
+            # Rimuovi anche dalle notifiche complete
+            with config.FULL_NOTIFICATIONS_LOCK:
+                if chat_id in config.FULL_NOTIFICATIONS:
+                    for key in removed:
+                        config.FULL_NOTIFICATIONS[chat_id].discard(key)
+            
+            if removed:
+                msg = f'🗑️ <b>Analisi rimosse per {target_symbol}</b>\n\n'
+                msg += f'Rimossi {len(removed)} timeframe:\n'
+                for key in removed:
+                    _, tf = key.split('-')
+                    msg += f'• {tf}\n'
+                
+                await update.message.reply_text(msg, parse_mode='HTML')
+            else:
+                await update.message.reply_text(
+                    f'⚠️ Nessuna analisi attiva per {target_symbol}',
+                    parse_mode='HTML'
+                )
+            return
+        
+        # CLEAR ALL
+        total_count = len(chat_map)
+        
+        # Conferma prima di rimuovere tutto
+        await update.message.reply_text(
+            f'⚠️ <b>ATTENZIONE!</b>\n\n'
+            f'Stai per rimuovere <b>{total_count}</b> analisi attive.\n\n'
+            f'Confermi?\n'
+            f'Usa: <code>/list clear confirm</code>',
+            parse_mode='HTML'
+        )
+        return
+    
+    # ===== ACTION: CLEAR CONFIRM =====
+    if args and len(args) >= 2 and args[0].lower() == 'clear' and args[1].lower() == 'confirm':
+        with config.ACTIVE_ANALYSES_LOCK:
+            chat_map = config.ACTIVE_ANALYSES.get(chat_id, {})
+            
+            if not chat_map:
+                await update.message.reply_text(
+                    '📭 <b>Nessuna analisi attiva</b>',
+                    parse_mode='HTML'
+                )
+                return
+            
+            # Raggruppa per symbol
+            symbols = {}
+            for key in chat_map.keys():
+                symbol, tf = key.split('-')
+                if symbol not in symbols:
+                    symbols[symbol] = []
+                symbols[symbol].append(tf)
+            
+            total_count = len(chat_map)
+            
+            # Ferma tutti i job
+            for key, job in list(chat_map.items()):
+                job.schedule_removal()
+                del chat_map[key]
+        
+        # Pulisci anche notifiche complete
+        with config.FULL_NOTIFICATIONS_LOCK:
+            if chat_id in config.FULL_NOTIFICATIONS:
+                config.FULL_NOTIFICATIONS[chat_id].clear()
+        
+        # Messaggio conferma
+        msg = '✅ <b>Tutte le analisi rimosse!</b>\n\n'
+        msg += f'Rimossi <b>{total_count}</b> analisi:\n\n'
+        
+        for symbol, tfs in sorted(symbols.items()):
+            msg += f'• {symbol}: {", ".join(sorted(tfs))}\n'
+        
+        msg += '\n💡 Usa /analizza per ricominciare'
+        
+        await update.message.reply_text(msg, parse_mode='HTML')
+        return
+    
+    # ===== ACTION: SHOW LIST (default) =====
     with config.ACTIVE_ANALYSES_LOCK:
         chat_map = config.ACTIVE_ANALYSES.get(chat_id, {})
     
@@ -9518,8 +9628,15 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Prepara messaggio dettagliato
     msg = f'📊 <b>Analisi Attive ({len(chat_map)})</b>\n\n'
     
+    # Raggruppa per symbol
+    symbols_data = {}
+    
     for key, job in chat_map.items():
         symbol, timeframe = key.split('-')
+        
+        if symbol not in symbols_data:
+            symbols_data[symbol] = []
+        
         job_data = job.data
         
         # Determina autotrade
@@ -9534,27 +9651,50 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 autotrade = False  # solo ordini off, analisi continua
             else:
                 logging.info(f"{symbol} {timeframe}: Analisi saltata ({time_reason})")
-                return
-
-        autotrade_emoji = "🤖" if autotrade else "📊"
-        autotrade_text = "Autotrade ON" if autotrade else "Solo monitoraggio"
+                continue
         
         # Determina modalità notifiche
         with config.FULL_NOTIFICATIONS_LOCK:
             full_mode = chat_id in config.FULL_NOTIFICATIONS and key in config.FULL_NOTIFICATIONS[chat_id]
         
-        notif_emoji = "🔔" if full_mode else "🔕"
-        notif_text = "Tutte le notifiche" if full_mode else "Solo pattern"
+        symbols_data[symbol].append({
+            'timeframe': timeframe,
+            'autotrade': autotrade,
+            'full_mode': full_mode,
+            'key': key
+        })
+    
+    # Costruisci messaggio per symbol
+    for symbol in sorted(symbols_data.keys()):
+        analyses = symbols_data[symbol]
         
-        # Costruisci riga per questo symbol
-        msg += f"{autotrade_emoji} <b>{symbol}</b> - {timeframe}\n"
-        msg += f"  {notif_emoji} {notif_text}\n"
-        msg += f"  {'🤖 ' + autotrade_text}\n"
+        # Header symbol
+        msg += f"<b>{symbol}</b>\n"
         
         # Verifica se ha posizione aperta
-        if symbol in config.ACTIVE_POSITIONS:
+        has_position = symbol in config.ACTIVE_POSITIONS
+        if has_position:
             pos = config.ACTIVE_POSITIONS[symbol]
-            msg += f"  💼 Posizione: {pos.get('side')} ({pos.get('qty'):.4f})\n"
+            side_emoji = "🟢" if pos.get('side') == 'Buy' else "🔴"
+            msg += f"  {side_emoji} Posizione: {pos.get('side')} ({pos.get('qty'):.4f})\n"
+        
+        # Lista timeframe per questo symbol
+        for analysis in sorted(analyses, key=lambda x: config.ENABLED_TFS.index(x['timeframe'])):
+            tf = analysis['timeframe']
+            autotrade = analysis['autotrade']
+            full_mode = analysis['full_mode']
+            
+            autotrade_emoji = "🤖" if autotrade else "📊"
+            notif_emoji = "🔔" if full_mode else "🔕"
+            
+            msg += f"  {autotrade_emoji} {notif_emoji} {tf}"
+            
+            if autotrade:
+                msg += " (Autotrade ON)"
+            if full_mode:
+                msg += " (Full notifications)"
+            
+            msg += "\n"
         
         msg += "\n"
     
@@ -9564,11 +9704,16 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg += "📊 = Solo monitoraggio\n"
     msg += "🔔 = Notifiche complete\n"
     msg += "🔕 = Solo pattern (default)\n"
-    msg += "💼 = Posizione aperta\n\n"
+    msg += "🟢/🔴 = Posizione aperta\n\n"
+    
     msg += "<b>Comandi:</b>\n"
-    msg += "/stop SYMBOL - Ferma analisi\n"
-    msg += "/abilita SYMBOL TF - Attiva notifiche complete\n"
-    msg += "/pausa SYMBOL TF - Solo pattern\n"
+    msg += "/stop SYMBOL - Ferma analisi symbol\n"
+    msg += "/abilita SYMBOL TF - Notifiche complete\n"
+    msg += "/pausa SYMBOL TF - Solo pattern\n\n"
+    
+    msg += "<b>🗑️ Rimozione:</b>\n"
+    msg += "/list clear SYMBOL - Rimuovi symbol\n"
+    msg += "/list clear - Rimuovi TUTTE le analisi\n"
     msg += "/posizioni - Dettagli posizioni"
     
     await update.message.reply_text(msg, parse_mode='HTML')
