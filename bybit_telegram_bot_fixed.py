@@ -2121,8 +2121,8 @@ def is_bullish_engulfing_enhanced(prev, curr, df):
             pattern_data = {
                 'tier': 'GOLD',
                 'quality_score': 95,
-                'distance_to_ema10': distancetoema10, # Aggiunta
-                'distance_to_ema60': distancetoema60, # Aggiunta
+                'distance_to_ema10': distance_to_ema10, # Aggiunta
+                'distance_to_ema60': distance_to_ema60, # Aggiunta
                 'ema60_breakout': True,
                 'breakout_strength': breakout_pct,
                 'entry_price': curr_price,
@@ -2537,9 +2537,9 @@ def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
     # ===== STEP 6: EMA 60 CHECK (trend filter) =====
     ema_60 = df['close'].ewm(span=60, adjust=False).mean()
     curr_ema60 = ema_60.iloc[-1]
-    
+
     # Breakout dovrebbe essere sopra EMA 60 (uptrend)
-    #above_ema60 = breakout_close > curr_ema60
+    above_ema60 = breakout_close > ema60_at_break
     ema60_at_break = ema_60.iloc[breakout_idx]
 
     if breakout_close <= ema60_at_break:
@@ -4912,9 +4912,17 @@ def calculate_optimal_position_size(
     qty = adjusted_risk / risk_per_unit
     
     # ===== SANITY CHECK: Absolute maximum per evitare qty folli =====
-    MAX_CONTRACTS_ABSOLUTE = 1_000_000  # Max 1M contracts per qualsiasi symbol
+    # ✅ FIX: Limite diverso per low-price vs normal coins
+    if 'SHIB' in symbol or 'PEPE' in symbol or 'SYN' in symbol or '1000' in symbol:
+        MAX_CONTRACTS_ABSOLUTE = 100_000  # Max 100K per low-price coins
+    else:
+        MAX_CONTRACTS_ABSOLUTE = 1_000_000  # Max 1M per normal coins
+    
     if qty > MAX_CONTRACTS_ABSOLUTE:
-        logging.warning(f"{symbol}: Calculated qty {qty:.0f} exceeds absolute max, capping to {MAX_CONTRACTS_ABSOLUTE}")
+        logging.warning(
+            f"{symbol}: Calculated qty {qty:.0f} exceeds absolute max "
+            f"({MAX_CONTRACTS_ABSOLUTE}), capping"
+        )
         qty = MAX_CONTRACTS_ABSOLUTE
     
     # ===== STEP 4: Applica limiti per symbol =====
@@ -4976,15 +4984,15 @@ def get_symbol_qty_limits(symbol: str) -> dict:
             'description': 'Solana'
         }
     
-    elif 'DOGE' in symbol or 'SHIB' in symbol or 'PEPE' in symbol:
-        # Coin a basso prezzo
+    elif 'DOGE' in symbol or 'SHIB' in symbol or 'PEPE' in symbol or 'SYN' in symbol or '1000' in symbol:
+        # Coin a basso prezzo (< $0.01)
         return {
-            'min': 1.0,
-            'max': 500000.0,  # Max 500K contracts (era 1M)
-            'step': 1.0,
+            'min': 100.0,      # ✅ Min 100 (non 1.0)
+            'max': 100000.0,   # ✅ Max 100K (ridotto da 500K)
+            'step': 100.0,     # ✅ Step 100 (non 1.0)
             'description': 'Low-price coin'
         }
-    
+        
     else:
         # Default per unknown symbol
         return {
@@ -5512,6 +5520,24 @@ async def place_bybit_order(
             'error': 'quantity_invalid',
             'message': str(e)
         }
+
+    # ✅ FIX: DOUBLE-CHECK qty non superi Bybit hard limits
+    BYBIT_HARD_LIMITS = {
+        'SHIB': 3_000_000_000_000,   # 3 trilioni
+        'PEPE': 3_000_000_000_000,
+        'SYN': 3_000_000_000,        # 3 miliardi
+        'FLOKI': 3_000_000_000,
+    }
+    
+    # Check generico per symbol a basso prezzo
+    hard_limit = BYBIT_HARD_LIMITS.get(symbol.replace('USDT', ''), None)
+    
+    if hard_limit and qty_validated > hard_limit:
+        logging.error(
+            f"{symbol}: Qty {qty_validated:.0f} exceeds Bybit hard limit "
+            f"({hard_limit:,.0f}). Capping."
+        )
+        qty_validated = hard_limit * 0.95  # 95% del limite per safety
     
     # ===== STEP 5: VALIDA PREZZI =====
     try:
