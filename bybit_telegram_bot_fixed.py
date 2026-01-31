@@ -3969,6 +3969,9 @@ def is_liquidity_sweep_reversal(df: pd.DataFrame):
 def is_pin_bar_bullish_enhanced(candle, df):
     """
     📍 PIN BAR BULLISH – Crypto Scalping 5m (Professional Version)
+    
+    MODIFICATO: Accetta SOLO candele VERDI (bullish)
+    Motivo: Pin bar rosse spesso continuano la discesa invece di invertire
     """
 
     if len(df) < 60 or 'volume' not in df.columns:
@@ -3979,6 +3982,13 @@ def is_pin_bar_bullish_enhanced(candle, df):
     lower_wick_pct = 0.0
     rejection_strength = 0.0
 
+    # ===== NUOVO CHECK: SOLO CANDELE VERDI =====
+    is_bullish = candle['close'] > candle['open']
+    
+    if not is_bullish:
+        logging.debug("Pin Bar: Candela ROSSA - SKIP (solo verdi accettate)")
+        return (False, None, None)
+    
     # ===== ANATOMIA CANDELA =====
     body = abs(candle['close'] - candle['open'])
     total_range = candle['high'] - candle['low']
@@ -3992,19 +4002,25 @@ def is_pin_bar_bullish_enhanced(candle, df):
     lower_wick_pct = lower_wick / total_range
     upper_wick_pct = upper_wick / total_range
 
-    # Pin bar base
+    # Pin bar base requirements
     if lower_wick_pct < 0.55:
+        logging.debug(f"Pin Bar: Lower wick {lower_wick_pct*100:.1f}% < 55%")
         return (False, None, None)
+    
     if upper_wick_pct > 0.25:
+        logging.debug(f"Pin Bar: Upper wick {upper_wick_pct*100:.1f}% > 25%")
         return (False, None, None)
+    
+    # Body size check (non troppo grande, non troppo piccolo)
     if body_pct > 0.30 or body_pct < 0.05:
+        logging.debug(f"Pin Bar: Body {body_pct*100:.1f}% fuori range (5-30%)")
         return (False, None, None)
 
+    # Close position (deve chiudere nella parte alta)
     close_position = (candle['close'] - candle['low']) / total_range
     if close_position < 0.50:
+        logging.debug(f"Pin Bar: Close position {close_position*100:.1f}% < 50%")
         return (False, None, None)
-
-    is_bullish = candle['close'] > candle['open']
 
     # ===== VOLUME =====
     avg_vol = df['volume'].iloc[-21:-1].mean()
@@ -4024,15 +4040,15 @@ def is_pin_bar_bullish_enhanced(candle, df):
 
     # Tail distance to EMA
     tail_distance_to_ema10 = abs(tail_low - curr_ema10) / curr_ema10
-    # ← AGGIUNGI QUESTA RIGA MANCANTE:
     tail_distance_to_ema60 = abs(tail_low - curr_ema60) / curr_ema60
     
     # Check se tail tocca le EMA
     tail_near_ema10 = tail_distance_to_ema10 < 0.01  # Entro 1%
     tail_near_ema60 = tail_distance_to_ema60 < 0.005  # Entro 0.5%
 
-    # Trend filter
+    # Trend filter (DEVE essere sopra EMA 60)
     if curr_price <= curr_ema60 * 0.995:
+        logging.debug(f"Pin Bar: Price {curr_price:.4f} <= EMA60 {curr_ema60:.4f}")
         return (False, None, None)
 
     # ===== PIN BAR SU LIVELLO =====
@@ -4041,6 +4057,7 @@ def is_pin_bar_bullish_enhanced(candle, df):
     near_ema60 = abs(pin_low - curr_ema60) / curr_ema60 < 0.005
 
     if not (near_ema10 or near_ema60):
+        logging.debug("Pin Bar: Tail non tocca EMA 10 o EMA 60")
         return (False, None, None)
 
     # ===== LIQUIDITY SWEEP =====
@@ -4079,13 +4096,16 @@ def is_pin_bar_bullish_enhanced(candle, df):
         tier = "OK"
         score = 60
     else:
+        logging.debug("Pin Bar: Score insufficiente per tier assignment")
         return (False, None, None)
 
     # ===== BONUS =====
     if swept_liquidity:
         score += 10
-    if is_bullish:
-        score += 5
+    
+    # Bonus per candela verde (già verificato all'inizio)
+    score += 5
+    
     if upper_wick_pct < 0.10:
         score += 5
 
@@ -4107,12 +4127,19 @@ def is_pin_bar_bullish_enhanced(candle, df):
         "lower_wick_pct": lower_wick_pct * 100,
         "close_position": close_position * 100,
         "volume_ratio": vol_ratio,
-        "body_pct": body_pct,
+        "body_pct": body_pct * 100,
         "near_ema10": near_ema10,
         "near_ema60": near_ema60,
         "swept_liquidity": swept_liquidity,
-        "tail_distance_to_ema60": tail_distance_to_ema60 * 100,  # ← AGGIUNTO
+        "tail_distance_to_ema60": tail_distance_to_ema60 * 100,
+        "is_green_candle": True  # Sempre True ora
     }
+    
+    logging.info(
+        f"✅ Pin Bar Bullish FOUND (GREEN): "
+        f"Tier={tier}, Score={score}, Wick={lower_wick_pct*100:.1f}%, "
+        f"Vol={vol_ratio:.1f}x"
+    )
 
     return (True, tier, data)
 
