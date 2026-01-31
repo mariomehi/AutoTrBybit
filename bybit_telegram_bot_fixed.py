@@ -9503,13 +9503,12 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     Usage:
     - /list - Mostra tutte le analisi attive
-    - /list clear - Rimuove TUTTE le analisi attive
-    - /list clear SYMBOL - Rimuove tutte le analisi per un symbol specifico
+    - /list clear - Rimuove TUTTE le analisi attive (senza conferma)
     """
     chat_id = update.effective_chat.id
     args = context.args
     
-    # ===== ACTION: CLEAR =====
+    # ===== ACTION: CLEAR (SEMPLIFICATO - NO CONFIRM, NO SYMBOL) =====
     if args and args[0].lower() == 'clear':
         with config.ACTIVE_ANALYSES_LOCK:
             chat_map = config.ACTIVE_ANALYSES.get(chat_id, {})
@@ -9522,76 +9521,18 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # CLEAR SPECIFIC SYMBOL
-        if len(args) > 1:
-            target_symbol = args[1].upper()
-            
-            removed = []
-            with config.ACTIVE_ANALYSES_LOCK:
-                for key in list(chat_map.keys()):
-                    if key.startswith(f'{target_symbol}-'):
-                        job = chat_map[key]
-                        job.schedule_removal()
-                        del chat_map[key]
-                        removed.append(key)
-            
-            # Rimuovi anche dalle notifiche complete
-            with config.FULL_NOTIFICATIONS_LOCK:
-                if chat_id in config.FULL_NOTIFICATIONS:
-                    for key in removed:
-                        config.FULL_NOTIFICATIONS[chat_id].discard(key)
-            
-            if removed:
-                msg = f'🗑️ <b>Analisi rimosse per {target_symbol}</b>\n\n'
-                msg += f'Rimossi {len(removed)} timeframe:\n'
-                for key in removed:
-                    _, tf = key.split('-')
-                    msg += f'• {tf}\n'
-                
-                await update.message.reply_text(msg, parse_mode='HTML')
-            else:
-                await update.message.reply_text(
-                    f'⚠️ Nessuna analisi attiva per {target_symbol}',
-                    parse_mode='HTML'
-                )
-            return
+        # Raggruppa per symbol
+        symbols = {}
+        for key in chat_map.keys():
+            symbol, tf = key.split('-')
+            if symbol not in symbols:
+                symbols[symbol] = []
+            symbols[symbol].append(tf)
         
-        # CLEAR ALL
         total_count = len(chat_map)
         
-        # Conferma prima di rimuovere tutto
-        await update.message.reply_text(
-            f'⚠️ <b>ATTENZIONE!</b>\n\n'
-            f'Stai per rimuovere <b>{total_count}</b> analisi attive.\n\n'
-            f'Confermi?\n'
-            f'Usa: <code>/list clear confirm</code>',
-            parse_mode='HTML'
-        )
-        return
-    
-    # ===== ACTION: CLEAR CONFIRM =====
-    if args and len(args) >= 2 and args[0].lower() == 'clear' and args[1].lower() == 'confirm':
+        # Ferma tutti i job
         with config.ACTIVE_ANALYSES_LOCK:
-            chat_map = config.ACTIVE_ANALYSES.get(chat_id, {})
-            
-            if not chat_map:
-                await update.message.reply_text(
-                    '📭 <b>Nessuna analisi attiva</b>',
-                    parse_mode='HTML'
-                )
-                return
-            
-            # Raggruppa per symbol
-            symbols = {}
-            for key in chat_map.keys():
-                symbol, tf = key.split('-')
-                if symbol not in symbols:
-                    symbols[symbol] = []
-                symbols[symbol].append(tf)
-            
-            total_count = len(chat_map)
-            
-            # Ferma tutti i job
             for key, job in list(chat_map.items()):
                 job.schedule_removal()
                 del chat_map[key]
@@ -9712,7 +9653,6 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg += "/pausa SYMBOL TF - Solo pattern\n\n"
     
     msg += "<b>🗑️ Rimozione:</b>\n"
-    msg += "/list clear SYMBOL - Rimuovi symbol\n"
     msg += "/list clear - Rimuovi TUTTE le analisi\n"
     msg += "/posizioni - Dettagli posizioni"
     
