@@ -2539,8 +2539,8 @@ def is_bud_pattern(df: pd.DataFrame, require_maxi: bool = False) -> tuple:
     curr_ema60 = ema_60.iloc[-1]
 
     # Breakout dovrebbe essere sopra EMA 60 (uptrend)
-    above_ema60 = breakout_close > ema60_at_break
     ema60_at_break = ema_60.iloc[breakout_idx]
+    above_ema60 = breakout_close > ema60_at_break
 
     if breakout_close <= ema60_at_break:
         return (False, None)
