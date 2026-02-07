@@ -287,7 +287,7 @@ LIMIT_ORDER_CONFIG = {
 # ===== AGGRESSIVE PROFIT LOCK CONFIG =====
 PROFIT_LOCK_ENABLED = True  # Abilita/disabilita profit lock aggressivo
 PROFIT_LOCK_CONFIG = {
-    'multiplier': 3.5,        # Attiva quando profit >= 3.5x risk iniziale
+    'multiplier': 3.0,        # Attiva quando profit >= 3.0x risk iniziale
     'retention': 0.90,        # Trattieni 80% del profit raggiunto
     'min_profit_usd': 20.0,   # Min profit in USD per attivare (evita micro-profit)
 }
@@ -350,7 +350,7 @@ BREAKEVEN_CONFIG = {
     # METODO 1: Time-Based (dopo N minuti, sposta SL a break-even)
     'time_based': {
         'enabled': True,
-        'minutes': 10,  # Dopo 10 minuti → SL a break-even
+        'minutes': 5,  # Dopo 10 minuti → SL a break-even
         'buffer_pct': 0.001,  # 0.1% sopra entry (per coprire fee)
     },
     
