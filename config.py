@@ -357,7 +357,7 @@ BREAKEVEN_CONFIG = {
     # METODO 2: Candle-Based (dopo N candele verdi, proteggi)
     'candle_based': {
         'enabled': True,
-        'min_green_candles': 2,  # 2 candele verdi consecutive
+        'min_green_candles': 3,  # 2 candele verdi consecutive
         'buffer_pct': 0.002,  # 0.2% sopra entry
     },
     
