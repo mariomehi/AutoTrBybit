@@ -20,7 +20,7 @@ CACHE_EXPIRY_HOURS = 24  # Le info dei symbol cambiano raramente
 # Strategy parameters
 #VOLUME_FILTER = True
 ATR_MULT_SL = 1.0
-ATR_MULT_TP = 1.3
+ATR_MULT_TP = 1.8
 RISK_USD = 10.0
 
 RISK_ADAPTIVE = {
@@ -57,9 +57,9 @@ RISK_ADAPTIVE = {
 ENABLED_TFS = ['5m']
 
 ATR_MULTIPLIERS_BY_TF = {
-    '5m': {'sl': 1.0, 'tp': 1.3, 'min_rr': 1.2},   # Scalping
-    '15m': {'sl': 1.2, 'tp': 1.8, 'min_rr': 1.4},  # Intraday
-    '1h': {'sl': 1.5, 'tp': 2.5, 'min_rr': 1.6},   # Day trading
+    '5m': {'sl': 1.0, 'tp': 2.0, 'minrr': 1.8},  # Era: tp 1.3, minrr 1.2
+    '15m': {'sl': 1.2, 'tp': 2.5, 'minrr': 2.0},  
+    '1h': {'sl': 1.5, 'tp': 3.5, 'minrr': 2.5},
 }
 
 # Flag globale: abilita/disabilita volume filter
