@@ -184,15 +184,15 @@ class PatternRegistry:
         ))
         
         self.register(PatternConfig(
-            name="Morning Star + EMA Breakout",
+            name="Morning Star EMA Breakout",
             key="morning_star_ema_breakout",
-            detector=self._detect_morning_star_ema,
+            detector=lambda df: self._detect_morning_star_ema_breakout(df),
             enabled=True,
             side="Buy",
             tier=2,
             emoji="⭐💥",
-            description="Morning Star + rottura EMA",
-            min_volume_ratio=2.0,
+            description="Morning Star + EMA breakthrough (IMPROVED - Early Entry)",
+            min_volume_ratio=1.3,  # Più permissivo
             order_type='market'
         ))
         
@@ -309,14 +309,16 @@ class PatternRegistry:
         found = is_compression_breakout(df)
         return (found, {} if found else None)
     
-    def _detect_morning_star_ema(self, df: pd.DataFrame) -> Tuple[bool, Optional[Dict]]:
-        """
-        Wrapper per is_morning_star_ema_breakout
-        Nota: ritorna solo bool, quindi creiamo dict vuoto
-        """
-        from bybit_telegram_bot_fixed import is_morning_star_ema_breakout
-        found = is_morning_star_ema_breakout(df)  # ← RIMUOVI prev, curr
-        return (found, {} if found else None)
+    def _detect_morning_star_ema_breakout(self, df: pd.DataFrame) -> Tuple[bool, Optional[Dict]]:
+        """Wrapper per Morning Star EMA Breakout IMPROVED"""
+        from bybit_telegram_bot_fixed import is_morning_star_ema_breakout_improved
+        
+        result = is_morning_star_ema_breakout_improved(df)
+        
+        if isinstance(result, tuple) and len(result) == 2:
+            return result
+        else:
+            return (False, None)
     
     def _detect_higher_low(self, df: pd.DataFrame) -> Tuple[bool, Optional[Dict]]:
         """Wrapper per is_higher_low_consolidation_breakout"""
