@@ -15,13 +15,14 @@ TRADING_MODE = os.environ.get('TRADING_MODE', 'demo')
 # Cache globale per evitare chiamate API ripetitive
 INSTRUMENT_INFO_CACHE = {}
 INSTRUMENT_CACHE_LOCK = threading.Lock()
-CACHE_EXPIRY_HOURS = 24  # Le info dei symbol cambiano raramente
+CACHE_EXPIRY_HOURS = 0.08  # Le info dei symbol cambiano raramente
+_KLINES_CACHE_MAX_SIZE = 50  # Limita cache
 
 # Strategy parameters
 #VOLUME_FILTER = True
-ATR_MULT_SL = 1.0
-ATR_MULT_TP = 1.8
-RISK_USD = 10.0
+ATR_MULT_SL = 1.2
+ATR_MULT_TP = 2.5
+RISK_USD = 8.0
 
 RISK_ADAPTIVE = {
     'enabled': True,
@@ -199,7 +200,7 @@ EMA_FILTER_ENABLED = True  # Abilita/disabilita filtro EMA
 # 'strict' = Pattern valido SOLO se tutte le condizioni EMA sono rispettate
 # 'loose' = Pattern valido ma segnala se condizioni EMA non ottimali
 # 'off' = Nessun filtro EMA (solo pattern)
-EMA_FILTER_MODE = 'loose'  # 'strict', 'loose', 'off'
+EMA_FILTER_MODE = 'strict'  # 'strict', 'loose', 'off'
 
 HTF_MOMENTUM_CONFIG = {
     'enabled': True,
@@ -323,7 +324,7 @@ BYBIT_PUBLIC_REST = 'https://api.bybit.com'  # Dati di mercato sempre da mainnet
 # ===== MARKET TIME FILTER =====
 MARKET_TIME_FILTER_ENABLED = True
 # Ore UTC bloccate (default: 01-04 UTC)
-MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = {0, 1, 2, 3, 4}
+MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = {0, 1, 2, 3, 4, 5, 6}
 # Modalità: se True blocca solo autotrade, se False blocca anche analisi pattern
 MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY = False  
 TRADING_HOURS_CONFIG = {
