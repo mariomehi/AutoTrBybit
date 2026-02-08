@@ -19,19 +19,68 @@ CACHE_EXPIRY_HOURS = 24  # Le info dei symbol cambiano raramente
 
 # Strategy parameters
 #VOLUME_FILTER = True
-ATR_MULT_SL = 1.5
-ATR_MULT_TP = 2.0
+ATR_MULT_SL = 1.0
+ATR_MULT_TP = 1.3
 RISK_USD = 10.0
-ENABLED_TFS = ['1m','3m','5m','15m','30m','1h','4h']
+
+RISK_ADAPTIVE = {
+    'enabled': True,
+    'base_risk_usd': 10.0,
+    
+    # Moltiplica risk basato su session trading
+    'session_multipliers': {
+        'asian': 0.6,     # Ore 0-8 UTC: bassa liquidità
+        'london': 1.0,    # Ore 8-13 UTC: liquidità normale
+        'overlap': 1.3,   # Ore 13-16 UTC: overlap London+NY (best)
+        'newyork': 1.2,   # Ore 16-22 UTC: liquidità alta
+        'late_us': 0.8,   # Ore 22-24 UTC: liquidità calante
+    },
+    
+    # Riduci risk durante alta volatilità
+    'volatility_adjustment': {
+        'enabled': True,
+        'atr_threshold_high': 0.005,  # ATR > 0.5% = high volatility
+        'atr_threshold_very_high': 0.008,  # ATR > 0.8% = extreme
+        'high_vol_multiplier': 0.7,  # Riduci a 70%
+        'extreme_vol_multiplier': 0.5,  # Riduci a 50%
+    },
+    
+    # Aumenta risk dopo winning streak
+    'streak_adjustment': {
+        'enabled': True,
+        'min_wins_for_increase': 3,  # 3 win di fila
+        'increase_multiplier': 1.2,  # Aumenta a 120%
+        'max_multiplier': 1.5,  # Max 150% del base
+    },
+}
+
+ENABLED_TFS = ['5m']
+
+ATR_MULTIPLIERS_BY_TF = {
+    '5m': {'sl': 1.0, 'tp': 1.3, 'min_rr': 1.2},   # Scalping
+    '15m': {'sl': 1.2, 'tp': 1.8, 'min_rr': 1.4},  # Intraday
+    '1h': {'sl': 1.5, 'tp': 2.5, 'min_rr': 1.6},   # Day trading
+}
 
 # Flag globale: abilita/disabilita volume filter
 VOLUME_FILTER_ENABLED = True  # Default: abilitato
 # Modalità volume filter
-VOLUME_FILTER_MODE = 'pattern-only'  # 'strict', 'adaptive', 'pattern-only'
+VOLUME_FILTER_MODE = 'adaptive'  # 'strict', 'adaptive', 'pattern-only'
 # Threshold per diversi modi
 VOLUME_THRESHOLDS = {
-    'strict': 2.0,      # Volume > 2x media (originale)
-    'adaptive': 1.3,    # Volume > 1.3x media (rilassato)
+    'strict': 2.5,     # 2.5x per pattern ultra-strong
+    'adaptive': 1.5,   # 1.5x per balance qualità/quantità
+    'pattern-only': {  # Custom per pattern
+        'volume_spike_breakout': 2.0,
+        'liquidity_sweep_reversal': 1.8,
+        'bud_pattern': 1.5,
+    }
+}
+
+VOLUME_THRESHOLDS_BY_TF = {
+    '5m': 1.5,   # 5m: volume medio-alto (scalping ha volume)
+    '15m': 1.8,  # 15m: volume alto
+    '1h': 2.0,   # 1h: volume molto alto
 }
 
 TREND_FILTER_ENABLED = True
@@ -71,34 +120,34 @@ TRAILING_STOP_ENABLED = True
 # ===== ADVANCED TRAILING CONFIG (Multi-Level) =====
 TRAILING_CONFIG_ADVANCED = {
     'levels': [
-        # Level 1: Attiva presto con buffer largo
+        # Level 1: MOLTO AGGRESSIVO per 5m
         {
-            'profit_pct': 0.5,      # Attiva a +0.3% profit
-            'ema_buffer': 0.004,    # 0.3% sotto EMA (largo)
-            'label': 'Early Protection'
+            'profit_pct': 0.3,      # Attiva SUBITO a +0.3%
+            'ema_buffer': 0.0015,    # Buffer strettissimo 0.15%
+            'label': 'Quick Lock 5m'
         },
-        # Level 2: Standard, buffer medio
+        # Level 2: Dopo piccolo profit, stringi subito
         {
-            'profit_pct': 0.8,      # +0.5% profit
-            'ema_buffer': 0.003,    # 0.2% sotto EMA (medio)
-            'label': 'Standard Trail'
+            'profit_pct': 0.6,      # +0.6% profit
+            'ema_buffer': 0.001,    # 0.1% buffer
+            'label': 'Fast Trail 5m'
         },
-        # Level 3: Profit buono, stringi il trailing
+        # Level 3: Profit decente, ultra-tight
         {
-            'profit_pct': 1.5,      # +1.0% profit
-            'ema_buffer': 0.002,    # 0.1% sotto EMA (stretto)
+            'profit_pct': 1.0,      # +1.0% profit
+            'ema_buffer': 0.0008,    # 0.08% buffer
             'label': 'Tight Trail'
         },
-        # Level 4: Grande profit, trailing ultra-stretto
+        # Level 4: Grande profit (raro su 5m)
         {
-            'profit_pct': 2.5,      # +2.0% profit
-            'ema_buffer': 0.001,   # 0.05% sotto EMA (ultra stretto)
+            'profit_pct': 1.5,      # +1.5% profit (max realistico 5m)
+            'ema_buffer': 0.0005,   # 0.05% buffer
             'label': 'Ultra Tight Trail'
         },
     ],
     'never_back': True,         # SL non torna mai indietro
-    'check_interval': 30,       # Check ogni 60 secondi (più frequente)
-    'min_move_pct': 0.1,        # SL deve muoversi almeno 0.1% per aggiornare
+    'check_interval': 20,       # Check ogni 20 secondi (più frequente)
+    'min_move_pct': 0.05,        # SL deve muoversi almeno 0.1% per aggiornare
 }
 
 # ===== BACKWARD COMPATIBILITY (per codice esistente) =====
@@ -114,7 +163,7 @@ TRAILING_CONFIG = {
 TRAILING_EMA_TIMEFRAME = {
     '1m': '5m',   # Entry su 1m → EMA 10 da 5m
     '3m': '5m',   # Entry su 3m → EMA 10 da 5m
-    '5m': '5m',  # Entry su 5m → EMA 10 da 15m
+    '5m': '5m',  # Entry su 5m → EMA 10 da 5m
     '15m': '30m', # Entry su 15m → EMA 10 da 30m
     '30m': '1h',  # Entry su 30m → EMA 10 da 1h
     '1h': '4h',   # Entry su 1h → EMA 10 da 4h
@@ -122,13 +171,25 @@ TRAILING_EMA_TIMEFRAME = {
 }
 
 # Buffer EMA Stop Loss (% sotto l'EMA per evitare falsi breakout)
-EMA_SL_BUFFER = 0.002  # 0.2% sotto l'EMA
+EMA_SL_BUFFER = 0.0015  # 0.2% sotto l'EMA
 # Esempio: se EMA 10 = $100, SL = $100 * (1 - 0.002) = $99.80
+EMA_SL_BUFFER_BY_TF = {
+    '5m': 0.0015,   # 0.15% (strettissimo per scalping)
+    '15m': 0.0020,  # 0.20%
+    '30m': 0.0025,  # 0.25%
+    '1h': 0.0030,   # 0.30%
+}
 
 # Symbol-specific risk overrides (opzionale)
 SYMBOL_RISK_OVERRIDE = {
-    # Esempio: per MONUSDT usa solo $5 invece di $10
-    # 'MONUSDT': 5.0,
+    # Crypto volatili = risk ridotto
+    'DOGEUSDT': 5.0,   # Doge molto volatile
+    'SHIBUSDT': 5.0,   # Shib pump/dump
+    'PEPEUSDT': 5.0,   # Meme coin volatili
+    
+    # Crypto stabili = risk normale/aumentato
+    'BTCUSDT': 12.0,   # BTC più stabile, risk 20% in più
+    'ETHUSDT': 11.0,   # ETH stabile
 }
 
 # EMA Filter System
@@ -196,13 +257,15 @@ EMA_CONFIG = {
 AUTO_DISCOVERY_ENABLED = True  # Abilita/disabilita auto-discovery
 AUTO_DISCOVERY_CONFIG = {
     'enabled': True,
-    'top_count': 10,  # Top 10 symbols
+    'top_count': 7,  # Top 10 symbols
     'timeframe': '5m',  # Timeframe da analizzare
     'autotrade': True,  # Autotrade per auto-discovery (False = solo notifiche)
-    'update_interval': 7200,  # 2 ore in secondi (12 * 60 * 60)
+    'update_interval': 3600,  # 1 ora in secondi (12 * 60 * 60)
     'min_volume_usdt': 5000000,  # Min volume 24h: 10M USDT
-    'min_price_change': 5.0,  # Min variazione 24h: +5%
-    'max_price_change': 110.0,  # Max variazione 24h: +110% (evita pump & dump)
+    'min_price_change': 3.0,  # Min variazione 24h: +3%
+    'max_price_change': 120.0,  # Max variazione 24h: +110% (evita pump & dump)
+    'min_trades_24h': 50000,  # Min 50k trades 24h (liquidità profondità)
+    'max_spread_pct': 0.05,  # Max 0.05% spread (evita low liquidity)
     'exclude_symbols': ['USDCUSDT', 'TUSDUSDT', 'BUSDUSDT'],  # Stablecoins da escludere
     'sorting': 'price_change_percent',  # 'price_change_percent' o 'volume'
 }
@@ -260,22 +323,25 @@ BYBIT_PUBLIC_REST = 'https://api.bybit.com'  # Dati di mercato sempre da mainnet
 # ===== MARKET TIME FILTER =====
 MARKET_TIME_FILTER_ENABLED = True
 # Ore UTC bloccate (default: 01-04 UTC)
-MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = {1, 2}
+MARKET_TIME_FILTER_BLOCKED_UTC_HOURS = {0, 1, 2, 3, 4}
 # Modalità: se True blocca solo autotrade, se False blocca anche analisi pattern
-MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY = True
+MARKET_TIME_FILTER_BLOCK_AUTOTRADE_ONLY = False  
+TRADING_HOURS_CONFIG = {
+    'timezone': 'UTC',
+    'allowed_hours': list(range(8, 22)),  # 08:00-21:59 UTC (London + NY)
+    'best_hours': list(range(13, 16)),    # 13:00-15:59 UTC (Overlap)
+    'best_hours_multiplier': 1.3,  # Risk 30% in più durante overlap
+}
 
 # Aggiungi configurazione pattern-specific
 PATTERN_ORDER_TYPE = {
-    # Pattern veloci → MARKET (no time to wait)
     'volume_spike_breakout': 'market',
     'liquidity_sweep_reversal': 'market',
     'pin_bar_bullish': 'market',
-    
-    # Pattern lenti → LIMIT (hai tempo)
-    'breakout_retest': 'limit',       # Retest = hai tempo
-    'bullish_flag_breakout': 'limit', # Flag = setup lento
-    'morning_star': 'limit',          # 3 candele = lento
-    'bullish_engulfing': 'limit',     # 2 candele = tempo
+    'bud_pattern': 'market',  # Veloce anche questo
+    'sr_bounce': 'market',
+    'bullish_comeback': 'market',
+    'bullish_engulfing': 'limit',
 }
 
 LIMIT_ORDER_CONFIG = {
@@ -287,9 +353,15 @@ LIMIT_ORDER_CONFIG = {
 # ===== AGGRESSIVE PROFIT LOCK CONFIG =====
 PROFIT_LOCK_ENABLED = True  # Abilita/disabilita profit lock aggressivo
 PROFIT_LOCK_CONFIG = {
-    'multiplier': 3.0,        # Attiva quando profit >= 3.0x risk iniziale
-    'retention': 0.90,        # Trattieni 80% del profit raggiunto
-    'min_profit_usd': 20.0,   # Min profit in USD per attivare (evita micro-profit)
+    'multiplier': 2.0,        # Attiva quando profit >= 3.0x risk iniziale
+    'retention': 0.80,        # Trattieni 80% del profit raggiunto
+    'min_profit_usd': 10.0,   # Min profit in USD per attivare (evita micro-profit)
+        # AGGIUNGI: Livelli multipli
+    'levels': [
+        {'multiplier': 2.0, 'retention': 0.70, 'label': 'Quick Lock'},
+        {'multiplier': 3.0, 'retention': 0.80, 'label': 'Strong Lock'},
+        {'multiplier': 4.0, 'retention': 0.90, 'label': 'Full Lock'},
+    ]
 }
 
 # ===== MULTI-TP SYSTEM (Dynamic Take Profit) =====
@@ -301,30 +373,30 @@ MULTI_TP_CONFIG = {
     # Livelli TP (in Risk-Reward ratio)
     'levels': [
         {
-            'label': 'TP1 - Quick Profit',
-            'rr_ratio': 1.0,      # 1.0R dal entry
+            'label': 'TP1 - Quick Scalp',
+            'rr_ratio': 0.8,      # Più veloce, target +0.8R
             'close_pct': 0.50,    # Chiudi 50% posizione
             'emoji': '🎯'
         },
         {
             'label': 'TP2 - Bank It',
-            'rr_ratio': 1.5,      # 1.5R dal entry
+            'rr_ratio': 1.2,      # Realistico per 5m
             'close_pct': 0.30,    # Chiudi 30% posizione
             'emoji': '🎯🎯'
         },
         {
             'label': 'TP3 - Runner',
-            'rr_ratio': 2.5,      # 2.5R dal entry
-            'close_pct': 0.30,    # Chiudi 20% posizione (residuo)
+            'rr_ratio': 1.8,      # Max realistico 5m
+            'close_pct': 0.20,    # Chiudi 20% posizione (residuo)
             'emoji': '🎯🎯🎯'
         }
     ],
     
     # Impostazioni avanzate
-    'check_interval': 30,          # Check ogni 30 secondi
+    'check_interval': 15,          # Check ogni 15 secondi
     'min_partial_qty': 0.001,      # Min qty per chiusura parziale (BTC)
     'activate_trailing_after_tp1': True,  # Trailing attivo dopo TP1
-    'buffer_pct': 0.002,           # Buffer 0.2% per considerar TP "hit"
+    'buffer_pct': 0.003,           # Buffer 0.2% per considerar TP "hit"
 }
 
 # Tracking TP hit per posizione
@@ -350,34 +422,34 @@ BREAKEVEN_CONFIG = {
     # METODO 1: Time-Based (dopo N minuti, sposta SL a break-even)
     'time_based': {
         'enabled': True,
-        'minutes': 5,  # Dopo 10 minuti → SL a break-even
-        'buffer_pct': 0.001,  # 0.1% sopra entry (per coprire fee)
+        'minutes': 3,  # Dopo 3 minuti → SL a break-even
+        'buffer_pct': 0.0005,  # 0.05% sopra entry (per coprire fee)
     },
     
     # METODO 2: Candle-Based (dopo N candele verdi, proteggi)
     'candle_based': {
         'enabled': True,
         'min_green_candles': 3,  # 2 candele verdi consecutive
-        'buffer_pct': 0.002,  # 0.2% sopra entry
+        'buffer_pct': 0.0008,  # 0.2% sopra entry
     },
     
     # METODO 3: Profit-Based (appena in profit minimo)
     'profit_based': {
         'enabled': True,
-        'min_profit_pct': 0.3,  # Appena +0.3% profit
-        'lock_pct': 0.1,  # Sposta SL a +0.1% (garantisci almeno questo)
+        'min_profit_pct': 0.25,  # Appena +0.25% profit (velocissimo)
+        'lock_pct': 0.08,  # Blocca +0.08% (copre fee + small profit)
     },
     
     # METODO 4: Quick Exit (esci se segnali negativi dopo N min)
     'quick_exit': {
         'enabled': True,
-        'check_after_minutes': 5,  # Controlla dopo 5 min
+        'check_after_minutes': 3,  # Controlla dopo 5 min
         'exit_if_negative': True,  # Esci se in negativo
-        'max_loss_pct': -0.5,  # Max perdita tollerata: -0.5%
+        'max_loss_pct': -0.4,  # Max -0.4% tollerato
     },
     
     # Check interval
-    'check_interval': 30,  # Controlla ogni 30 secondi
+    'check_interval': 20,  # Controlla ogni 30 secondi
 }
 
 # Pattern Management System
@@ -389,29 +461,53 @@ AVAILABLE_PATTERNS = {
         'name': 'Volume Spike Breakout',
         'enabled': True,  # ✅
         'description': 'Breakout volume 3x+, EMA alignment',
+        'min_timeframes': ['5m', '15m'],  # AGGIUNGI questo
+        'priority': 1,  # AGGIUNGI priority per ordinamento
         'side': 'Buy',
         'emoji': '📊💥'
-    },
-    'breakout_retest': {
-        'name': 'Breakout + Retest',
-        'enabled': True,  # ✅
-        'description': 'Consolidation → Breakout → Retest → Bounce',
-        'side': 'Buy',
-        'emoji': '🔄📈'
-    },
-    'triple_touch_breakout': {
-        'name': 'Triple Touch Breakout',
-        'enabled': True,  # ✅
-        'description': '3 tocchi resistance + breakout sopra EMA 60',
-        'side': 'Buy',
-        'emoji': '🎯3️⃣'
     },
     'liquidity_sweep_reversal': {
         'name': 'Liquidity Sweep + Reversal',
         'enabled': True,  # ✅
         'description': 'Smart money sweep + reversal',
+        'min_timeframes': ['5m', '15m'],
+        'priority': 2,
         'side': 'Buy',
         'emoji': '💎'
+    },
+    'pin_bar_bullish': {
+        'name': 'Pin Bar Bullish',
+        'enabled': True,  # ✅ FAST (single candle)
+        'description': 'Pin bar su EMA (Enhanced)',
+        'min_timeframes': ['5m'],
+        'priority': 3,
+        'side': 'Buy',
+        'emoji': '📍'
+    },
+    'bud_pattern': {
+        'name': 'BUD Pattern',
+        'enabled': True, # ✅ OK per 5m
+        'description': 'Breakout + 2 candele riposo nel range',
+        'min_timeframes': ['5m', '15m'],
+        'priority': 4,
+        'side': 'Buy',
+        'emoji': '🌱'
+    },
+    'breakout_retest': {
+        'name': 'Breakout + Retest',
+        'enabled': False,  # ❌ Troppo lento per 5m (richiede consolidamento)
+        'description': 'Consolidation → Breakout → Retest → Bounce',
+        'min_timeframes': ['15m', '30m'],  # Solo timeframes più alti
+        'side': 'Buy',
+        'emoji': '🔄📈'
+    },
+    'triple_touch_breakout': {
+        'name': 'Triple Touch Breakout',
+        'enabled': False,  # ❌ Richiede 3+ touch = tempo
+        'description': '3 tocchi resistance + breakout sopra EMA 60',
+        'min_timeframes': ['15m'],
+        'side': 'Buy',
+        'emoji': '🎯3️⃣'
     },
     
     # ═══════════════════════════════════════════
@@ -419,57 +515,68 @@ AVAILABLE_PATTERNS = {
     # ═══════════════════════════════════════════
     'sr_bounce': {
         'name': 'Support/Resistance Bounce',
-        'enabled': True,  # ✅
+        'enabled': True,  # ✅ Bounce veloce
         'description': 'Bounce su S/R con rejection',
+        'min_timeframes': ['5m'],
+        'priority': 5,
         'side': 'Buy',
         'emoji': '🎯'
     },
     'bullish_comeback': {
         'name': 'Bullish Comeback',
-        'enabled': True,  # ✅
+        'enabled': True,  # ✅ Reversal veloce
         'description': 'Inversione dopo tentativo ribassista',
+        'min_timeframes': ['5m'],
+        'priority': 6,
         'side': 'Buy',
         'emoji': '🔄'
     },
+    'bullish_engulfing': {
+        'name': 'Bullish Engulfing',
+        'enabled': True,  # ✅ 2 candele OK
+        'description': 'Engulfing su EMA (Enhanced)',
+        'min_timeframes': ['5m'],
+        'priority': 7,
+        'side': 'Buy',
+        'emoji': '🟢'
+    },
     'compression_breakout': {
         'name': 'Compression Breakout (Enhanced)',
-        'enabled': True,  # ✅
+        'enabled': False,  # ❌ Richiede compressione lunga
         'description': 'EMA compression + breakout (RSI, vol, HTF)',
+        'min_timeframes': ['15m', '30m'],
         'side': 'Buy',
         'emoji': '💥'
     },
     'bullish_flag_breakout': {
         'name': 'Bullish Flag Breakout (Enhanced)',
-        'enabled': True,  # ✅
+        'enabled': False,  # ❌ Consolidamento lento
         'description': 'Pole + flag + breakout (vol 2x+)',
+        'min_timeframes': ['30m', '1h'],
         'side': 'Buy',
         'emoji': '🚩'
     },
     'morning_star_ema_breakout': {
         'name': 'Morning Star + EMA Breakout',
-        'enabled': True,  # ✅
+        'enabled': False,  # ❌ Combinazione lenta
         'description': 'Morning Star + rottura EMA',
+        'min_timeframes': ['15m'],
         'side': 'Buy',
         'emoji': '⭐💥'
     },
     'higher_low_breakout': {
         'name': 'Higher Low Consolidation Breakout',
-        'enabled': True,  # ✅
+        'enabled': False,  # ❌ Richiede consolidamento
         'description': 'Impulso + higher lows + breakout',
+        'min_timeframes': ['30m'],
         'side': 'Buy',
         'emoji': '📈🔺'
     },
-        'bud_pattern': {
-        'name': 'BUD Pattern',
-        'enabled': True,
-        'description': 'Breakout + 2 candele riposo nel range',
-        'side': 'Buy',
-        'emoji': '🌱'
-    },
     'maxi_bud_pattern': {
         'name': 'MAXI BUD Pattern',
-        'enabled': True,
+        'enabled': False, # ❌ Richiede 3+ candele riposo (15+ min)
         'description': 'Breakout + 3+ candele riposo (setup più forte)',
+        'min_timeframes': ['15m'],
         'side': 'Buy',
         'emoji': '🌟🌱'
     },
@@ -477,24 +584,11 @@ AVAILABLE_PATTERNS = {
     # ═══════════════════════════════════════════
     # TIER 3: CLASSIC PATTERNS - USA ENHANCED
     # ═══════════════════════════════════════════
-    'bullish_engulfing': {
-        'name': 'Bullish Engulfing',
-        'enabled': True,  # ✅ MA USA ENHANCED VERSION
-        'description': 'Engulfing su EMA (Enhanced)',
-        'side': 'Buy',
-        'emoji': '🟢'
-    },
-    'pin_bar_bullish': {
-        'name': 'Pin Bar Bullish',
-        'enabled': True,  # ✅ MA USA ENHANCED VERSION
-        'description': 'Pin bar su EMA (Enhanced)',
-        'side': 'Buy',
-        'emoji': '📍'
-    },
     'morning_star': {
         'name': 'Morning Star',
-        'enabled': True,  # ✅ ABILITA + USA ENHANCED VERSION
+        'enabled': False,  # ❌ 3 candele = 15 minuti (troppo)
         'description': '3 candele reversal su EMA (Enhanced)',
+        'min_timeframes': ['15m'],
         'side': 'Buy',
         'emoji': '⭐'
     },
