@@ -216,6 +216,53 @@ def bybit_get_klines_cached(symbol: str, interval: str, limit: int = 200) -> pd.
     
     return df
 
+def get_trading_session():
+    """Determina sessione trading corrente"""
+    now_utc = datetime.now(timezone.utc)
+    hour = now_utc.hour
+    
+    if 13 <= hour < 16:
+        return 'overlap', 1.3
+    elif 13 <= hour < 22:
+        return 'newyork', 1.2
+    elif 8 <= hour < 16:
+        return 'london', 1.0
+    else:
+        return 'asian', 0.6
+def calculate_adaptive_risk(symbol, df, timeframe):
+    """Calcola risk adattivo"""
+    base_risk = config.RISK_USD
+    
+    # Session multiplier
+    session, session_mult = get_trading_session()
+    
+    # Volatility adjustment
+    if config.RISK_ADAPTIVE['volatility_adjustment']['enabled']:
+        atr_series = atr(df, period=14)
+        current_atr = atr_series.iloc[-1]
+        current_price = df['close'].iloc[-1]
+        atr_pct = current_atr / current_price
+        
+        if atr_pct > config.RISK_ADAPTIVE['volatility_adjustment']['atr_threshold_very_high']:
+            vol_mult = config.RISK_ADAPTIVE['volatility_adjustment']['extreme_vol_multiplier']
+        elif atr_pct > config.RISK_ADAPTIVE['volatility_adjustment']['atr_threshold_high']:
+            vol_mult = config.RISK_ADAPTIVE['volatility_adjustment']['high_vol_multiplier']
+        else:
+            vol_mult = 1.0
+    else:
+        vol_mult = 1.0
+    
+    # Symbol override
+    symbol_risk = config.SYMBOL_RISK_OVERRIDE.get(symbol, base_risk)
+    
+    # Final calculation
+    adjusted_risk = symbol_risk * session_mult * vol_mult
+    
+    logging.info(f"{symbol} Risk adaptive: ${adjusted_risk:.2f} (session={session}, vol_mult={vol_mult:.2f})")
+    
+    return adjusted_risk
+
+
 def get_instrument_info_cached(session, symbol: str) -> dict:
     """
     Ottiene le informazioni sul symbol (min_qty, max_qty, qty_step, price_decimals)
@@ -7735,14 +7782,7 @@ async def analyze_job(context: ContextTypes.DEFAULT_TYPE):
                 lastatr = abs(entry_price - sl_price) * 0.01
             
             ema_score = ema_analysis['score'] if ema_analysis else 50
-            qty = calculate_optimal_position_size(
-                entry_price=entry_price,
-                sl_price=sl_price,
-                symbol=symbol,
-                volatility_atr=lastatr,
-                ema_score=ema_score,
-                risk_usd=risk_for_symbol
-            )
+            qty = calculate_optimal_position_size(entry_price=entry_price,sl_price=sl_price,symbol=symbol,volatility_atr=lastatr,ema_score=ema_score,risk_usd=risk_for_symbol)
             
             # ===== AUTOTRADE =====
             autotrade_enabled = job_ctx.get('autotrade', False)
@@ -8658,7 +8698,79 @@ async def cmd_autodiscover(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'job_queue': context.job_queue
             })()
         )
+
+async def check_stale_positions(context: ContextTypes.DEFAULT_TYPE):
+    """Exit posizioni che non si muovono (5m specific)"""
+    with config.POSITIONS_LOCK:
+        positions_copy = dict(config.ACTIVE_POSITIONS)
+    
+    for symbol, posinfo in positions_copy.items():
+        timeframe = posinfo.get('timeframe', '15m')
+        if timeframe != '5m':
+            continue  # Solo 5m
         
+        entry_time = datetime.fromisoformat(posinfo['timestamp'])
+        now = datetime.now(timezone.utc)
+        minutes_elapsed = (now - entry_time).total_seconds() / 60
+        
+        # Quick exit config
+        qe_config = config.BREAKEVEN_CONFIG['quick_exit']
+        if not qe_config['enabled']:
+            continue
+        
+        if minutes_elapsed >= qe_config['check_after_minutes']:
+            # Scarica prezzo
+            df = bybit.get_klines_cached(symbol, timeframe, limit=5)
+            if df.empty:
+                continue
+            
+            current_price = df['close'].iloc[-1]
+            entry = posinfo['entryprice']
+            side = posinfo['side']
+            
+            profit_pct = ((current_price - entry) / entry * 100) if side == 'Buy' else \
+                         ((entry - current_price) / entry * 100)
+            
+            # Exit se negativo oltre threshold
+            if qe_config['exit_if_negative'] and profit_pct < qe_config['max_loss_pct']:
+                logging.info(f"{symbol} QUICK EXIT: {profit_pct:.2f}% loss after {minutes_elapsed:.0f}min")
+                
+                try:
+                    # Close position
+                    session = create_bybit_session()
+                    close_side = 'Sell' if side == 'Buy' else 'Buy'
+                    qty = posinfo['qty']
+                    
+                    order = session.place_order(
+                        category='linear',
+                        symbol=symbol,
+                        side=close_side,
+                        orderType='Market',
+                        qty=str(qty),
+                        reduceOnly=True,
+                        positionIdx=0
+                    )
+                    
+                    if order['retCode'] == 0:
+                        with config.POSITIONS_LOCK:
+                            if symbol in config.ACTIVE_POSITIONS:
+                                del config.ACTIVE_POSITIONS[symbol]
+                        
+                        # Notifica
+                        chatid = posinfo.get('chatid')
+                        if chatid:
+                            msg = f"⚡ <b>QUICK EXIT</b> | {symbol}\n\n"
+                            msg += f"⏱️ Hold time: {minutes_elapsed:.0f} minutes\n"
+                            msg += f"💔 Loss: {profit_pct:.2f}%\n"
+                            msg += f"Reason: Stale position, no movement"
+                            
+                            await context.bot.send_message(
+                                chat_id=chatid,
+                                text=msg,
+                                parse_mode='HTML'
+                            )
+                except Exception as e:
+                    logging.error(f"Error quick exit {symbol}: {e}")
 
 async def cmd_ema_sl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -11559,6 +11671,13 @@ def main():
 
     # Schedula trailing stop loss job
     schedule_trailing_stop_job(application)
+
+    application.job_queue.run_repeating(
+        check_stale_positions,
+        interval=120,  # Ogni 2 minuti
+        first=60,
+        name='check_stale_positions_5m'
+    )
 
     # Schedula Multi-TP monitoring
     if config.MULTI_TP_ENABLED and config.MULTI_TP_CONFIG['enabled']:
