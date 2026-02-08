@@ -340,14 +340,15 @@ PATTERN_ORDER_TYPE = {
     'liquidity_sweep_reversal': 'market',
     'pin_bar_bullish': 'market',
     'bud_pattern': 'market',  # Veloce anche questo
+    'morning_star_ema_breakout': 'limit',  # Cambia da market
     'sr_bounce': 'market',
     'bullish_comeback': 'market',
     'bullish_engulfing': 'limit',
 }
 
 LIMIT_ORDER_CONFIG = {
-    'offset_pct': 0.0015,  # Entry 0.15% SOTTO prezzo corrente
-    'timeout_seconds': 60,  # Cancella se non fill in 60s
+    'offset_pct': 0.002,  # Entry 0.2% SOTTO prezzo corrente
+    'timeout_seconds': 120,  # Cancella se non fill in 60s
     'fallback_to_market': True,  # Se timeout → prova market
 }
 
@@ -444,13 +445,13 @@ BREAKEVEN_CONFIG = {
     # METODO 4: Quick Exit (esci se segnali negativi dopo N min)
     'quick_exit': {
         'enabled': True,
-        'check_after_minutes': 3,  # Controlla dopo 5 min
+        'check_after_minutes': 3,  # Controlla dopo 3 min
         'exit_if_negative': True,  # Esci se in negativo
-        'max_loss_pct': -0.4,  # Max -0.4% tollerato
+        'max_loss_pct': -0.5,  # Max -0.4% tollerato
     },
     
     # Check interval
-    'check_interval': 20,  # Controlla ogni 30 secondi
+    'check_interval': 20,  # Controlla ogni 20 secondi
 }
 
 # Pattern Management System
