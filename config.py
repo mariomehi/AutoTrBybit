@@ -258,10 +258,10 @@ EMA_CONFIG = {
 AUTO_DISCOVERY_ENABLED = True  # Abilita/disabilita auto-discovery
 AUTO_DISCOVERY_CONFIG = {
     'enabled': True,
-    'top_count': 7,  # Top 10 symbols
+    'top_count': 8,  # Top 10 symbols
     'timeframe': '5m',  # Timeframe da analizzare
     'autotrade': True,  # Autotrade per auto-discovery (False = solo notifiche)
-    'update_interval': 3600,  # 1 ora in secondi (12 * 60 * 60)
+    'update_interval': 7200,  # 1 ora in secondi (12 * 60 * 60)
     'min_volume_usdt': 5000000,  # Min volume 24h: 10M USDT
     'min_price_change': 3.0,  # Min variazione 24h: +3%
     'max_price_change': 120.0,  # Max variazione 24h: +110% (evita pump & dump)
