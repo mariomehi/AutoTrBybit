@@ -8898,7 +8898,7 @@ async def check_stale_positions(context: ContextTypes.DEFAULT_TYPE):
         
         if minutes_elapsed >= qe_config['check_after_minutes']:
             # Scarica prezzo
-            df = bybit.get_klines_cached(symbol, timeframe, limit=5)
+            df = bybit_get_klines_cached(symbol, timeframe, limit=5)
             if df.empty:
                 continue
             
